@@ -96,6 +96,20 @@ function renderView(overrides: Record<string, unknown> = {}) {
 }
 
 describe('SessionsView session base tree', () => {
+  it('reuses the session roster without creation or recent-session sections', async () => {
+    const view = renderView({
+      rosterOnly: true,
+      sessions: [
+        { id: 'one', state: 'ready', workspacePath: '/workspace/one', profile: 'default' },
+      ],
+    });
+    expect(screen.getByRole('heading', { name: 'Open sessions' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'New session' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Recent sessions' })).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: /^Open$/ }));
+    expect(view.onselectopen).toHaveBeenCalledWith('one');
+  });
+
   it('keeps the session base above profile and model while Advanced settings starts collapsed', async () => {
     const onsavedefaults = vi.fn();
     renderView({ models: ['gpt-6.1-sol'], selectedModel: 'gpt-6.1-sol', onsavedefaults });

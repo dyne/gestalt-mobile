@@ -1158,19 +1158,25 @@ for (const viewport of [
     );
     await page.goto('/');
     await page.getByRole('button', { name: 'Chat' }).click();
-    const alert = page.getByRole('alert', { name: 'Autopilot needs your attention' });
+    const alert = page
+      .locator('.chat-view')
+      .getByRole('alert', { name: 'Autopilot needs your attention' });
     const pending = page.getByRole('complementary', { name: 'Pending chat requests' });
     await expect(pending).toContainText('checkpoint could not identify the completed L1.2');
     await expect(pending.getByRole('button', { name: 'Resume', exact: true })).toBeEnabled();
     await expect(page.getByRole('button', { name: 'Review Autopilot blocker' })).toHaveCount(0);
     await expect(alert).toContainText('checkpoint could not identify the completed L1.2');
     await page.reload();
-    await expect(alert).toContainText('Refresh plan state, then retry the checkpoint');
+    await expect(
+      page.getByRole('list', { name: 'Open sessions' }).getByRole('alert', {
+        name: 'Autopilot needs your attention',
+      }),
+    ).toContainText('Refresh plan state, then retry the checkpoint');
     await page.getByRole('button', { name: 'Chat', exact: true }).click();
     await expect(alert).toContainText('Refresh plan state, then retry the checkpoint');
     await expect(alert.getByRole('button', { name: 'Resume', exact: true })).toBeEnabled();
     await expect(alert.getByRole('button', { name: 'Disable Autopilot' })).toBeEnabled();
-    await expect(page.getByLabel('Optional guidance for the resumed work')).toBeVisible();
+    await expect(alert.getByLabel('Optional guidance for the resumed work')).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await mkdir(evidence, { recursive: true });
     await page.screenshot({
@@ -1201,7 +1207,7 @@ for (const viewport of [
     await page.goto('/');
     await page.getByRole('button', { name: 'Chat' }).click();
     await expect.poll(() => socket).toBeDefined();
-    const region = page.getByRole('region', { name: 'Autopilot' });
+    const region = page.locator('.chat-view').getByRole('region', { name: 'Autopilot' });
     await expect(region).toContainText('Recovering checkpoint handoff');
     await expect(region).toContainText('If it cannot recover, restore or reopen the session.');
     await expect(region).not.toContainText('waiting for agent event');

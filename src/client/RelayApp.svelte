@@ -110,6 +110,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { weeklyQuotaRemaining } from './features/plans/weekly-quota.js';
   import { workspacePlanNameFromHref } from './features/plans/org-plan-link.js';
   import PlansView, { type PlansCatalogState } from './features/plans/PlansView.svelte';
+  import PlanView from './features/plans/PlanView.svelte';
   import {
     createSessionCache,
     type PendingDraftOperation,
@@ -279,6 +280,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     sessions.find((session) => session.id === sessionId)?.workspacePath ?? null,
   );
   let selectedSession = $derived(sessions.find((session) => session.id === sessionId) ?? null);
+  let desktopChat = $state(false);
+  let showChatSidebars = $derived(desktopChat && tab === 'chat' && !detachedSessionId);
+  function measureDesktopChat(): void {
+    const fontSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    desktopChat = document.documentElement.clientWidth >= 88 * fontSize;
+  }
+  onMount(() => {
+    measureDesktopChat();
+    const observer = new MutationObserver(measureDesktopChat);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['style', 'class'],
+    });
+    return () => observer.disconnect();
+  });
   let headerActions = $derived(
     visibleHeaderActions(
       [
@@ -1090,7 +1106,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       externalRefreshQueued = false;
       if (document.visibilityState !== 'visible') return;
       if (tab === 'git' && gitWorkspaceId) void gitController.refresh();
-      if (tab === 'sessions') {
+      if (tab === 'sessions' || showChatSidebars) {
         void refreshSessionLists();
         if (sessionId) planController.refresh(sessionId);
       }
@@ -1244,6 +1260,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     passivePlanName = null;
     hideLivePlan = true;
     loadPlansCatalog();
+  }
+
+  function openSelectedPlan(): void {
+    passivePlanRequest?.abort();
+    ++passivePlanGeneration;
+    passivePlan = null;
+    passivePlanName = null;
+    hideLivePlan = false;
+    selectTab('plan');
   }
 
   function refreshPlanSurface(): void {
@@ -1641,6 +1666,75 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 </script>
 
+{#snippet sessionSurface(rosterOnly: boolean = false)}
+  <SessionsView
+    {rosterOnly}
+    allowanceFetcher={authorizedFetch}
+    onallowanceerror={() =>
+      toastQueue.enqueue({
+        kind: 'warning',
+        message: 'Could not refresh Codex allowance. Retrying automatically.',
+      })}
+    {sessions}
+    {recentSessions}
+    selectedSessionId={sessionId}
+    {activitySnapshots}
+    autopilotSnapshots={autopilotState.snapshots}
+    autopilotPending={autopilotState.pending}
+    autopilotAttention={autopilotState.attention}
+    {workspaceTree}
+    workspaceId={sessionWorkspaceId}
+    expandedIds={sessionExpandedIds}
+    {sandbox}
+    {approvalPolicy}
+    models={sessionModels[activeSessionProvider]}
+    selectedModel={selectedSessionModels[activeSessionProvider]}
+    reasoningEffort={sessionReasoningEffort}
+    executorModels={sessionModels.codex}
+    executorModel={sessionExecutorModel}
+    executorReasoningEffort={sessionExecutorReasoningEffort}
+    onreasoningchange={(value) => (sessionReasoningEffort = value)}
+    onexecutormodelchange={(value) => (sessionExecutorModel = value)}
+    onexecutorreasoningchange={(value) => (sessionExecutorReasoningEffort = value)}
+    provider={activeSessionProvider}
+    {kimiAvailable}
+    modelsLoading={loadingSessionModels === activeSessionProvider}
+    skillProfiles={sessionSkillProfiles}
+    selectedSkillProfile={selectedSessionSkillProfile}
+    skillProfileError={sessionSkillProfileError}
+    {startingSession}
+    {openingSessionId}
+    savingDefaults={savingSessionDefaults}
+    bind:advancedExpanded={sessionAdvancedExpanded}
+    onsavedefaults={() => void saveSessionDefaults()}
+    onworkspacechange={(value) => (sessionWorkspaceId = value)}
+    onexpandedchange={(value) => (sessionExpandedIds = value)}
+    onsandboxchange={(value) => (sandbox = value)}
+    onapprovalpolicychange={(value) => (approvalPolicy = value)}
+    onmodelchange={(value) =>
+      (selectedSessionModels = {
+        ...selectedSessionModels,
+        [activeSessionProvider]: value,
+      })}
+    onproviderchange={(value) => void selectSessionProvider(value)}
+    onskillprofilechange={(value) => (selectedSessionSkillProfile = value)}
+    onmanageprofiles={(trigger) => void openProfileManager(trigger)}
+    onopen={openSession}
+    onselectopen={openSession}
+    onclose={(id) => void closeSession(id)}
+    onautopilottoggle={toggleAutopilot}
+    onactivityopen={(id) => void activityController.resync(id)}
+    onautopilotresolve={resolveAutopilotAttention}
+    onattentiondebug={(id, requestId, trigger) => void openDebug(requestId, id, trigger)}
+    debugPending={debugLoading}
+    onopenrecent={(session) => void openRecentSession(session)}
+    onforget={(id) => void forgetSession(id)}
+    oncopyresume={(command) => void copyResumeCommand(command)}
+    onstart={() => void startSession()}
+    ondebugtrace={(session, trigger) => void openDebugTrace(session, trigger)}
+  />
+{/snippet}
+
 <svelte:head>
   <title
     >{detachedSessionId && selectedSessionPath
@@ -1649,7 +1743,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   >
 </svelte:head>
 
-<svelte:window onfocus={queueVisibleExternalRefresh} />
+<svelte:window onfocus={queueVisibleExternalRefresh} onresize={measureDesktopChat} />
 <svelte:document onvisibilitychange={queueVisibleExternalRefresh} />
 
 {#if activityEvidence === 'true'}
@@ -1663,6 +1757,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {:else}
   <main
     class="swipe-surface"
+    class:wide-chat={showChatSidebars && !devicesOpen && !notificationsOpen}
     onpointerdown={beginTabSwipe}
     onpointerup={completeTabSwipe}
     onpointercancel={cancelTabSwipe}
@@ -1732,118 +1827,131 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <NotificationHistory queue={toastQueue} onclose={closeNotifications} />
     {:else}
       {#if tab === 'chat'}
-        <section class="chat-view" aria-labelledby="chat-title">
-          <h2 id="chat-title" class="visually-hidden">Chat</h2>
-          {#snippet autopilotSafety()}
-            <AutopilotSafetyStop
-              autopilot={sessionId ? (autopilotState.snapshots.get(sessionId) ?? null) : null}
-              attention={sessionId ? (autopilotState.attention.get(sessionId) ?? null) : null}
-              controlId={`chat-autopilot-safety-${sessionId ?? 'none'}`}
-              pending={sessionId ? autopilotState.pending.has(sessionId) : false}
-              onrecover={() => sessionId && void recoverAutopilot(sessionId)}
-              ondisable={() => sessionId && toggleAutopilot(sessionId, false)}
-            />
-          {/snippet}
-          <p class="visually-hidden" aria-live="polite" aria-atomic="true">
-            {interactionAnnouncement}
-          </p>
-          {#if sessionId}
-            <div class="chat-composer">
-              <Composer
-                newEmpty={chatView?.newEmpty ?? false}
-                status={chatView?.status ?? shellStatus}
-                readySince={chatView?.readySince ?? null}
-                {message}
-                activeTurnId={chatView?.activeTurnId ?? null}
-                starting={chatView?.starting ?? false}
-                detached={Boolean(
-                  sessions.find((session) => session.id === sessionId) &&
-                  !['ready', 'turnActive'].includes(
-                    sessions.find((session) => session.id === sessionId)?.state ?? '',
-                  ),
-                )}
-                retryMessage={writerFeedback}
-                retryable={retryOperationId !== null}
-                models={sessionModels[
-                  sessions.find((session) => session.id === sessionId)?.provider ?? 'codex'
-                ]}
-                provider={sessions.find((session) => session.id === sessionId)?.provider ?? 'codex'}
-                onchange={updateDraft}
-                onrevealprompt={revealChatPrompt}
-                onmodelselect={(model) => void selectSessionModel(model)}
-                onsend={() => void sendMessage()}
-                onqueue={() => void queueMessage()}
-                oninterruptsend={() => void interruptAndSendMessage()}
-                onretry={() => void retrySend()}
-                oninterrupt={() => void interruptTurn()}
-              />
-              {#if hasAssignedOrgPlan(selectedSession)}
-                <div class="chat-controls" aria-label="Chat controls">
-                  {#if selectedSession?.provider !== 'kimi'}
-                    <AutopilotControl
-                      compact
-                      autopilot={autopilotState.snapshots.get(sessionId) ?? null}
-                      controlId={`chat-autopilot-${sessionId}`}
-                      pending={autopilotState.pending.has(sessionId)}
-                      ontoggle={(enabled) => sessionId && toggleAutopilot(sessionId, enabled)}
-                    />
-                  {/if}
-                  <AgentActivityIndicators
-                    compact
-                    popupPlacement="below"
-                    activity={activitySnapshots.get(sessionId) ?? null}
-                    rootModel={sessions.find((session) => session.id === sessionId)?.model ??
-                      defaultSessionModel}
-                    plan={sessions.find((session) => session.id === sessionId)?.plan}
-                    onopen={() => sessionId && void activityController.resync(sessionId)}
-                  />
-                </div>
-              {/if}
-            </div>
-            <MessageList
-              attention={autopilotState.attention.get(sessionId) ?? null}
-              attentionPending={autopilotState.pending.has(sessionId)}
-              onattentionresolve={(action, guidance) =>
-                resolveAutopilotAttention(sessionId!, action, guidance)}
-              onattentiondebug={(requestId, trigger) =>
-                void openDebug(requestId, sessionId!, trigger)}
-              debugPending={debugLoading}
-              footer={autopilotSafety}
-              messages={chatView ? [...chatView.messages] : []}
-              activities={chatView ? [...chatView.activities] : []}
-              activeTurnId={chatView?.activeTurnId ?? null}
-              autopilotAuditTruncated={chatView?.autopilotAuditTruncated ?? false}
-              interactions={chatView ? [...chatView.interactions] : []}
-              answers={userInputAnswers}
-              submittedAnswers={submittedQuizAnswers}
-              onanswer={setUserInputAnswer}
-              onquiz={(interaction) => void resolveUserInput(interaction)}
-              onpermission={(interaction) => void resolvePermissions(interaction)}
-              ondecision={(id, decision) => void resolveInteraction(id, decision)}
-              onretry={retryInteraction}
-              onopenorg={openLinkedOrgPlan}
-              onopenfile={(path, line) => {
-                if (selectedSession?.workspaceId)
-                  fileViewerTarget = {
-                    workspaceId: selectedSession.workspaceId,
-                    sessionId: selectedSession.id,
-                    path,
-                    line,
-                  };
-              }}
-              oncopyresult={reportCodeCopy}
-            />
-            <div bind:this={chatTail} class="chat-tail" aria-hidden="true"></div>
-          {:else}
-            <p>
-              {detachedSessionId
-                ? shellStatus
-                : kimiAvailable
-                  ? 'Start a session from the Sessions tab to chat with Codex or Kimi.'
-                  : 'Start a session from the Sessions tab to chat with Codex.'}
-            </p>
+        <div class="chat-layout" class:with-sidebars={showChatSidebars}>
+          {#if showChatSidebars}
+            <aside class="chat-context chat-sessions" aria-label="Chat sessions and usage">
+              {@render sessionSurface(true)}
+            </aside>
           {/if}
-        </section>
+          <section class="chat-view" aria-labelledby="chat-title">
+            <h2 id="chat-title" class="visually-hidden">Chat</h2>
+            {#snippet autopilotSafety()}
+              <AutopilotSafetyStop
+                autopilot={sessionId ? (autopilotState.snapshots.get(sessionId) ?? null) : null}
+                attention={sessionId ? (autopilotState.attention.get(sessionId) ?? null) : null}
+                controlId={`chat-autopilot-safety-${sessionId ?? 'none'}`}
+                pending={sessionId ? autopilotState.pending.has(sessionId) : false}
+                onrecover={() => sessionId && void recoverAutopilot(sessionId)}
+                ondisable={() => sessionId && toggleAutopilot(sessionId, false)}
+              />
+            {/snippet}
+            <p class="visually-hidden" aria-live="polite" aria-atomic="true">
+              {interactionAnnouncement}
+            </p>
+            {#if sessionId}
+              <div class="chat-composer">
+                <Composer
+                  newEmpty={chatView?.newEmpty ?? false}
+                  status={chatView?.status ?? shellStatus}
+                  readySince={chatView?.readySince ?? null}
+                  {message}
+                  activeTurnId={chatView?.activeTurnId ?? null}
+                  starting={chatView?.starting ?? false}
+                  detached={Boolean(
+                    sessions.find((session) => session.id === sessionId) &&
+                    !['ready', 'turnActive'].includes(
+                      sessions.find((session) => session.id === sessionId)?.state ?? '',
+                    ),
+                  )}
+                  retryMessage={writerFeedback}
+                  retryable={retryOperationId !== null}
+                  models={sessionModels[
+                    sessions.find((session) => session.id === sessionId)?.provider ?? 'codex'
+                  ]}
+                  provider={sessions.find((session) => session.id === sessionId)?.provider ??
+                    'codex'}
+                  onchange={updateDraft}
+                  onrevealprompt={revealChatPrompt}
+                  onmodelselect={(model) => void selectSessionModel(model)}
+                  onsend={() => void sendMessage()}
+                  onqueue={() => void queueMessage()}
+                  oninterruptsend={() => void interruptAndSendMessage()}
+                  onretry={() => void retrySend()}
+                  oninterrupt={() => void interruptTurn()}
+                />
+                {#if hasAssignedOrgPlan(selectedSession)}
+                  <div class="chat-controls" aria-label="Chat controls">
+                    {#if selectedSession?.provider !== 'kimi'}
+                      <AutopilotControl
+                        compact
+                        autopilot={autopilotState.snapshots.get(sessionId) ?? null}
+                        controlId={`chat-autopilot-${sessionId}`}
+                        pending={autopilotState.pending.has(sessionId)}
+                        ontoggle={(enabled) => sessionId && toggleAutopilot(sessionId, enabled)}
+                      />
+                    {/if}
+                    <AgentActivityIndicators
+                      compact
+                      popupPlacement="below"
+                      activity={activitySnapshots.get(sessionId) ?? null}
+                      rootModel={sessions.find((session) => session.id === sessionId)?.model ??
+                        defaultSessionModel}
+                      plan={sessions.find((session) => session.id === sessionId)?.plan}
+                      onopen={() => sessionId && void activityController.resync(sessionId)}
+                    />
+                  </div>
+                {/if}
+              </div>
+              <MessageList
+                attention={autopilotState.attention.get(sessionId) ?? null}
+                attentionPending={autopilotState.pending.has(sessionId)}
+                onattentionresolve={(action, guidance) =>
+                  resolveAutopilotAttention(sessionId!, action, guidance)}
+                onattentiondebug={(requestId, trigger) =>
+                  void openDebug(requestId, sessionId!, trigger)}
+                debugPending={debugLoading}
+                footer={autopilotSafety}
+                messages={chatView ? [...chatView.messages] : []}
+                activities={chatView ? [...chatView.activities] : []}
+                activeTurnId={chatView?.activeTurnId ?? null}
+                autopilotAuditTruncated={chatView?.autopilotAuditTruncated ?? false}
+                interactions={chatView ? [...chatView.interactions] : []}
+                answers={userInputAnswers}
+                submittedAnswers={submittedQuizAnswers}
+                onanswer={setUserInputAnswer}
+                onquiz={(interaction) => void resolveUserInput(interaction)}
+                onpermission={(interaction) => void resolvePermissions(interaction)}
+                ondecision={(id, decision) => void resolveInteraction(id, decision)}
+                onretry={retryInteraction}
+                onopenorg={openLinkedOrgPlan}
+                onopenfile={(path, line) => {
+                  if (selectedSession?.workspaceId)
+                    fileViewerTarget = {
+                      workspaceId: selectedSession.workspaceId,
+                      sessionId: selectedSession.id,
+                      path,
+                      line,
+                    };
+                }}
+                oncopyresult={reportCodeCopy}
+              />
+              <div bind:this={chatTail} class="chat-tail" aria-hidden="true"></div>
+            {:else}
+              <p>
+                {detachedSessionId
+                  ? shellStatus
+                  : kimiAvailable
+                    ? 'Start a session from the Sessions tab to chat with Codex or Kimi.'
+                    : 'Start a session from the Sessions tab to chat with Codex.'}
+              </p>
+            {/if}
+          </section>
+          {#if showChatSidebars}
+            <aside class="chat-context chat-plan" aria-label="Chat plan summary">
+              <PlanView state={planState} compact onopenfull={openSelectedPlan} />
+            </aside>
+          {/if}
+        </div>
       {:else if tab === 'plan'}
         <PlansView
           catalog={plansCatalog}
@@ -1906,71 +2014,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {/if}
           </section>
         {:else}
-          <SessionsView
-            allowanceFetcher={authorizedFetch}
-            onallowanceerror={() =>
-              toastQueue.enqueue({
-                kind: 'warning',
-                message: 'Could not refresh Codex allowance. Retrying automatically.',
-              })}
-            {sessions}
-            {recentSessions}
-            selectedSessionId={sessionId}
-            {activitySnapshots}
-            autopilotSnapshots={autopilotState.snapshots}
-            autopilotPending={autopilotState.pending}
-            autopilotAttention={autopilotState.attention}
-            {workspaceTree}
-            workspaceId={sessionWorkspaceId}
-            expandedIds={sessionExpandedIds}
-            {sandbox}
-            {approvalPolicy}
-            models={sessionModels[activeSessionProvider]}
-            selectedModel={selectedSessionModels[activeSessionProvider]}
-            reasoningEffort={sessionReasoningEffort}
-            executorModels={sessionModels.codex}
-            executorModel={sessionExecutorModel}
-            executorReasoningEffort={sessionExecutorReasoningEffort}
-            onreasoningchange={(value) => (sessionReasoningEffort = value)}
-            onexecutormodelchange={(value) => (sessionExecutorModel = value)}
-            onexecutorreasoningchange={(value) => (sessionExecutorReasoningEffort = value)}
-            provider={activeSessionProvider}
-            {kimiAvailable}
-            modelsLoading={loadingSessionModels === activeSessionProvider}
-            skillProfiles={sessionSkillProfiles}
-            selectedSkillProfile={selectedSessionSkillProfile}
-            skillProfileError={sessionSkillProfileError}
-            {startingSession}
-            {openingSessionId}
-            savingDefaults={savingSessionDefaults}
-            bind:advancedExpanded={sessionAdvancedExpanded}
-            onsavedefaults={() => void saveSessionDefaults()}
-            onworkspacechange={(value) => (sessionWorkspaceId = value)}
-            onexpandedchange={(value) => (sessionExpandedIds = value)}
-            onsandboxchange={(value) => (sandbox = value)}
-            onapprovalpolicychange={(value) => (approvalPolicy = value)}
-            onmodelchange={(value) =>
-              (selectedSessionModels = {
-                ...selectedSessionModels,
-                [activeSessionProvider]: value,
-              })}
-            onproviderchange={(value) => void selectSessionProvider(value)}
-            onskillprofilechange={(value) => (selectedSessionSkillProfile = value)}
-            onmanageprofiles={(trigger) => void openProfileManager(trigger)}
-            onopen={openSession}
-            onselectopen={openSession}
-            onclose={(id) => void closeSession(id)}
-            onautopilottoggle={toggleAutopilot}
-            onactivityopen={(id) => void activityController.resync(id)}
-            onautopilotresolve={resolveAutopilotAttention}
-            onattentiondebug={(id, requestId, trigger) => void openDebug(requestId, id, trigger)}
-            debugPending={debugLoading}
-            onopenrecent={(session) => void openRecentSession(session)}
-            onforget={(id) => void forgetSession(id)}
-            oncopyresume={(command) => void copyResumeCommand(command)}
-            onstart={() => void startSession()}
-            ondebugtrace={(session, trigger) => void openDebugTrace(session, trigger)}
-          />
+          {@render sessionSurface()}
         {/if}
       {/if}
       {#if debugConfirmation}
@@ -2052,6 +2096,32 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {/if}
 
 <style>
+  main.wide-chat {
+    max-inline-size: 96rem;
+  }
+  .chat-layout.with-sidebars {
+    display: grid;
+    grid-template-columns: minmax(18rem, 1fr) minmax(0, 42rem) minmax(20rem, 1fr);
+    gap: 1rem;
+    align-items: start;
+  }
+  .chat-layout.with-sidebars .chat-view {
+    min-inline-size: 0;
+    margin-inline: 0;
+  }
+  .chat-context {
+    position: sticky;
+    inset-block-start: var(--sticky-header-clearance);
+    max-block-size: calc(
+      100dvh - var(--sticky-header-clearance) - var(--bottom-navigation-clearance) - 1rem
+    );
+    min-inline-size: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    padding: 0.25rem;
+    box-sizing: border-box;
+  }
   .chat-view {
     margin-inline: calc(0.25rem - var(--page-inline-padding));
   }

@@ -93,6 +93,25 @@ afterEach(() => {
 });
 
 describe('PlanView', () => {
+  it('summarizes fields and progress without scrolling chat or closing a plan', async () => {
+    const onopenfull = vi.fn();
+    const longNotes = 'Long background content. '.repeat(30);
+    const view = render(PlanView, {
+      state: ready({ steps: [{ ...l1, description: { effort: 'Medium', notes: longNotes } }] }),
+      compact: true,
+      onopenfull,
+    });
+    expect(screen.getByRole('progressbar', { name: 'Plan progress' })).toBeTruthy();
+    expect(screen.getAllByText('Effort:')).toHaveLength(2);
+    expect(view.container.textContent).not.toContain(longNotes);
+    expect(screen.queryByRole('button', { name: 'Close plan and return to list' })).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: 'Full plan' }));
+    expect(onopenfull).toHaveBeenCalledOnce();
+    await view.rerender({ state: ready({ currentStepId: l2.id }), compact: true, onopenfull });
+    await tick();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
   it('preserves ordered L1/L2 hierarchy and renders nested fields, indicators, metadata, skills, and progress', () => {
     render(PlanView, { state: ready({ currentStepId: l2.id }), onclose: vi.fn() });
     expect(screen.getByRole('heading', { name: 'Unicode план' })).toBeTruthy();
