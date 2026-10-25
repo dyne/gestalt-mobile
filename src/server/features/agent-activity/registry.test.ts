@@ -16,6 +16,18 @@ describe('agent activity registry', () => {
     registry.dispose('s');
     expect(registry.snapshot('s', at).root.state).toBe('disconnected');
   });
+  it('invalidates overlapping observation fences on every accepted child roster without inventing root progress', () => {
+    const registry = new AgentActivityRegistry(() => {});
+    registry.observe({ sessionId: 's', occurredAt: at, kind: 'turnCompleted' });
+    const fence = registry.observationRevision('s');
+    registry.childrenReconciled('s', at, [{ id: 'existing', status: 'idle' }]);
+    expect(registry.observationRevision('s')).toBeGreaterThan(fence);
+    const accepted = registry.observationRevision('s');
+    registry.childrenReconciled('s', at, [{ id: 'existing', status: 'idle' }]);
+    expect(registry.observationRevision('s')).toBeGreaterThan(accepted);
+    expect(registry.snapshot('s', at).root).toMatchObject({ state: 'idle', lastActivityAt: at });
+    registry.dispose('s');
+  });
   it('retains the last known snapshot while reconciling', () => {
     const registry = new AgentActivityRegistry(() => {});
     registry.observe({ sessionId: 's', occurredAt: at, kind: 'turnStarted' });

@@ -493,6 +493,140 @@ describe('production composition', () => {
       data: [{ id: 'gpt-6.1-sol', supportedReasoningEfforts: [{ reasoningEffort: 'medium' }] }],
     };
 
+    it('reconciles the existing second executor through health while root and attention are active', async () => {
+      const f = await createProductionAutopilotFixture(
+        { autopilotSchedule: () => () => {} },
+        versionedText(),
+      );
+      onTestFinished(() => f.app.close());
+      const { app, sessionId } = f;
+      const started = await app.inject({
+        method: 'POST',
+        url: `/api/sessions/${sessionId}/turns`,
+        payload: { text: 'Synthetic supervised handoff fixture' },
+      });
+      expect(started.statusCode).toBe(202);
+      const session = (await app.inject(`/api/sessions/${sessionId}`)).json();
+      const rootId = session.threadId as string;
+      const handle = f.handles.find((candidate) =>
+        candidate.requests.some((call) => call.method === 'turn/start'),
+      )!;
+      let handedOff = false;
+      let changeDuringRead = false;
+      const row = (id: string, task: string, active: boolean) => ({
+        id,
+        status: { type: active ? 'active' : 'idle' },
+        parentThreadId: rootId,
+        source: { subAgent: { thread_spawn: { agent_path: `/root/${task}` } } },
+        agentRole: 'default',
+        model: 'gpt-6.1-sol',
+        reasoningEffort: 'medium',
+      });
+      handle.respond = (method, params) => {
+        if (method === 'model/list') return policyCatalog;
+        if (method === 'thread/list' && changeDuringRead) {
+          changeDuringRead = false;
+          handle.notify!({
+            method: 'turn/completed',
+            params: { threadId: rootId, turn: { id: session.activeTurnId, status: 'completed' } },
+          });
+        }
+        if (method === 'thread/list')
+          return {
+            data: handedOff
+              ? [row('first-writer', 'l1', false), row('second-writer', 'l2', true)]
+              : [row('first-writer', 'l1', true)],
+          };
+        if (method === 'thread/read') {
+          const id = (params as { threadId: string }).threadId;
+          return {
+            thread:
+              id === rootId
+                ? { id, status: { type: 'active' } }
+                : row(
+                    id,
+                    id === 'first-writer' ? 'l1' : 'l2',
+                    !handedOff || id === 'second-writer',
+                  ),
+          };
+        }
+        return undefined;
+      };
+      const health = async (id: number) => {
+        const response = (await handle.request!({
+          id,
+          method: 'item/tool/call',
+          params: {
+            threadId: rootId,
+            turnId: session.activeTurnId,
+            tool: 'gestalt_org_plan_health',
+            arguments: {},
+          },
+        })) as { success: boolean; contentItems: { text: string }[] };
+        expect(response.success).toBe(true);
+        return JSON.parse(response.contentItems[0]!.text);
+      };
+      expect(await health(9960)).toMatchObject({
+        executorBinding: { status: 'ready' },
+        modelPolicy: { child: { threadId: 'first-writer' } },
+      });
+      const completed = versionedText('DONE')
+        .replace('* WIP [#A] Parent', '* DONE [#A] Parent')
+        .replace(':REVIEW_STATUS: UNREVIEWED', ':REVIEW_STATUS: REVIEWED');
+      const next = versionedText()
+        .slice(versionedText().indexOf('* WIP'))
+        .replace(':ID: parent', ':ID: second')
+        .replace(':ID: child', ':ID: second-child')
+        .replace('** TODO', '** WIP');
+      // A synthetic accepted-review projection, followed by the real composition's binding reconciliation.
+      await writeFile(join(f.workspacePath, 'autopilot.org'), completed + next);
+      await app.inject(`/api/sessions/${sessionId}/plan`);
+      await expect(handle.request!(attentionCall(9961))).resolves.toEqual(
+        toOrgPlanAttentionAcknowledgement(),
+      );
+      const before = (await app.inject(`/api/sessions/${sessionId}`)).json();
+      const startsBefore = f.handles
+        .flatMap((candidate) => candidate.requests)
+        .filter((call) =>
+          ['turn/start', 'turn/steer', 'thread/resume'].includes(call.method),
+        ).length;
+      const processesBefore = f.handles.length;
+      handedOff = true;
+      changeDuringRead = true;
+      expect(await health(9964)).toMatchObject({
+        executorBinding: { status: 'unavailable', code: 'CONTEXT_CHANGED' },
+      });
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json().agentActivity.root.state).toBe(
+        'awaitingHuman',
+      );
+      const reconciled = await health(9962);
+      expect(reconciled).toMatchObject({
+        executionAdmission: { allowed: true },
+        executorBinding: { status: 'ready', canonicalPosition: 'L2', authorizesExecution: false },
+        executorLaunch: { validated: true },
+        modelPolicy: {
+          configuration: 'match',
+          child: { threadId: 'second-writer', continuationCount: 0 },
+        },
+      });
+      expect(JSON.stringify(reconciled)).not.toContain('CONTROLLER_BINDING_INVALID');
+      const after = (await app.inject(`/api/sessions/${sessionId}`)).json();
+      expect(after.autopilot.enabled).toBe(before.autopilot.enabled);
+      expect(after.pendingInteractions).toMatchObject([
+        { kind: 'orgPlanAttention', requestId: '9961' },
+      ]);
+      expect(f.handles.length).toBe(processesBefore);
+      expect(
+        f.handles
+          .flatMap((candidate) => candidate.requests)
+          .filter((call) => ['turn/start', 'turn/steer', 'thread/resume'].includes(call.method)),
+      ).toHaveLength(startsBefore);
+      expect(await health(9963)).toMatchObject({
+        executorBinding: { status: 'ready', code: 'BINDING_MATCH' },
+        modelPolicy: { child: { threadId: 'second-writer' } },
+      });
+    });
+
     it('activates existing v1, validates catalog, dispatches launch instructions and records a report checkpoint', async () => {
       const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
       const fixture = await createProductionAutopilotFixture(
@@ -571,6 +705,8 @@ describe('production composition', () => {
         },
       });
       expect(handle.requests.slice(requestsBeforeHealth).map((call) => call.method)).toEqual([
+        'thread/read',
+        'thread/list',
         'model/list',
       ]);
       // Synthetic executor report: real composition validates the authoritative plan boundary.
@@ -659,7 +795,7 @@ describe('production composition', () => {
           });
         const beforeHealth = f.handles
           .flatMap((candidate) => candidate.requests)
-          .filter((call) => ['turn/start', 'thread/read', 'thread/resume'].includes(call.method));
+          .filter((call) => ['turn/start', 'thread/resume'].includes(call.method));
         const response = (await handle.request!({
           id: 9902,
           method: 'item/tool/call',
@@ -689,7 +825,7 @@ describe('production composition', () => {
         expect(
           f.handles
             .flatMap((candidate) => candidate.requests)
-            .filter((call) => ['turn/start', 'thread/read', 'thread/resume'].includes(call.method)),
+            .filter((call) => ['turn/start', 'thread/resume'].includes(call.method)),
         ).toEqual(beforeHealth);
       },
     );
@@ -733,13 +869,14 @@ describe('production composition', () => {
       'off-on-during-recovery',
     ] as const)('guards configured executor dispatch in production: %s', async (scenario) => {
       const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+      let observedRootThreadId = '';
       const f = await createProductionAutopilotFixture(
         {
           autopilotActivity: (sessionId) => {
             const observedAt = new Date().toISOString();
             return {
               sessionId,
-              rootThreadId: 'thread-1',
+              rootThreadId: observedRootThreadId,
               root: {
                 state: 'idle',
                 reason: 'turnCompleted',
@@ -779,6 +916,7 @@ describe('production composition', () => {
       onTestFinished(() => f.app.close());
       const actualRootThreadId = (await f.app.inject(`/api/sessions/${f.sessionId}`)).json()
         .threadId as string;
+      observedRootThreadId = actualRootThreadId;
       const pendingRead = Promise.withResolvers<unknown>();
       const pendingRecovery = Promise.withResolvers<unknown>();
       const resumeOperation = vi.spyOn(CodexSessionRuntime.prototype, 'startExecutorTurn');
@@ -825,8 +963,16 @@ describe('production composition', () => {
           }
           return undefined;
         };
-      timers.find((timer) => !timer.cancelled)!.callback();
-      await vi.waitFor(() => expect(sawRead).toBe(true));
+      const delivered = new Set<object>();
+      await vi.waitFor(() => {
+        for (const timer of timers) {
+          if (!timer.cancelled && !delivered.has(timer)) {
+            delivered.add(timer);
+            timer.callback();
+          }
+        }
+        expect(sawRead).toBe(true);
+      });
       if (scenario === 'off-during-read' || scenario === 'off-on-during-recovery') {
         if (scenario === 'off-on-during-recovery')
           await vi.waitFor(() => expect(sawRecovery).toBe(true));

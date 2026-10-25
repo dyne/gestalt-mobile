@@ -21,6 +21,8 @@ async function fixture() {
   let launches = 0;
   const notifications = new Map<string, (event: { method: string; params: unknown }) => void>();
   let onCatalog: (() => Promise<unknown>) | null = null;
+  let topology: unknown = { data: [] };
+  const sessions = new Map<string, Awaited<ReturnType<CodexSessionRuntime['start']>>>();
   const calls: { root: string; method: string; params: unknown }[] = [];
   const runtime = new CodexSessionRuntime(() => {
     const sessionId = ['a', 'b'][launches++]!;
@@ -46,6 +48,7 @@ async function fixture() {
             };
           }
           if (method === 'model/list') return onCatalog ? onCatalog() : catalog;
+          if (method === 'thread/list') return topology;
           return {};
         },
         onNotification: (listener) => {
@@ -57,8 +60,8 @@ async function fixture() {
       close: () => {},
     };
   });
-  for (const sessionId of ['a', 'b'])
-    await runtime.start(
+  for (const sessionId of ['a', 'b']) {
+    const session = await runtime.start(
       RelaySession.create({
         id: sessionId,
         provider: 'codex',
@@ -72,19 +75,129 @@ async function fixture() {
       }).snapshot,
       '2026-10-21T15:00:00Z',
     );
+    sessions.set(sessionId, session);
+  }
   calls.length = 0;
   return {
     runtime,
+    sessions,
     calls,
     notifications,
     launches: () => launches,
     setCatalog: (fn: () => Promise<unknown>) => {
       onCatalog = fn;
     },
+    setTopology: (value: unknown) => {
+      topology = value;
+    },
   };
 }
 
 describe('owned Codex child configuration port', () => {
+  it('observes existing canonical topology without reader processes, turns, resumes or interruption', async () => {
+    const { runtime, calls, sessions, launches, setTopology } = await fixture();
+    setTopology({
+      data: [
+        {
+          id: 'existing-l2',
+          parentThreadId: 'root-a',
+          status: { type: 'idle' },
+          source: { subAgent: { thread_spawn: { agent_path: '/root/l2' } } },
+        },
+      ],
+    });
+    try {
+      expect(await runtime.readExecutorTopology(sessions.get('a')!)).toMatchObject({
+        kind: 'observed',
+        rootThreadId: 'root-a',
+        children: [{ id: 'existing-l2', taskPath: '/root/l2' }],
+      });
+      expect(calls.map((call) => [call.root, call.method])).toEqual([
+        ['root-a', 'thread/read'],
+        ['root-a', 'thread/list'],
+      ]);
+      expect(launches()).toBe(2);
+      expect(
+        await runtime.readExecutorTopology({ ...sessions.get('a')!, threadId: 'root-b' }),
+      ).toMatchObject({ kind: 'unavailable', code: 'ROOT_BINDING_MISMATCH' });
+    } finally {
+      runtime.stopAll();
+    }
+  });
+
+  it('excludes foreign-root rows even when the backend ignores the parent filter', async () => {
+    const { runtime, sessions, setTopology } = await fixture();
+    setTopology({
+      data: [
+        {
+          id: 'foreign',
+          parentThreadId: 'root-b',
+          status: { type: 'idle' },
+          source: { subAgent: { thread_spawn: { agent_path: '/root/l2' } } },
+        },
+      ],
+    });
+    try {
+      expect(await runtime.readExecutorTopology(sessions.get('a')!)).toMatchObject({
+        kind: 'observed',
+        children: [],
+      });
+      setTopology({
+        data: [
+          {
+            id: 'child-b',
+            status: { type: 'idle' },
+            source: { subAgent: { thread_spawn: { agent_path: '/root/l1' } } },
+          },
+        ],
+      });
+      expect(await runtime.readExecutorTopology(sessions.get('a')!)).toMatchObject({
+        kind: 'observed',
+        children: [],
+      });
+    } finally {
+      runtime.stopAll();
+    }
+  });
+
+  it.each([{}, { parentThreadId: 'root-a' }])(
+    'rejects unclassified topology rows: %j',
+    async (fields) => {
+      const { runtime, sessions, setTopology } = await fixture();
+      setTopology({ data: [{ id: 'unknown-live', status: { type: 'active' }, ...fields }] });
+      try {
+        expect(await runtime.readExecutorTopology(sessions.get('a')!)).toMatchObject({
+          kind: 'unavailable',
+          code: 'ROSTER_UNAVAILABLE',
+        });
+      } finally {
+        runtime.stopAll();
+      }
+    },
+  );
+
+  it('bounds ownership reads and discards topology after the writer stops', async () => {
+    const { runtime, sessions, setTopology, calls } = await fixture();
+    const pending = Promise.withResolvers<unknown>();
+    setTopology(pending.promise);
+    vi.useFakeTimers();
+    try {
+      const reading = runtime.readExecutorTopology(sessions.get('a')!);
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(await reading).toMatchObject({ kind: 'unavailable', code: 'ROSTER_UNAVAILABLE' });
+      expect(calls.map((call) => call.method)).toEqual(['thread/read', 'thread/list']);
+      expect(vi.getTimerCount()).toBe(0);
+      runtime.stop('a');
+      pending.resolve({ data: [] });
+      expect(await runtime.readExecutorTopology(sessions.get('a')!)).toMatchObject({
+        kind: 'unavailable',
+      });
+    } finally {
+      pending.resolve({ data: [] });
+      runtime.stopAll();
+      vi.useRealTimers();
+    }
+  });
   it('reads a prelaunch catalog from the owning root without reading/creating/resuming a child', async () => {
     const { runtime, calls, launches } = await fixture();
     try {

@@ -8,7 +8,7 @@ export const gestaltOrgPlanHealthDynamicTool = {
   type: 'function',
   name: 'gestalt_org_plan_health',
   description:
-    'Read current Org execution health. executorLaunch validates requested model/effort against the owning runtime catalog before a child exists; modelPolicy describes child-only settings and may remain unknown. Read-only; does not enable, resume, checkpoint, or change the Org Plan.',
+    'Read Org health and reconcile observed canonical executor ownership. executorBinding repairs safe handoffs even during attention or Manual Off, without starting, resuming, replacing or interrupting agents or clearing attention. executorLaunch validates requested model/effort before a child exists; modelPolicy retains unknown child settings. Never enables Autopilot or changes the Org Plan.',
   inputSchema: { type: 'object', additionalProperties: false, properties: {} },
 } as const;
 

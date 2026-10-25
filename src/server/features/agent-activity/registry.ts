@@ -19,6 +19,7 @@ export class AgentActivityRegistry {
   readonly #snapshots = new Map<string, AgentActivitySnapshot>();
   readonly #timers = new Map<string, () => void>();
   readonly #generation = new Map<string, number>();
+  readonly #acceptedRosters = new Map<string, number>();
   readonly #inFlight = new Map<string, Promise<void>>();
   readonly #disposed = new Set<string>();
   constructor(
@@ -39,6 +40,10 @@ export class AgentActivityRegistry {
     } = {},
   ) {}
 
+  /** Fences asynchronous observations against newer runtime facts. */
+  observationRevision(sessionId: string): number {
+    return (this.#generation.get(sessionId) ?? 0) + (this.#acceptedRosters.get(sessionId) ?? 0);
+  }
   snapshot(sessionId: string, now: string): AgentActivitySnapshot {
     return this.#snapshots.get(sessionId) ?? createAgentActivitySnapshot(sessionId, now);
   }
@@ -121,6 +126,7 @@ export class AgentActivityRegistry {
     }[],
   ): AgentActivitySnapshot {
     if (this.#disposed.has(sessionId)) return this.snapshot(sessionId, occurredAt);
+    this.#acceptedRosters.set(sessionId, (this.#acceptedRosters.get(sessionId) ?? 0) + 1);
     let next = this.snapshot(sessionId, occurredAt);
     const seen = new Set(children.map((child) => child.id));
     for (const child of children)

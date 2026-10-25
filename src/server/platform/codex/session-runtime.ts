@@ -683,6 +683,69 @@ export class CodexSessionRuntime {
     }
   }
 
+  /** Read-only ownership observation: no detached reader, model turn, resume or interruption. */
+  async readExecutorTopology(session: RelaySessionSnapshot) {
+    const resource = this.sessions.get(session.id);
+    if (!resource?.active || !session.threadId || resource.threadId !== session.threadId)
+      return { kind: 'unavailable' as const, code: 'ROOT_BINDING_MISMATCH' };
+    const rootThreadId = session.threadId;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let expired = false;
+    const current = () =>
+      !expired &&
+      this.sessions.get(session.id) === resource &&
+      resource.active &&
+      resource.threadId === rootThreadId;
+    try {
+      const observation = await Promise.race([
+        (async () => {
+          const result = await resource.process.rpc.request('thread/read', {
+            threadId: rootThreadId,
+            includeTurns: false,
+          });
+          const value = asRecord(asRecord(result)?.thread);
+          const status = asRecord(value?.status)?.type;
+          if (
+            !current() ||
+            value?.id !== rootThreadId ||
+            !['active', 'idle'].includes(String(status))
+          )
+            throw new Error('EXECUTOR_TOPOLOGY_UNAVAILABLE');
+          const children = await this.listDirectChildrenFromProcess(
+            resource.process,
+            rootThreadId,
+            current,
+          );
+          if (children.some((child) => child.qualified === false))
+            throw new Error('EXECUTOR_TOPOLOGY_INCOMPLETE');
+          return { children, rootActive: status === 'active' };
+        })(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            expired = true;
+            reject(new Error('EXECUTOR_TOPOLOGY_TIMEOUT'));
+          }, 5_000);
+        }),
+      ]);
+      if (
+        this.sessions.get(session.id) !== resource ||
+        !resource.active ||
+        resource.threadId !== rootThreadId
+      )
+        return { kind: 'unavailable' as const, code: 'CONTEXT_CHANGED' };
+      return {
+        kind: 'observed' as const,
+        ...observation,
+        observedAt: new Date().toISOString(),
+        rootThreadId,
+      };
+    } catch {
+      return { kind: 'unavailable' as const, code: 'ROSTER_UNAVAILABLE' };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   /** Bounded reconciliation port for direct spawned children only. */
   async listDirectChildren(session: RelaySessionSnapshot): Promise<readonly DirectChildThread[]> {
     if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
@@ -731,12 +794,14 @@ export class CodexSessionRuntime {
   private async listDirectChildrenFromProcess(
     process: AppServer,
     parentThreadId: string,
+    current?: () => boolean,
   ): Promise<readonly DirectChildThread[]> {
     const children: DirectChildThread[] = [];
     const childIds = new Set<string>();
     const cursors = new Set<string>();
     let cursor: string | undefined;
     for (let page = 0; page < 4 && childIds.size < 64; page += 1) {
+      if (current && !current()) throw new Error('EXECUTOR_TOPOLOGY_CHANGED');
       const result = await process.rpc.request('thread/list', {
         parentThreadId,
         ...(cursor ? { cursor } : {}),
@@ -744,8 +809,41 @@ export class CodexSessionRuntime {
       const response =
         result && typeof result === 'object' ? (result as Record<string, unknown>) : null;
       const data = response && Array.isArray(response.data) ? response.data : [];
+      // The parent filter is a query, not proof of ownership. In the binding
+      // recovery path verify provenance before allowing a row into the registry.
+      const verified: unknown[] = [];
+      for (const candidate of data) {
+        if (!current) {
+          verified.push(candidate);
+          continue;
+        }
+        if (!current()) throw new Error('EXECUTOR_TOPOLOGY_CHANGED');
+        const row = asRecord(candidate);
+        if (typeof row?.id !== 'string') continue;
+        let parent = row.parentThreadId;
+        if (typeof parent !== 'string') {
+          if (!decodeAgentTaskPath(row.source)) throw new Error('CHILD_PARENT_UNVERIFIED');
+          const response = await process.rpc.request('thread/read', {
+            threadId: row.id,
+            includeTurns: false,
+          });
+          const thread = asRecord(asRecord(response)?.thread);
+          if (!current() || thread?.id !== row.id) throw new Error('EXECUTOR_TOPOLOGY_CHANGED');
+          parent = thread.parentThreadId;
+          if (typeof parent !== 'string') throw new Error('CHILD_PARENT_UNVERIFIED');
+          if (
+            parent === parentThreadId &&
+            decodeAgentTaskPath(thread.source) !== decodeAgentTaskPath(row.source)
+          )
+            throw new Error('CHILD_IDENTITY_CHANGED');
+        }
+        if (parent === parentThreadId) {
+          if (!decodeAgentTaskPath(row.source)) throw new Error('CHILD_IDENTITY_UNVERIFIED');
+          verified.push(candidate);
+        }
+      }
       children.push(
-        ...data.flatMap((candidate) => {
+        ...verified.flatMap((candidate) => {
           if (!candidate || typeof candidate !== 'object') return [];
           const value = candidate as Record<string, unknown>;
           if (typeof value.id !== 'string' || value.id.length === 0 || value.id.length > 256)
