@@ -7,6 +7,9 @@
 import { readFile } from 'node:fs/promises';
 import type { RetrievalCapabilityPort } from '../../features/skills/application/ports.js';
 import type { AvailableSkill } from '../../features/skills/model/skill-profile.js';
+import { ReadinessEvidence } from './readiness-evidence.js';
+import type { RetrievalReadiness } from '../../../shared/contracts/retrieval-readiness.js';
+import type { RepositoryReadiness } from './repository-readiness.js';
 
 export const xerjServerName = 'gestalt-xerj';
 export const xerjTools = ['xerj_search', 'xerj_map', 'xerj_code_search'];
@@ -17,11 +20,15 @@ export type CodexRetrievalState = {
   skillsConfig: readonly { path: string; enabled: boolean }[];
   ready: boolean;
   diagnostic?: string;
+  evidence?: ReadinessEvidence;
+  readiness?: RetrievalReadiness;
+  repositories?: RepositoryReadiness;
   capabilities?: readonly {
     skillName: string;
     serverName: string;
     ready: boolean;
     diagnostic?: string;
+    readiness?: RetrievalReadiness;
   }[];
   deadline: number;
   fallback(): void;
@@ -42,7 +49,12 @@ export class CodexXerj {
     approvalPolicy?: string;
   }): Promise<CodexRetrievalState> {
     const skill = input.skills.find((entry) => entry.name === 'gestalt:xerj');
+    const evidence = new ReadinessEvidence();
     const state: CodexRetrievalState = {
+      evidence,
+      get readiness() {
+        return evidence.snapshot();
+      },
       ready: false,
       deadline: input.deadline,
       config: { ...input.config },
@@ -77,6 +89,7 @@ export class CodexXerj {
     const instructions =
       typeof native.developer_instructions === 'string' ? native.developer_instructions : '';
     state.fallback = () => {
+      evidence.connection('unavailable');
       state.ready = false;
       state.skillsConfig = state.skillsConfig.map((entry) => ({
         ...entry,
@@ -133,9 +146,10 @@ export class CodexXerj {
             default_tools_approval_mode: 'approve',
           },
         },
-        developer_instructions: `${instructions}\n<gestalt_xerj_capability>\n${guidance}\n</gestalt_xerj_capability>`,
+        developer_instructions: `${instructions}\n<gestalt_xerj_capability>\nWorkspace index counts do not establish coverage or freshness for a selected repository. Verify hit identity and current source before relying on it.\n${guidance}\n</gestalt_xerj_capability>`,
       };
       state.ready = true;
+      evidence.connection('unknown');
     } catch {
       state.fallback();
       state.diagnostic = 'connection-unavailable';
@@ -167,13 +181,20 @@ export class CodexXerj {
           server?.runtimeStatus === 'connected' &&
           !server.toolsError &&
           xerjTools.every((tool) => Object.hasOwn(server.tools ?? {}, tool))
-        )
+        ) {
+          state.evidence?.connection('ready');
           return true;
-        if (server?.runtimeStatus !== 'starting') return false;
+        }
+        if (server?.runtimeStatus !== 'starting') {
+          state.evidence?.connection('unavailable');
+          return false;
+        }
         await beforeDeadline(new Promise((resolve) => setTimeout(resolve, 25)), state.deadline);
       }
+      state.evidence?.connection('unavailable');
       return false;
     } catch {
+      state.evidence?.connection('unavailable');
       return false;
     }
   }

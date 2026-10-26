@@ -54,6 +54,10 @@ export class ChatRelayFixture {
   constructor(readonly page: RelayRouteHost) {}
   async install(sessions: Array<Record<string, unknown>>): Promise<void> {
     this.sessions.push(...sessions);
+    // Legacy fixtures have no runtime observations; callers can override explicitly.
+    await this.page.route('**/api/sessions/*/retrieval-readiness', (route) =>
+      route.fulfill({ status: 404 }),
+    );
     await this.page.route('**/api/bootstrap', (route) =>
       route.fulfill({
         contentType: 'application/json',

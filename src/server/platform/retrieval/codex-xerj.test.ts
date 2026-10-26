@@ -81,6 +81,22 @@ async function setup(status: 'ready' | 'absent' | 'unavailable' = 'ready') {
 }
 
 describe('native runtime retrieval', () => {
+  it('distinguishes backend and MCP connection readiness from unobserved coverage', async () => {
+    const f = await setup();
+    const state = await f.prepare();
+    expect(state.readiness?.connection.state).toBe('unknown');
+    expect(await f.adapter.verify(f.rpc, 'thread', state)).toBe(true);
+    expect(state.readiness).toMatchObject({
+      connection: { state: 'ready' },
+      coverage: { state: 'unknown' },
+    });
+    state.deadline = Date.now() + 10;
+    expect(await f.adapter.verify({ request: () => new Promise(() => {}) }, 'thread', state)).toBe(
+      false,
+    );
+    expect(state.readiness?.connection.state).toBe('unavailable');
+    expect(state.readiness?.coverage.state).toBe('unknown');
+  });
   it('preserves the active workspace permission boundary when enabling global retrieval', async () => {
     const f = await setup();
     const permissions = {

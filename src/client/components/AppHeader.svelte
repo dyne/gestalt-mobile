@@ -6,6 +6,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <script lang="ts">
   import type { XerjStatus } from '../../shared/contracts/xerj-status.js';
+  import {
+    readinessLabel,
+    repositoryLabel,
+    type SessionRetrievalReadiness,
+  } from '../../shared/contracts/retrieval-readiness.js';
+  import ToolReadiness from '../features/retrieval/ToolReadiness.svelte';
   import type { ComponentVersion } from '../../shared/contracts/component-version.js';
   import type { HeaderAction } from '../features/sessions/header-actions.js';
   import { themes, type ThemeId } from '../features/theme/theme-registry.js';
@@ -19,6 +25,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     passkeyAuthEnabled = true,
     componentVersions = [],
     xerj,
+    retrieval,
+    readinessLoading = false,
+    onreadinessrefresh = () => {},
     onconfigurationchange = () => {},
     contextualActions = [],
     onthemechange,
@@ -40,6 +49,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     passkeyAuthEnabled?: boolean;
     componentVersions?: readonly ComponentVersion[];
     xerj?: XerjStatus;
+    retrieval?: SessionRetrievalReadiness | null;
+    readinessLoading?: boolean;
+    onreadinessrefresh?: () => void;
     onconfigurationchange?: (open: boolean) => void;
     contextualActions?: readonly HeaderAction[];
     onthemechange: (theme: ThemeId) => void;
@@ -219,17 +231,26 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       onclick={onlock}>Lock Gestalt Mobile</button
     >
   {/if}
+  {#if retrieval !== undefined}<ToolReadiness
+      status={retrieval}
+      loading={readinessLoading}
+      onrefresh={onreadinessrefresh}
+    />{/if}
   {#if xerj && xerj.state !== 'absent'}
     <section class="component-versions xerj-status" aria-labelledby="xerj-status-title">
       <h2 id="xerj-status-title">Workspace discovery</h2>
       <dl>
         <div>
-          <dt>XERJ</dt>
+          <dt>XERJ service</dt>
           <dd>{xerj.state}</dd>
         </div>
         <div>
-          <dt>Root</dt>
-          <dd class="xerj-root">{xerj.root}</dd>
+          <dt>Workspace</dt>
+          <dd class="xerj-root">{repositoryLabel(xerj.root)}</dd>
+        </div>
+        <div>
+          <dt>Index coverage</dt>
+          <dd>{readinessLabel(xerj.readiness?.coverage?.state)}</dd>
         </div>
         {#if xerj.phase}<div>
             <dt>Phase</dt>
@@ -252,6 +273,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             </dd>
           </div>{/if}
       </dl>
+      {#if xerj.readiness?.coverage?.reason === 'empty-index'}<p>
+          The workspace index contains no records.
+        </p>{/if}
+      <p>Workspace counts do not establish coverage for an individual repository.</p>
       {#if xerj.message}<p>{xerj.message}</p>{/if}
     </section>
   {/if}
@@ -436,11 +461,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .xerj-status dl > div {
-    grid-template-columns: max-content minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 
-  .xerj-status .xerj-root {
+  .xerj-status dd {
+    overflow: visible;
     white-space: normal;
+    text-overflow: clip;
     overflow-wrap: anywhere;
   }
 

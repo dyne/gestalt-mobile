@@ -89,7 +89,9 @@ describe('AppHeader', () => {
       },
     });
     const status = screen.getByRole('region', { name: 'Workspace discovery', hidden: true });
-    expect(status.textContent).toContain('/sources/engineering');
+    expect(status.textContent).toContain('engineering');
+    expect(status.textContent).not.toContain('/sources/');
+    expect(status.textContent).toContain('Unverified');
     expect(status.textContent).toContain('42%');
     await rerender({
       ...props,

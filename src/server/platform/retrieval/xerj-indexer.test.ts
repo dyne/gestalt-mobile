@@ -57,6 +57,37 @@ async function fixture(
 }
 
 describe('host-owned XERJ indexing', () => {
+  it.each([0, 12, undefined])(
+    'derives coverage only from completed index counters: %s records',
+    async (records) => {
+      const f = await fixture(
+        `console.error(JSON.stringify({event:'done',ok:true,files:6,records:${records}})); setInterval(() => {},1000);`,
+      );
+      const indexer = f.create();
+      expect(indexer.status().readiness?.coverage.state).toBe('unknown');
+      indexer.start();
+      await vi.waitFor(() => expect(indexer.status().state).toBe('watching'));
+      expect(indexer.status().readiness).toMatchObject({
+        connection: { state: 'ready' },
+        coverage: {
+          state: records === undefined ? 'unknown' : records === 0 ? 'unavailable' : 'ready',
+        },
+        symbols: { state: 'unknown' },
+      });
+    },
+  );
+
+  it('marks prior coverage stale during another indexing pass and after failure', async () => {
+    const f = await fixture(
+      `process.on('SIGUSR2', () => { console.error(JSON.stringify({event:'progress',phase:'scan',pct:10})); console.error(JSON.stringify({event:'done',ok:false})); }); console.error(JSON.stringify({event:'done',ok:true,files:6,records:12})); setInterval(() => {},1000);`,
+    );
+    const indexer = f.create();
+    indexer.start();
+    await vi.waitFor(() => expect(indexer.status().readiness?.coverage.state).toBe('ready'));
+    process.kill((await f.args()).pid, 'SIGUSR2');
+    await vi.waitFor(() => expect(indexer.status().state).toBe('error'));
+    expect(indexer.status().readiness?.coverage.state).toBe('stale');
+  });
   it('checks the committed fingerprint before launching and does not overwrite incompatible metadata', async () => {
     const f = await fixture();
     const first = f.create();
@@ -86,6 +117,7 @@ describe('host-owned XERJ indexing', () => {
     );
     await expect(f.args()).rejects.toMatchObject({ code: 'ENOENT' });
     expect(JSON.parse(await readFile(path, 'utf8')).fingerprint).toBe('different');
+    expect(restarted.status().readiness?.coverage.state).toBe('stale');
   });
 
   it('explains native ambiguous repository assignment without exposing paths or output', async () => {
@@ -112,6 +144,7 @@ describe('host-owned XERJ indexing', () => {
     const manual = f.create('manual');
     manual.start();
     await vi.waitFor(() => expect(manual.status().state).toBe('ready'));
+    expect(manual.status().readiness?.coverage.state).toBe('unknown');
     await expect(readFile(join(f.root, '.xerjignore'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(f.args()).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -187,6 +220,10 @@ describe('host-owned XERJ indexing', () => {
     const indexer = f.create();
     indexer.start();
     await vi.waitFor(() => expect(indexer.status().state).toBe(state));
+    expect(indexer.status().readiness).toMatchObject({
+      connection: { state: 'unavailable' },
+      coverage: { state: 'unavailable' },
+    });
     if (state === 'absent') expect(indexer.status().message).toBeUndefined();
     await expect(f.args()).rejects.toMatchObject({ code: 'ENOENT' });
   });

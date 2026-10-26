@@ -6245,6 +6245,18 @@ describe('production composition', () => {
         ['HEAD', '/api/sessions/:id/plan', '/api/sessions/session-1/plan', 'protected'],
         ['DELETE', '/api/sessions/:id/plan', '/api/sessions/session-1/plan', 'protected'],
         [
+          'GET',
+          '/api/sessions/:id/retrieval-readiness',
+          '/api/sessions/session-1/retrieval-readiness',
+          'protected',
+        ],
+        [
+          'HEAD',
+          '/api/sessions/:id/retrieval-readiness',
+          '/api/sessions/session-1/retrieval-readiness',
+          'protected',
+        ],
+        [
           'POST',
           '/api/workspaces/:workspaceId/files/references',
           '/api/workspaces/workspace-1/files/references',

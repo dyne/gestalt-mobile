@@ -173,6 +173,7 @@ class SessionResource {
   retrieval: CodexRetrievalState | undefined;
   retrievalFailureReported = false;
   readonly capabilityFailuresReported = new Set<string>();
+  readonly readinessPublished = new Map<string, string>();
   readinessDeadline = xerjDeadline();
 
   dispose(): boolean {
@@ -297,6 +298,29 @@ export class CodexSessionRuntime {
   >();
   private readonly childTopologyReads = new Map<string, Promise<readonly DirectChildThread[]>>();
   private readonly writerAcquisitions = new Map<string, Promise<WriterAcquisition>>();
+
+  /** Current runtime observations only; durable workspace selection is never rewritten. */
+  async readRetrievalReadiness(sessionId: string) {
+    const resource = this.sessions.get(sessionId);
+    if (!resource?.active || !resource.threadId || !resource.retrieval) return null;
+    const current = () => resource.active && this.sessions.get(sessionId) === resource;
+    const repositories =
+      (await resource.retrieval.repositories?.snapshot(
+        resource.process.rpc,
+        resource.threadId,
+        current,
+      )) ?? [];
+    if (!current()) return null;
+    return {
+      runtimeId: resource.retrieval.repositories?.runtimeId ?? null,
+      observedAt: new Date().toISOString(),
+      connections: (resource.retrieval.capabilities ?? []).map(({ serverName, readiness }) => ({
+        serverName,
+        readiness,
+      })),
+      repositories,
+    };
+  }
 
   async start(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
     const resource = await this.createResource(session);
@@ -1406,6 +1430,50 @@ export class CodexSessionRuntime {
       }
       const notificationUnsubscribe = process.rpc.onNotification((notification) => {
         if (!resource.active) return;
+        if (resource.retrieval?.repositories) {
+          void resource.retrieval.repositories
+            .observe(
+              resource.process.rpc,
+              resource.threadId ?? '',
+              notification,
+              () => resource.active && this.sessions.get(session.id) === resource,
+            )
+            .then(() => {
+              if (
+                !resource.active ||
+                this.sessions.get(session.id) !== resource ||
+                !['item/completed', 'thread/settings/updated', 'mcpServer/statusUpdated'].includes(
+                  notification.method,
+                )
+              )
+                return;
+              for (const observed of resource.retrieval?.repositories?.peek() ?? []) {
+                const repository = observed.readiness.repository;
+                if (!repository) continue;
+                const key = `${observed.threadId}:${repository.id}`;
+                const state = JSON.stringify([
+                  observed.readiness.symbols.state,
+                  observed.readiness.references.state,
+                ]);
+                if (resource.readinessPublished.get(key) === state) continue;
+                resource.readinessPublished.set(key, state);
+                this.onNotification?.(
+                  session.id,
+                  {
+                    method: 'gestalt/retrievalReadiness',
+                    params: { ...observed, runtimeId: resource.retrieval?.repositories?.runtimeId },
+                  },
+                  {
+                    kind: observed.threadId === resource.threadId ? 'root' : 'child',
+                    physicalThreadId: observed.threadId,
+                  },
+                );
+              }
+            })
+            .catch(() => {
+              /* Optional observations must not interrupt the owning turn. */
+            });
+        }
         if (
           notification.method === 'thread/settings/updated' ||
           notification.method === 'turn/started'

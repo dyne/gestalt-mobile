@@ -113,6 +113,28 @@ async function fixture() {
 }
 
 describe('workspace-bound Serena capability', () => {
+  it('reports connected but unverified semantic readiness and bounds a hung startup', async () => {
+    const f = await fixture();
+    const state = await f.adapter.prepare(f.input);
+    expect(state.readiness?.connection.state).toBe('unknown');
+    expect(await f.adapter.verify(f.rpc, 'thread', state)).toBe(true);
+    expect(state.readiness).toMatchObject({
+      connection: { state: 'ready' },
+      symbols: { state: 'unknown' },
+      references: { state: 'unknown' },
+    });
+    const timed = await f.adapter.prepare({ ...f.input, deadline: Date.now() + 30 });
+    expect(await f.adapter.verify({ request: () => new Promise(() => {}) }, 'thread', timed)).toBe(
+      false,
+    );
+    expect(timed.readiness?.connection.state).toBe('unavailable');
+    expect(timed.readiness?.symbols.state).toBe('unknown');
+    expect(
+      f.rpc.request.mock.calls.every(([method]) =>
+        ['config/read', 'mcpServerStatus/list'].includes(method),
+      ),
+    ).toBe(true);
+  });
   it.each(['missing installation', 'excluded skill', 'undiscovered skill'])(
     'keeps session configuration valid with %s and no native Serena server',
     async (scenario) => {

@@ -134,6 +134,11 @@ export type AppDependencies = {
           truncated: boolean;
         };
     refreshActivity?(sessionId: string): Promise<void>;
+    retrievalReadiness?(
+      sessionId: string,
+    ): Promise<
+      import('../shared/contracts/retrieval-readiness.js').SessionRetrievalReadiness | null
+    >;
     interruptTurn?(session: RelaySessionSnapshot, turnId: string): Promise<void>;
     queueTurnInput?(
       session: RelaySessionSnapshot,

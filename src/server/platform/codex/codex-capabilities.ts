@@ -6,6 +6,7 @@
 
 import { CodexXerj, type CodexRetrievalState } from '../retrieval/codex-xerj.js';
 import { CodexSerena } from './codex-serena.js';
+import { RepositoryReadiness } from '../retrieval/repository-readiness.js';
 
 type Input = Parameters<CodexXerj['prepare']>[0];
 /** The two managed capabilities share lifecycle, but never share availability or approvals. */
@@ -30,6 +31,7 @@ export class CodexCapabilities {
     if (serena.ready) serena.deadline = Date.now() + serenaVerificationMs;
     const serenaPath = input.skills.find((skill) => skill.name === 'gestalt:serena')?.path;
     const state: CodexRetrievalState = {
+      repositories: new RepositoryReadiness(input.cwd),
       deadline: Math.max(input.deadline, serena.ready ? serena.deadline : input.deadline),
       get ready() {
         return xerj.ready || serena.ready;
@@ -41,12 +43,14 @@ export class CodexCapabilities {
             serverName: 'gestalt-xerj',
             ready: xerj.ready,
             diagnostic: xerj.diagnostic,
+            readiness: xerj.readiness,
           },
           {
             skillName: 'gestalt:serena',
             serverName: 'gestalt-serena',
             ready: serena.ready,
             diagnostic: serena.diagnostic,
+            readiness: serena.readiness,
           },
         ];
       },

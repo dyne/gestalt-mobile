@@ -44,6 +44,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import Composer from './features/chat/Composer.svelte';
   import MessageList from './features/chat/MessageList.svelte';
   import type { XerjStatus } from '../shared/contracts/xerj-status.js';
+  import type { SessionRetrievalReadiness } from '../shared/contracts/retrieval-readiness.js';
+  import { applyReadinessActivity } from './features/retrieval/readiness-activity.js';
   import { loadBootstrap, type WorkspaceOption } from './features/catalog/bootstrap-client.js';
   import type { ComponentVersion } from '../shared/contracts/component-version.js';
   import type { LlmProvider, ProviderAvailability } from '../shared/contracts/llm-provider.js';
@@ -168,6 +170,54 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let componentVersions = $state.raw<ComponentVersion[]>([]);
   let xerjStatus = $state<XerjStatus>();
   let configurationOpen = $state(false);
+  let retrievalStatus = $state.raw<SessionRetrievalReadiness | null>(null);
+  let readinessLoading = $state(false);
+  let readinessAbort: AbortController | undefined;
+
+  async function refreshToolReadiness(): Promise<void> {
+    readinessAbort?.abort();
+    const controller = new AbortController();
+    readinessAbort = controller;
+    const id = sessionId;
+    if (!id || !readinessEligible) return;
+    readinessLoading = true;
+    retrievalStatus = null;
+    try {
+      const response = await authorizedFetch(
+        `/api/sessions/${encodeURIComponent(id)}/retrieval-readiness`,
+        { signal: controller.signal },
+      );
+      if (response.status === 404) return;
+      if (!response.ok) throw new Error('READINESS_UNAVAILABLE');
+      const status = (await response.json()) as SessionRetrievalReadiness;
+      if (!controller.signal.aborted && id === sessionId)
+        retrievalStatus = {
+          runtimeId: typeof status?.runtimeId === 'string' ? status.runtimeId : null,
+          observedAt: typeof status?.observedAt === 'string' ? status.observedAt : undefined,
+          connections: Array.isArray(status?.connections) ? status.connections : [],
+          repositories: Array.isArray(status?.repositories) ? status.repositories : [],
+        };
+    } catch {
+      if (!controller.signal.aborted)
+        toastQueue.enqueue({
+          kind: 'warning',
+          message: 'Could not refresh tool readiness. Reopen configuration or refresh to retry.',
+        });
+    } finally {
+      if (!controller.signal.aborted && id === sessionId) readinessLoading = false;
+    }
+  }
+
+  $effect(() => {
+    if (!configurationOpen || !readinessEligible || !sessionId) {
+      readinessAbort?.abort();
+      retrievalStatus = null;
+      readinessLoading = false;
+      return;
+    }
+    void refreshToolReadiness();
+    return () => readinessAbort?.abort();
+  });
   let reportedXerjError: string | undefined;
 
   function acceptXerjStatus(status: XerjStatus | undefined): void {
@@ -280,6 +330,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     sessions.find((session) => session.id === sessionId)?.workspacePath ?? null,
   );
   let selectedSession = $derived(sessions.find((session) => session.id === sessionId) ?? null);
+  const readinessEligible = $derived(
+    Boolean(
+      selectedSession &&
+      selectedSession.provider !== 'kimi' &&
+      ['ready', 'turnActive'].includes(selectedSession.state),
+    ),
+  );
   let desktopChat = $state(false);
   let showChatSidebars = $derived(desktopChat && tab === 'chat' && !detachedSessionId);
   function measureDesktopChat(): void {
@@ -386,11 +443,28 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     relay,
     cache: createChatCache(),
     publish: (next) => (chatView = next),
+    onConnectionChange: (connected) => {
+      if (!connected) {
+        readinessAbort?.abort();
+        retrievalStatus = null;
+        readinessLoading = false;
+      } else if (configurationOpen && readinessEligible && !readinessLoading)
+        void refreshToolReadiness();
+    },
     onSessionEvent: (event) => handleChatMetadataEvent(event),
     onRelayEvent: (event) => {
       if (sessionId) activityController.observe(sessionId, event);
       const feedback = serenaAvailabilityFeedback(event);
       if (feedback) toastQueue.enqueue(feedback);
+      if (
+        event.type === 'activity.updated' &&
+        (event.payload as { id?: string })?.id === 'gestalt-serena-availability'
+      ) {
+        readinessAbort?.abort();
+        retrievalStatus = null;
+        readinessLoading = false;
+      }
+      if (readinessEligible) retrievalStatus = applyReadinessActivity(retrievalStatus, event);
     },
     onHistoryError: (error) => {
       shellStatus = reportRelayError(error, 'SESSION_HISTORY_READ_FAILED');
@@ -1774,6 +1848,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         brandIconUrl={headerIconUrl}
         {componentVersions}
         xerj={xerjStatus}
+        retrieval={selectedSession && selectedSession.provider !== 'kimi'
+          ? retrievalStatus
+          : undefined}
+        {readinessLoading}
+        onreadinessrefresh={() => void refreshToolReadiness()}
         onconfigurationchange={(open) => (configurationOpen = open)}
         contextualActions={headerActions}
         {passkeyAuthEnabled}
