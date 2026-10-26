@@ -6,10 +6,12 @@
 
 import type { FastifyInstance } from 'fastify';
 import type { XerjStatus } from '../../../../shared/contracts/xerj-status.js';
+import { unknownReadiness } from '../../../../shared/contracts/retrieval-readiness.js';
 
 export function registerXerjStatus(app: FastifyInstance, status: () => XerjStatus): void {
   app.get('/api/xerj', async (_request, reply) => {
     reply.header('Cache-Control', 'no-store');
-    return status();
+    const current = status();
+    return { ...current, readiness: current.readiness ?? unknownReadiness() };
   });
 }

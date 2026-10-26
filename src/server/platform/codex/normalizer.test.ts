@@ -6,8 +6,43 @@
 
 import { describe, expect, it } from 'vitest';
 import { normalizeCodexNotification } from './normalizer.js';
+import { unknownReadiness } from '../../../shared/contracts/retrieval-readiness.js';
 
 describe('normalizeCodexNotification', () => {
+  it('projects sanitized source-scoped readiness into existing activity without private paths or outputs', () => {
+    const readiness = unknownReadiness();
+    readiness.repository = { id: 'a'.repeat(64), label: '/private/source/project' };
+    readiness.symbols = {
+      state: 'ready',
+      observedAt: '2026-10-26T12:00:00Z',
+      generation: 'generation',
+    };
+    readiness.references = {
+      state: 'unavailable',
+      observedAt: '2026-10-26T12:00:00Z',
+      generation: 'generation',
+    };
+    const result = normalizeCodexNotification('s', 1, 'now', {
+      method: 'gestalt/retrievalReadiness',
+      params: { runtimeId: 'runtime', threadId: 'child', readiness, privateOutput: 'secret-token' },
+    });
+    expect(result).toMatchObject({
+      type: 'activity.updated',
+      payload: { label: 'Semantic checks · degraded', repositoryReadiness: { threadId: 'child' } },
+    });
+    expect(JSON.stringify(result)).not.toMatch(/private|secret-token/);
+    expect(JSON.stringify(result)).toContain(
+      'compiler selection and repository index coverage are unverified',
+    );
+    readiness.symbols = { state: 'ready', generation: null, observedAt: null };
+    readiness.references = unknownReadiness().references;
+    expect(
+      normalizeCodexNotification('s', 2, 'now', {
+        method: 'gestalt/retrievalReadiness',
+        params: { runtimeId: 'runtime', threadId: 'child', readiness },
+      }),
+    ).toMatchObject({ payload: { label: 'Semantic checks · unverified' } });
+  });
   it('maps an agent message delta to a stable relay event', () => {
     expect(
       normalizeCodexNotification('s', 1, '2026-01-01T00:00:00.000Z', {

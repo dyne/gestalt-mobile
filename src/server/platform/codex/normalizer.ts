@@ -8,6 +8,13 @@ import type { SessionEvent } from '../../../shared/contracts/session-event.js';
 import { countDiffLines, type FileChangeSummary } from '../../../shared/contracts/file-change.js';
 import { relative } from 'node:path';
 import type { NotificationOrigin } from './session-runtime.js';
+import {
+  unknownReadiness,
+  readinessLabel,
+  repositoryLabel,
+  semanticState,
+  type ReadinessObservation,
+} from '../../../shared/contracts/retrieval-readiness.js';
 
 export function normalizeCodexNotification(
   sessionId: string,
@@ -19,6 +26,64 @@ export function normalizeCodexNotification(
   origin: NotificationOrigin = { kind: 'root' },
 ): SessionEvent | null {
   const connection = record(notification.params);
+  if (notification.method === 'gestalt/retrievalReadiness') {
+    const readiness = record(connection?.readiness);
+    const repository = record(readiness?.repository);
+    if (
+      typeof connection?.runtimeId !== 'string' ||
+      !/^[a-zA-Z0-9-]{1,128}$/.test(connection.runtimeId) ||
+      typeof connection?.threadId !== 'string' ||
+      !/^[a-zA-Z0-9_.-]{1,128}$/.test(connection.threadId) ||
+      typeof repository?.id !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(repository.id) ||
+      typeof repository.label !== 'string'
+    )
+      return null;
+    const observation = (value: unknown): ReadinessObservation => {
+      const observed = record(value);
+      if (
+        !observed ||
+        !['ready', 'unknown', 'stale', 'unavailable'].includes(String(observed.state)) ||
+        typeof observed.generation !== 'string' ||
+        !/^[a-zA-Z0-9-]{1,128}$/.test(observed.generation) ||
+        typeof observed.observedAt !== 'string' ||
+        !Number.isFinite(Date.parse(observed.observedAt))
+      )
+        return unknownReadiness().symbols;
+      return {
+        state: observed.state as ReadinessObservation['state'],
+        observedAt: observed.observedAt,
+        generation: observed.generation,
+        scope: 'source',
+      };
+    };
+    const safe = {
+      ...unknownReadiness(),
+      repository: { id: repository.id, label: repositoryLabel(repository.label) },
+      connection: observation(readiness?.connection),
+      symbols: observation(readiness?.symbols),
+      references: observation(readiness?.references),
+    };
+    const threadId = connection!.threadId as string;
+    const compactLabel =
+      safe.repository.label.length > 36
+        ? `${safe.repository.label.slice(0, 35)}…`
+        : safe.repository.label;
+    return {
+      sessionId,
+      sequence,
+      occurredAt,
+      type: 'activity.updated',
+      payload: {
+        id: `gestalt-retrieval-${threadId}-${repository.id}`,
+        label: `Semantic checks · ${readinessLabel(semanticState(safe)).toLowerCase()}`,
+        detail: `${compactLabel} (${repository.id.slice(0, 8)}) · Symbols ${readinessLabel(safe.symbols.state)}; references ${readinessLabel(safe.references.state)}. Observed source only; compiler selection and repository index coverage are unverified.`,
+        repositoryReadiness: { threadId, readiness: safe },
+        runtimeId: connection.runtimeId,
+        ...(activeTurnId ? { turnId: activeTurnId } : {}),
+      },
+    };
+  }
   if (
     notification.method === 'mcpServer/statusUpdated' &&
     connection?.name === 'gestalt-xerj' &&

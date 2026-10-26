@@ -18,6 +18,7 @@ import {
 import type { XerjStatus } from '../../../shared/contracts/xerj-status.js';
 import type { RetrievalCapabilityPort } from '../../features/skills/application/ports.js';
 import { xerjDeadline } from './managed-xerj.js';
+import { ReadinessEvidence } from './readiness-evidence.js';
 
 // Native gitignore syntax, editable by the host operator. Hidden directories and
 // symlinks are already skipped by XERJ. Never replace an existing root policy.
@@ -65,6 +66,7 @@ package-cache/
 /** One host-owned child; backend supervision and watcher locking stay in the manager. */
 export class XerjIndexer {
   private value: XerjStatus;
+  private readonly evidence = new ReadinessEvidence();
   private child?: ChildProcess;
   private task?: Promise<void>;
   private closed = false;
@@ -82,7 +84,7 @@ export class XerjIndexer {
   }
 
   status(): XerjStatus {
-    return { ...this.value };
+    return { ...this.value, readiness: this.evidence.snapshot() };
   }
 
   start(): void {
@@ -94,6 +96,7 @@ export class XerjIndexer {
   }
 
   private fail(message: string): void {
+    this.evidence.coverage(this.value.lastUpdate ? 'stale' : 'unavailable');
     this.value = { ...this.value, state: 'error', message };
     this.report(message);
   }
@@ -109,6 +112,8 @@ export class XerjIndexer {
     });
     if (this.closed) return;
     if (ready.status === 'absent') {
+      this.evidence.connection('unavailable');
+      this.evidence.coverage('unavailable');
       this.value = {
         ...this.value,
         state: 'absent',
@@ -116,11 +121,13 @@ export class XerjIndexer {
       return;
     }
     if (ready.status !== 'ready') {
+      this.evidence.connection('unavailable');
       this.fail(
         'XERJ backend unavailable. Run gestalt doctor; check the managed data directory and local port.',
       );
       return;
     }
+    this.evidence.connection('ready');
     if (this.value.mode === 'manual') {
       this.value = { ...this.value, state: 'ready', message: 'Automatic indexing is disabled.' };
       return;
@@ -138,6 +145,7 @@ export class XerjIndexer {
       this.fail(
         'XERJ index settings differ from the saved fingerprint. Restore the previous settings or explicitly rebuild this root index; indexing was not started.',
       );
+      this.evidence.coverage('stale');
       return;
     }
     if (compatibility === 'missing')
@@ -196,6 +204,7 @@ export class XerjIndexer {
       this.child = undefined;
       if (this.closed) return;
       if (code === 75) {
+        this.evidence.coverage('unknown');
         this.value = {
           ...this.value,
           state: 'shared',
@@ -214,6 +223,9 @@ export class XerjIndexer {
     try {
       const event = JSON.parse(line) as Record<string, unknown>;
       if (event.event === 'progress') {
+        this.evidence.invalidate();
+        this.evidence.connection('ready');
+        this.evidence.coverage(this.value.lastUpdate ? 'stale' : 'unknown');
         const phase =
           typeof event.phase === 'string' && /^[a-z-]{1,32}$/.test(event.phase)
             ? event.phase
@@ -247,6 +259,14 @@ export class XerjIndexer {
           ...(count(event.files) !== undefined ? { files: count(event.files) } : {}),
           ...(count(event.records) !== undefined ? { records: count(event.records) } : {}),
         };
+        const records = count(event.records);
+        this.evidence.coverage(
+          records === undefined ? 'unknown' : records === 0 ? 'unavailable' : 'ready',
+          {
+            files: count(event.files),
+            records,
+          },
+        );
       } else if (event.event === 'warning') {
         if (
           typeof event.message === 'string' &&
@@ -280,6 +300,7 @@ export class XerjIndexer {
       });
     }
     this.value = { ...this.value, state: this.value.mode === 'off' ? 'disabled' : 'stopped' };
+    this.evidence.connection('unavailable');
   }
 }
 

@@ -271,7 +271,7 @@ for (const configuration of evidenceConfigurations())
         expect(Number.parseFloat(focusStyle)).toBeGreaterThan(0);
         await planTab.press('Enter');
         await expect(planTab).toHaveAttribute('aria-pressed', 'true');
-        const summary = page.locator('details summary').first();
+        const summary = page.locator('details:visible summary').first();
         await summary.focus();
         const details = summary.locator('..');
         const wasOpen = await details.evaluate((element) => (element as HTMLDetailsElement).open);

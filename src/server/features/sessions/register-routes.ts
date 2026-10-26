@@ -27,6 +27,7 @@ import { registerStartSession } from './start-session/endpoint.js';
 import { registerStartTurn } from './start-turn/endpoint.js';
 import { registerStopSession } from './stop-session/endpoint.js';
 import { registerRefreshActivity } from './refresh-activity/endpoint.js';
+import { registerGetRetrievalReadiness } from './get-retrieval-readiness/endpoint.js';
 
 export function registerSessionRoutes(
   app: FastifyInstance,
@@ -60,6 +61,11 @@ export function registerSessionRoutes(
     });
   }
   if (sessions) {
+    if (sessions.retrievalReadiness)
+      registerGetRetrievalReadiness(app, {
+        exists: (id) => sessions.find(id) !== null,
+        read: sessions.retrievalReadiness,
+      });
     if (sessions.sessionModels) registerListSessionModels(app, sessions.sessionModels);
     registerStartSession(app, {
       ...sessions,

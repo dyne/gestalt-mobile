@@ -11,6 +11,7 @@ import {
   type CodexXerj,
 } from '../retrieval/codex-xerj.js';
 import { ManagedSerena, serenaTools } from './managed-serena.js';
+import { ReadinessEvidence } from '../retrieval/readiness-evidence.js';
 
 export const serenaServerName = 'gestalt-serena';
 type Input = Parameters<CodexXerj['prepare']>[0];
@@ -34,6 +35,7 @@ export class CodexSerena {
   constructor(private readonly installation: Pick<ManagedSerena, 'check'> = new ManagedSerena()) {}
 
   async prepare(input: Input): Promise<CodexRetrievalState> {
+    const evidence = new ReadinessEvidence();
     const skill = input.skills.find((entry) => entry.name === 'gestalt:serena');
     let native: Record<string, unknown> = {};
     let compatible = false;
@@ -61,11 +63,16 @@ export class CodexSerena {
     const instructions =
       typeof native.developer_instructions === 'string' ? native.developer_instructions : '';
     const state: CodexRetrievalState = {
+      evidence,
+      get readiness() {
+        return evidence.snapshot();
+      },
       ready: false,
       deadline: input.deadline,
       config: {},
       skillsConfig: input.skillsConfig,
       fallback: () => {
+        evidence.connection('unavailable');
         state.ready = false;
         state.skillsConfig = input.skillsConfig.map((entry) => ({
           ...entry,
@@ -146,13 +153,14 @@ export class CodexSerena {
             startup_timeout_ms: Math.max(1, input.deadline - Date.now()),
           },
         },
-        developer_instructions: `${instructions}\n<gestalt_serena_capability>\nSerena is bound to this workspace. Connection and listed tools do not prove language readiness. First call get_symbols_overview on a current project source file and verify success before semantic editing; on failure use native code tools. Native session and child permissions and approvals apply. Plan mode prohibits edits. Do not switch projects or modes.\n${guidance}\n</gestalt_serena_capability>`,
+        developer_instructions: `${instructions}\n<gestalt_serena_capability>\nSerena is bound to this workspace. Connection and listed tools do not prove language readiness. Verify usable symbols on a current source file before semantic editing, and usable references before impact claims. Empty results remain unverified; use native current-source tools when permissions or semantic checks are unknown. Native session and child permissions and approvals apply. Plan mode prohibits edits. Do not switch projects or modes.\n${guidance}\n</gestalt_serena_capability>`,
       };
       state.skillsConfig = [
         ...input.skillsConfig.filter((entry) => entry.path !== skill.path),
         { path: skill.path, enabled: true },
       ];
       state.ready = true;
+      evidence.connection('unknown');
     } catch {
       state.fallback();
       state.diagnostic = 'connection-unavailable';
@@ -184,14 +192,20 @@ export class CodexSerena {
           server?.runtimeStatus === 'connected' &&
           !server.toolsError &&
           serenaTools.every((tool) => Object.hasOwn(server.tools ?? {}, tool))
-        )
+        ) {
+          state.evidence?.connection('ready');
           return true;
-        if (server?.runtimeStatus !== 'starting') return false;
+        }
+        if (server?.runtimeStatus !== 'starting') {
+          state.evidence?.connection('unavailable');
+          return false;
+        }
         await beforeDeadline(new Promise((resolve) => setTimeout(resolve, 25)), state.deadline);
       }
     } catch {
       /* Optional connection failure must not prevent a session. */
     }
+    state.evidence?.connection('unavailable');
     return false;
   }
 }

@@ -74,6 +74,7 @@ export type ChatControllerOptions = Readonly<{
   now?: () => number;
   onSessionEvent?: (event: ProjectionEvent) => void;
   onRelayEvent?: (event: ProjectionEvent) => void;
+  onConnectionChange?: (connected: boolean) => void;
   onHistoryError?: (error: unknown) => void;
   onSendError?: (error: unknown, operationId: string) => void;
   onSendAccepted?: (sessionId: string, operationId: string) => void;
@@ -434,6 +435,7 @@ export class ChatController {
         `${scheme}//${this.#options.location.host}/api/sessions/${encodeURIComponent(id)}/events?after=${this.#projection.cursor}`,
       );
     } catch {
+      this.#options.onConnectionChange?.(false);
       this.#projection = { ...this.#projection, lifecycle: 'recoverable' };
       this.#publish();
       this.#reconnect = this.#options.setTimeout(
@@ -446,6 +448,7 @@ export class ChatController {
     this.#socket = socket;
     socket.onopen = () => {
       if (this.#current(id, generation) && this.#socket === socket) {
+        this.#options.onConnectionChange?.(true);
         this.#attempt = 0;
         if (snapshotOnOpen && !this.#historyKnownEmpty) void this.#takeSnapshot(id, generation);
       }
@@ -454,6 +457,7 @@ export class ChatController {
     socket.onclose = () => {
       if (!this.#current(id, generation) || this.#socket !== socket) return;
       this.#socket = null;
+      this.#options.onConnectionChange?.(false);
       // Resync owns the replacement until its required snapshot is available.
       // A competing reconnect would open again from the obsolete cursor.
       if (this.#resyncSocket) {
@@ -641,6 +645,7 @@ export class ChatController {
   #replaceSocket(id: string, generation: number): void {
     const socket = this.#socket;
     this.#socket = null;
+    this.#options.onConnectionChange?.(false);
     socket?.close();
     if (this.#reconnect) this.#options.clearTimeout(this.#reconnect);
     this.#reconnect = null;
@@ -695,6 +700,7 @@ export class ChatController {
     return new Promise((resolve) => this.#options.setTimeout(resolve, milliseconds));
   }
   #stop(): void {
+    this.#options.onConnectionChange?.(false);
     this.#transport = { attempts: 0, coalesced: 0, resyncs: 0, socketOpens: 0 };
     this.#resyncSocket = false;
     this.#resyncSequence = null;

@@ -2128,6 +2128,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           planMeasurementRefresh?.refreshNow(session.id);
         },
         agentActivity: (id) => activity.snapshot(id, new Date().toISOString()),
+        retrievalReadiness: (id) => runtime?.readRetrievalReadiness(id) ?? Promise.resolve(null),
         autopilotSnapshot: (id) => autopilot.snapshot(id),
         autopilotControlTurns: (id) => autopilot.acceptedControlTurns(id),
         autopilotAudit: (id, limit) => journal.autopilotAuditTail(id, limit),
