@@ -623,6 +623,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 Gestalt Mobile is distributed under the GNU Affero General Public License
 version 3 or, at your option, any later version. See [LICENSE](LICENSE).
 
-Use `--xerj manual` (default, retrieval only), `--xerj auto` (opt-in indexing), or `--xerj off`.
+Source discovery defaults to `--xerj auto` (index and watch). Use `--xerj manual`
+for retrieval only or `--xerj off` to disable the integration.
 See [root-wide XERJ discovery](docs/xerj.md) for background indexing, exclusions,
 status, recovery and the retrieval/write-permission boundary.

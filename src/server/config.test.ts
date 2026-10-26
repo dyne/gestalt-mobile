@@ -32,7 +32,7 @@ describe('parseConfig', () => {
       },
       root: resolve('/caller'),
       dataDir: undefined,
-      xerj: 'manual',
+      xerj: 'auto',
     });
   });
 
@@ -66,7 +66,7 @@ describe('parseConfig', () => {
       },
       root: resolve('/caller/work'),
       dataDir: './state',
-      xerj: 'manual',
+      xerj: 'auto',
       iconPath: resolve('/caller/subdirectory/brand.png'),
     });
   });

@@ -37,7 +37,7 @@ Options:
   --disable-passkey-auth Disable passkey access control (unsafe on shared or network hosts)
   --data-dir <path>  Directory for persistent application data
   --icon <path>      SVG or PNG used as the installed PWA application icon
-  --xerj <mode>     Source discovery: manual (default, no indexing), auto, off
+  --xerj <mode>     Source discovery: auto (default, index and watch), manual, off
   --skills <profile> Use a global skill profile for every session
   --skills list      List saved global skill profiles without starting the server
   --help             Show this help
