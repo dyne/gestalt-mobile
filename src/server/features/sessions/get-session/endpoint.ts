@@ -18,6 +18,10 @@ export function registerGetSession(
     id: string,
   ) => import('../../autopilot/domain/autopilot-session.js').AutopilotSnapshot,
   plan?: (id: string) => import('../../plans/domain/supervised-plan.js').SupervisedPlan | null,
+  toolEfficiency?: (
+    id: string,
+  ) => import('../../../../shared/contracts/tool-efficiency.js').ToolEfficiencySnapshot,
+  currentSequence?: (id: string) => number,
 ): void {
   app.get('/api/sessions/:id', async (request, reply) => {
     const session = find((request.params as { id: string }).id);
@@ -27,9 +31,11 @@ export function registerGetSession(
     const retainedPlan = plan?.(session.id) ?? null;
     return reply.send({
       ...session,
+      ...(currentSequence ? { currentSequence: currentSequence(session.id) } : {}),
       ...(activitySnapshot ? { agentActivity: toAgentActivityDto(activitySnapshot) } : {}),
       ...(autopilotSnapshot ? { autopilot: autopilotSnapshot } : {}),
       ...(retainedPlan ? { plan: retainedPlan } : {}),
+      ...(toolEfficiency ? { toolEfficiency: toolEfficiency(session.id) } : {}),
       sessionStatus: deriveSessionStatus({
         session,
         plan: retainedPlan,

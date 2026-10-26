@@ -11,6 +11,7 @@ import type {
 } from '../../../shared/contracts/chat-snapshot.js';
 import { createIdempotencyKey } from '../sessions/idempotency-key.js';
 import { autopilotAuditAttention } from '../../../shared/contracts/autopilot-audit.js';
+import { parseToolEfficiencySnapshot } from '../../../shared/contracts/tool-efficiency.js';
 import {
   acceptSnapshot,
   applyProjectionEvent,
@@ -492,13 +493,21 @@ export class ChatController {
     }
     if (envelope.type !== 'relay.event' || !envelope.event || typeof envelope.event !== 'object')
       return;
-    const event = envelope.event as ProjectionEvent;
+    let event = envelope.event as ProjectionEvent;
     if (
       !Number.isInteger(event.sequence) ||
       typeof event.type !== 'string' ||
       !this.#validEvent(event)
     )
       return;
+    if (event.type === 'tool.efficiency.updated') {
+      const owner = (event as { sessionId?: unknown }).sessionId;
+      if (owner !== undefined && owner !== this.#projection.sessionId) return;
+      const payload = parseToolEfficiencySnapshot(event.payload, this.#projection.sessionId ?? '');
+      if (!payload) return;
+      // Buffer/cache only the public fact contract, never unknown response fields.
+      event = { sequence: event.sequence, type: event.type, payload };
+    }
     if (
       [
         'agentMessageDelta',
@@ -559,6 +568,8 @@ export class ChatController {
       );
     if (event.type === 'session.status.updated')
       return typeof value.state === 'string' && typeof value.reason === 'string';
+    if (event.type === 'tool.efficiency.updated')
+      return parseToolEfficiencySnapshot(payload, this.#projection.sessionId ?? '') !== null;
     if (
       event.type === 'autopilot.updated' ||
       event.type === 'org-plan.attention-required' ||

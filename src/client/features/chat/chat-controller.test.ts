@@ -5,6 +5,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { ChatController, decodeChatSnapshot, type ChatViewState } from './chat-controller.js';
+import { efficiencyFixture } from '../../../shared/contracts/tool-efficiency.test-fixture.js';
 
 class Socket {
   onopen: (() => void) | null = null;
@@ -94,6 +95,53 @@ const environment = () => ({
   window: { addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as Window,
 });
 describe('ChatController', () => {
+  it('forwards validated efficiency replacement events for the selected session only', async () => {
+    const socket = new Socket();
+    const forwarded: unknown[] = [];
+    const controller = new ChatController({
+      relay: {
+        getHistory: async () => ({
+          items: [],
+          turns: [],
+          activeTurnId: null,
+          interactions: [],
+          baseSequence: 0,
+        }),
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      cache: { read: async () => null, write: async () => {} },
+      publish: () => {},
+      websocket: () => socket as unknown as WebSocket,
+      ...environment(),
+      onRelayEvent: (event) => forwarded.push(event.payload),
+    });
+    controller.select('s');
+    await vi.waitFor(() => expect(controller.view.status).toBe('Ready.'));
+    socket.emit({
+      type: 'relay.event',
+      event: {
+        sequence: 1,
+        type: 'tool.efficiency.updated',
+        payload: { ...efficiencyFixture('s'), privateOutput: 'secret' },
+      },
+    });
+    socket.emit({
+      type: 'relay.event',
+      event: { sequence: 2, type: 'tool.efficiency.updated', payload: efficiencyFixture('other') },
+    });
+    socket.emit({
+      type: 'relay.event',
+      event: {
+        sequence: 3,
+        type: 'tool.efficiency.updated',
+        payload: { sessionId: 's', private: 'secret' },
+      },
+    });
+    expect(forwarded).toEqual([efficiencyFixture('s')]);
+    controller.dispose();
+  });
   it('tracks each continuous Ready episode without resetting on idle updates', async () => {
     let now = 1_000;
     const socket = new Socket();

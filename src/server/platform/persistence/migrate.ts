@@ -35,6 +35,9 @@ function migrateWorkspaceGitDefaults(database: DatabaseSync): void {
 
 export function migrate(database: DatabaseSync): void {
   database.exec(schema);
+  database.exec(
+    'CREATE TABLE IF NOT EXISTS tool_efficiency (session_id TEXT PRIMARY KEY REFERENCES relay_sessions(id) ON DELETE CASCADE, state_json TEXT NOT NULL)',
+  );
   database.exec(`CREATE TABLE IF NOT EXISTS chat_transport_diagnostics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE,

@@ -30,6 +30,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import type { DebugConfirmation } from '../shared/contracts/self-debug.js';
   import ActivityList from './features/chat/ActivityList.svelte';
   import AgentActivityIndicators from './features/agent-activity/AgentActivityIndicators.svelte';
+  import ToolEfficiencyDetails from './features/agent-activity/ToolEfficiencyDetails.svelte';
+  import type { ToolEfficiencySnapshot } from '../shared/contracts/tool-efficiency.js';
   import AgentActivityEvidence from './features/agent-activity/AgentActivityEvidence.svelte';
   import { AgentActivityController } from './features/agent-activity/agent-activity-controller.js';
   import type { AgentActivitySnapshot } from './features/agent-activity/contracts.js';
@@ -282,6 +284,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let sessionId = $state<string | null>(null);
   let sessions = $state<RelaySession[]>([]);
   let activitySnapshots = $state.raw<ReadonlyMap<string, AgentActivitySnapshot>>(new Map());
+  let efficiencySnapshots = $state.raw<ReadonlyMap<string, ToolEfficiencySnapshot>>(new Map());
   let autopilotState = $state.raw<AutopilotClientState>({
     snapshots: new Map(),
     attention: new Map(),
@@ -437,6 +440,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   const activityController = new AgentActivityController({
     relay,
     publish: (next) => (activitySnapshots = new Map(next)),
+    publishEfficiency: (next) => (efficiencySnapshots = new Map(next)),
     onEvent: (id, event) => autopilotController.observe(id, event),
     onAuthoritativeSnapshot: (id, snapshot) => autopilotController.applyAuthoritative(id, snapshot),
   });
@@ -445,6 +449,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     cache: createChatCache(),
     publish: (next) => (chatView = next),
     onConnectionChange: (connected) => {
+      if (connected && sessionId) void activityController.hydrate(sessionId);
       if (!connected) {
         readinessAbort?.abort();
         retrievalStatus = null;
@@ -1988,6 +1993,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                       onopen={() => sessionId && void activityController.resync(sessionId)}
                     />
                   </div>
+                {/if}
+                {#if selectedSession?.provider !== 'kimi'}
+                  {#key sessionId}
+                    <ToolEfficiencyDetails
+                      {sessionId}
+                      snapshot={efficiencySnapshots.get(sessionId) ?? null}
+                      activity={activitySnapshots.get(sessionId) ?? null}
+                    />
+                  {/key}
                 {/if}
               </div>
               <MessageList

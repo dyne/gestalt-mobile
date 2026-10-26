@@ -74,7 +74,12 @@ import {
 } from './features/sessions/model/relay-session.js';
 import { AgentActivityRegistry } from './features/agent-activity/registry.js';
 import { toAgentActivityDto } from './features/agent-activity/activity-dto.js';
-import { decodeAgentActivityFacts } from './platform/codex/activity-facts.js';
+import {
+  decodeAgentActivityFacts,
+  decodeToolEfficiencyFacts,
+} from './platform/codex/activity-facts.js';
+import { ToolEfficiencyProjection } from './features/agent-activity/tool-efficiency-projection.js';
+import { SqliteToolEfficiencyStore } from './platform/persistence/sqlite-tool-efficiency-store.js';
 import {
   completedCommandId,
   compactOrgPlanCheckpointKind,
@@ -250,6 +255,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   // reconciliation race their own owner.
   const persistedSessionIds = new Set(sessions.list().map((session) => session.id));
   const journal = new SqliteEventJournal(database);
+  const toolEfficiency = new ToolEfficiencyProjection(new SqliteToolEfficiencyStore(database));
   const interactions = new SqlitePendingInteractionStore(database);
   const idempotency = new SqliteIdempotencyStore(database);
   const autopilotStore = new SqliteAutopilotStore(database);
@@ -1132,6 +1138,21 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             }
           }
           const currentSession = sessions.find(sessionId);
+          if (currentSession) {
+            for (const fact of decodeToolEfficiencyFacts(sessionId, occurredAt, notification, {
+              runtimeId: origin.runtimeId,
+              rootThreadId: currentSession.threadId ?? undefined,
+              physicalThreadId: origin.physicalThreadId,
+              physicalTurnId: origin.physicalTurnId,
+              actor: origin.kind,
+            })) {
+              const snapshot = toolEfficiency.observe(fact);
+              if (snapshot)
+                events.publish(
+                  journal.append(sessionId, 'tool.efficiency.updated', snapshot, occurredAt),
+                );
+            }
+          }
           const completionTurnId =
             notification.method === 'turn/completed' &&
             notification.params &&
@@ -2136,6 +2157,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           planMeasurementRefresh?.refreshNow(session.id);
         },
         agentActivity: (id) => activity.snapshot(id, new Date().toISOString()),
+        toolEfficiency: (id) => toolEfficiency.snapshot(id),
         retrievalReadiness: (id) => runtime?.readRetrievalReadiness(id) ?? Promise.resolve(null),
         autopilotSnapshot: (id) => autopilot.snapshot(id),
         autopilotControlTurns: (id) => autopilot.acceptedControlTurns(id),

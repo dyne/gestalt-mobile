@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { AgentActivityController } from './agent-activity-controller.js';
 import { isAgentActivitySnapshot, type AgentActivitySnapshot } from './contracts.js';
+import { efficiencyFixture } from '../../../shared/contracts/tool-efficiency.test-fixture.js';
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   return { promise: new Promise<T>((done) => (resolve = done)), resolve };
@@ -23,6 +24,77 @@ const snapshot = (sessionId: string, state = 'working') => ({
   confidence: 'fresh' as const,
 });
 describe('AgentActivityController', () => {
+  it('replaces efficiency snapshots without replay duplication, revision regression or foreign-session leakage', () => {
+    const controller = new AgentActivityController({
+      relay: { getSession: async () => ({}), refreshActivity: async () => {} },
+      publish: () => {},
+      location: { protocol: 'http:', host: 'relay' } as Location,
+    });
+    controller.sync(['s'], 's');
+    const observe = (sequence: number, revision: number, sessionId = 's', payloadId = 's') =>
+      controller.observe('s', {
+        sessionId,
+        sequence,
+        type: 'tool.efficiency.updated',
+        payload: efficiencyFixture(payloadId, revision),
+      });
+    observe(1, 1, 'other');
+    expect(controller.getEfficiency('s')).toBeNull();
+    observe(1, 2);
+    observe(1, 9);
+    observe(2, 1);
+    observe(3, 3, 's', 'other');
+    expect(controller.getEfficiency('s')?.revision).toBe(2);
+    observe(4, 3);
+    expect(controller.getEfficiency('s')?.groups).toHaveLength(3);
+    expect(controller.getEfficiency('s')?.revision).toBe(3);
+    expect(controller.getEfficiency('other')).toBeNull();
+    controller.dispose();
+  });
+
+  it('fences delayed hydration and accepts a persisted newer revision after an event-publication gap', async () => {
+    const pending = deferred<{
+      currentSequence: number;
+      toolEfficiency: ReturnType<typeof efficiencyFixture>;
+    }>();
+    let response = pending.promise;
+    const controller = new AgentActivityController({
+      relay: { getSession: () => response, refreshActivity: async () => {} },
+      publish: () => {},
+      location: { protocol: 'http:', host: 'relay' } as Location,
+    });
+    controller.sync(['s'], 's');
+    controller.observe('s', {
+      sequence: 1,
+      type: 'tool.efficiency.updated',
+      payload: efficiencyFixture('s', 2),
+    });
+    pending.resolve({ currentSequence: 0, toolEfficiency: efficiencyFixture('s', 1) });
+    await controller.hydrate('s');
+    expect(controller.getEfficiency('s')?.revision).toBe(2);
+    response = Promise.resolve({ currentSequence: 1, toolEfficiency: efficiencyFixture('s', 3) });
+    await controller.hydrate('s');
+    expect(controller.getEfficiency('s')?.revision).toBe(3);
+    controller.dispose();
+  });
+
+  it('does not restore removed-session efficiency from a late authoritative response', async () => {
+    const pending = deferred<{
+      currentSequence: number;
+      toolEfficiency: ReturnType<typeof efficiencyFixture>;
+    }>();
+    const controller = new AgentActivityController({
+      relay: { getSession: () => pending.promise, refreshActivity: async () => {} },
+      publish: () => {},
+      location: { protocol: 'http:', host: 'relay' } as Location,
+    });
+    controller.sync(['s'], 's');
+    controller.remove('s');
+    pending.resolve({ currentSequence: 1, toolEfficiency: efficiencyFixture('s') });
+    await controller.hydrate('s');
+    expect(controller.getEfficiency('s')).toBeNull();
+    controller.dispose();
+  });
   it('keys selected socket events by session and ignores replay duplicates', () => {
     const published: string[] = [];
     const controller = new AgentActivityController({

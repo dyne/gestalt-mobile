@@ -24,6 +24,7 @@ import { SqliteAuthorizationStore } from './platform/auth/sqlite-authorization-s
 import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
 import { exportControlPlaneTrace } from './features/control-plane-trace/export-trace.js';
 import type { McpStartupStatus } from '../shared/contracts/mcp-startup-failure.js';
+import type { ToolEfficiencySnapshot } from '../shared/contracts/tool-efficiency.js';
 import {
   authorizationSessionId,
   authorizedDeviceId,
@@ -6602,6 +6603,136 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('sessions', () => {
+    it('persists replay-stable tool groups from runtime notifications without charging provider tokens', async () => {
+      const homeDirectory = await mkdtemp(join(tmpdir(), 'gestalt-efficiency-home-'));
+      ownTemporaryPaths(homeDirectory);
+      const { app, sessionId, handles, dataDir, root } = await createProductionAutopilotFixture({
+        homeDirectory,
+      });
+      onTestFinished(() => app.close());
+      await app.inject({
+        method: 'PUT',
+        url: `/api/sessions/${sessionId}/autopilot`,
+        payload: { enabled: false },
+      });
+      const database = new DatabaseSync(join(dataDir, 'relay.sqlite'));
+      onTestFinished(() => database.close());
+      const journal = new SqliteEventJournal(database);
+      const before = journal.currentSequence(sessionId);
+      const handle = handles.findLast((candidate) => candidate.calls.includes('thread/start'))!;
+      const threadId = (await app.inject(`/api/sessions/${sessionId}`)).json().threadId as string;
+      const notify = (
+        item: Record<string, unknown>,
+        phase = 'item/completed',
+        owner: string | null = threadId,
+        turnId = 'turn',
+      ) =>
+        handle.notify!({
+          method: phase,
+          params: { ...(owner ? { threadId: owner } : {}), turnId, item },
+        });
+      notify({
+        id: 'spawn',
+        type: 'collabAgentToolCall',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: threadId,
+        receiverThreadIds: ['child'],
+        agentsStates: { child: { status: 'running' } },
+      });
+      const wrapper = {
+        id: 'wrapper',
+        type: 'dynamicToolCall',
+        namespace: 'functions',
+        tool: 'exec',
+        status: 'completed',
+        durationMs: 10,
+        arguments: {
+          code: 'await tools.exec_command({cmd:"secret nested"});\nawait tools.other()',
+        },
+        contentItems: [],
+      };
+      notify(wrapper);
+      notify(wrapper);
+      const command = {
+        id: 'nested',
+        type: 'commandExecution',
+        status: 'completed',
+        durationMs: 0,
+        aggregatedOutput: '',
+        command: 'synthetic command',
+      };
+      notify(command, 'item/started', 'child');
+      notify(command, 'item/completed', 'child');
+      notify(command, 'item/completed', 'child');
+      notify(command, 'item/started', 'child');
+      notify(
+        { ...command, id: 'resumed', durationMs: null, aggregatedOutput: null },
+        'item/completed',
+        'child',
+        'resumed-turn',
+      );
+      notify({ ...wrapper, id: 'uncorrelated' }, 'item/completed', null, 'unknown-turn');
+      handle.notify!({
+        method: 'thread/tokenUsage/updated',
+        params: {
+          threadId,
+          tokenUsage: { last: { totalTokens: 500 }, total: { totalTokens: 1000 } },
+        },
+      });
+      const snapshot = (await app.inject(`/api/sessions/${sessionId}`)).json()
+        .toolEfficiency as ToolEfficiencySnapshot;
+      expect(snapshot).toMatchObject({
+        scope: 'observedCallsOnly',
+        coverage: 'partial',
+        missingCorrelation: true,
+        retentionLimited: false,
+      });
+      expect(snapshot.groups).toHaveLength(3);
+      expect(snapshot.groups.find((group) => group.layer === 'wrapper')).toMatchObject({
+        actor: 'root',
+        calls: 1,
+        durationMs: { value: 10 },
+      });
+      expect(snapshot.groups.find((group) => group.threadId === 'child')).toMatchObject({
+        actor: 'child',
+        calls: 2,
+        durationMs: { value: 0, measuredCalls: 1, coverage: 'partial' },
+      });
+      const replay = journal.replay(sessionId, before);
+      if (replay.kind !== 'replay') throw new Error('Expected focused replay');
+      const analytics = replay.events.filter((event) => event.type === 'tool.efficiency.updated');
+      expect(analytics).toHaveLength(6);
+      expect(analytics.at(-1)?.payload).toEqual(snapshot);
+      expect(JSON.stringify(analytics)).not.toMatch(/secret|synthetic command|500|1000|nested/);
+      const sameEvents = journal.currentSequence(sessionId);
+      notify(wrapper);
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json().toolEfficiency).toEqual(
+        snapshot,
+      );
+      // Raw activity may publish independently; efficiency duplicates never publish another snapshot.
+      const duplicateReplay = journal.replay(sessionId, sameEvents);
+      if (duplicateReplay.kind !== 'replay') throw new Error('Expected bounded duplicate replay');
+      expect(
+        duplicateReplay.events.filter((event) => event.type === 'tool.efficiency.updated'),
+      ).toEqual([]);
+      await app.close();
+      const reopened = await composeAuthorizedApp({
+        root,
+        dataDir,
+        homeDirectory,
+        relyingParty,
+        installedCodexVersion: null,
+        profiles: {
+          list: async () => [],
+          require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
+        },
+      });
+      onTestFinished(() => reopened.close());
+      expect((await reopened.inject(`/api/sessions/${sessionId}`)).json().toolEfficiency).toEqual(
+        snapshot,
+      );
+    });
     it('retains child MCP startup attempts through trace, activity, snapshot and reconnect without changing manual Off', async () => {
       const fixture = await createProductionAutopilotFixture();
       const { app, sessionId, handles, dataDir } = fixture;

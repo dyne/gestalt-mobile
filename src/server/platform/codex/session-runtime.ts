@@ -116,6 +116,8 @@ export type DirectChildThread = Readonly<{
 /** Bounded provenance supplied before shared notifications lose thread context. */
 export type NotificationOrigin = Readonly<{
   kind: 'root' | 'child' | 'unknown';
+  /** Local resource lifetime; separates measurements across restarts. */
+  runtimeId?: string;
   physicalTurnId?: string;
   physicalThreadId?: string;
 }>;
@@ -1532,11 +1534,10 @@ export class CodexSessionRuntime {
           // The notification callback reconciles the durable interaction record.
           pending?.reject(new Error('CODEX_SERVER_REQUEST_CLEARED'));
         }
-        this.onNotification?.(
-          session.id,
-          notification,
-          this.resolveNotificationOrigin(resource, notification),
-        );
+        this.onNotification?.(session.id, notification, {
+          ...this.resolveNotificationOrigin(resource, notification),
+          runtimeId: resource.mcpStartup.runtimeId,
+        });
       });
       const requestUnsubscribe = process.rpc.onServerRequest((request) =>
         this.holdServerRequest(resource, request),

@@ -6,6 +6,9 @@
 
 import type { AgentActivityFact } from '../../features/agent-activity/model.js';
 
+// Cost observations have their own contract; they must not change agent liveness.
+export { decodeToolEfficiencyFacts } from './tool-efficiency-facts.js';
+
 const id = (value: unknown): string | undefined =>
   typeof value === 'string' && value.length > 0 && value.length <= 256 ? value : undefined;
 const record = (value: unknown): Record<string, unknown> | undefined =>
