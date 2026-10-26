@@ -6,13 +6,16 @@ XERJ is optional. Install it with `gestalt xerj install`, then start Mobile:
 gestalt mobile -- --cwd /path/to/source-root
 ```
 
-`manual` is the default when launched through Mobile's CLI. It starts or discovers
+`auto` is the default when launched through Mobile's CLI. It indexes and watches
+the source root in the background without blocking startup.
+
+Use `--xerj manual` for retrieval only. It starts or discovers
 the retrieval backend but does not scan source files, create an ignore file, or
 start a watcher. Existing indexes remain available and unchanged; an empty index
 provides no source results until explicitly populated. New files, edits and
 deletions are not reflected until an operator runs indexing.
 
-`--xerj auto` explicitly opts into background indexing and watching, including the
+Automatic indexing and watching include the
 rc.87 incremental-addition limitation described below. `--xerj off` disables
 Mobile's XERJ integration. An absent XERJ does not prevent startup. These use Mobile's existing CLI
 configuration, not a separate service configuration file. The manager must be on

@@ -67,7 +67,7 @@ export function parseConfig(args: string[], cwd = process.cwd()): RelayConfig {
     index += 1;
   }
 
-  const xerj = values.get('--xerj') ?? 'manual';
+  const xerj = values.get('--xerj') ?? 'auto';
   if (xerj !== 'auto' && xerj !== 'manual' && xerj !== 'off')
     throw new CliUsageError('--xerj must be auto, manual, or off');
 
