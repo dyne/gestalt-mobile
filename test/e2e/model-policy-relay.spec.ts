@@ -61,7 +61,13 @@ type Handle = {
   tool?: Parameters<AppServer['rpc']['onServerRequest']>[0];
 };
 
-test('publication, configured child diagnostics and unsupported automation agree through the real relay', async () => {
+for (const assurance of ['configured', 'runtime-attested'] as const) {
+  test(`publication, ${assurance} admission and child diagnostics agree through the real relay`, async () => {
+    await verifyRelayPolicy(assurance);
+  });
+}
+
+async function verifyRelayPolicy(assurance: 'configured' | 'runtime-attested') {
   test.setTimeout(45_000);
   const directory = await mkdtemp(join(tmpdir(), 'gestalt-model-policy-relay-'));
   const root = join(directory, 'root');
@@ -238,7 +244,10 @@ test('publication, configured child diagnostics and unsupported automation agree
     // Synthetic producer publications exercise the same session-owned wire format;
     // actual Agents helper publication/negotiation is covered by model-policy.test.ts.
     const publish = async (versioned: boolean, reason = 'resync', version = 1) => {
-      await writeFile(planPath, versioned ? versionedPlan : legacyPlan);
+      await writeFile(
+        planPath,
+        versioned ? `#+MODEL_POLICY_ASSURANCE: ${assurance}\n${versionedPlan}` : legacyPlan,
+      );
       await writeFile(
         planStatusFilePath(handle.statusDirectory!, planPath),
         JSON.stringify({
@@ -284,7 +293,20 @@ test('publication, configured child diagnostics and unsupported automation agree
     expect(scheduledLegacy.length).toBeGreaterThan(0);
 
     await publish(true, 'supervision-start');
-    await expect.poll(async () => (await session()).autopilot.enabled).toBe(false);
+    const configured = assurance === 'configured';
+    await expect.poll(async () => (await session()).autopilot.enabled).toBe(configured);
+    expect((await health()).executionAdmission).toMatchObject(
+      configured
+        ? { allowed: true, scope: 'configured', assurance, runtimeEnforcement: false }
+        : { allowed: false, reason: 'RUNTIME_ATTESTATION_UNAVAILABLE' },
+    );
+    // Configured admission permits automation without claiming attestation.
+    // Manual Off still fences callbacks scheduled under the earlier legacy plan.
+    if (configured) {
+      expect((await request(`${base}/autopilot`, 'PUT', { enabled: true })).status).toBe(200);
+      expect((await request(`${base}/autopilot`, 'PUT', { enabled: false })).status).toBe(200);
+      expect((await session()).autopilot.enabled).toBe(false);
+    }
     expect((await (await request(`${base}/plan`)).json()).modelPolicyVersion).toBe(1);
     const beforeHealth = handle.requests.length;
     const observedPolicy = (await health()).modelPolicy;
@@ -300,22 +322,46 @@ test('publication, configured child diagnostics and unsupported automation agree
       settingsRevision: null,
       runtimeEnforcement: false,
       admitted: false,
+      assurance,
     });
     expect(observedPolicy.unknown).toContain('settingsRevision');
     expect(Buffer.byteLength(JSON.stringify(observedPolicy))).toBeLessThanOrEqual(2048);
-    expect(handle.requests.slice(beforeHealth)).toEqual([
-      { method: 'thread/read', params: { threadId: `child-${handle.root}`, includeTurns: false } },
-      { method: 'model/list', params: {} },
-    ]);
+    const healthRequests = handle.requests.slice(beforeHealth);
+    expect(healthRequests).toEqual(
+      expect.arrayContaining([
+        {
+          method: 'thread/read',
+          params: { threadId: `child-${handle.root}`, includeTurns: false },
+        },
+        { method: 'model/list', params: {} },
+      ]),
+    );
+    // Health also reconciles controller ownership. Every call remains a scoped
+    // metadata read; it must never resume a child or execute a turn.
+    for (const call of healthRequests) {
+      expect([
+        { method: 'thread/read', params: { threadId: handle.root, includeTurns: false } },
+        {
+          method: 'thread/read',
+          params: { threadId: `child-${handle.root}`, includeTurns: false },
+        },
+        { method: 'thread/list', params: { parentThreadId: handle.root } },
+        { method: 'model/list', params: {} },
+      ]).toContainEqual(call);
+    }
     // Even cancelled callbacks cannot reuse the older legacy authority.
     for (const timer of scheduledLegacy) timer.callback();
-    const blocked = await request(`${base}/autopilot`, 'PUT', { enabled: true });
-    expect(blocked.status).toBe(409);
-    expect(await blocked.json()).toMatchObject({ code: 'AUTOPILOT_MODEL_POLICY_UNAVAILABLE' });
-    expect((await health()).executionAdmission).toMatchObject({
-      allowed: false,
-      reason: 'RUNTIME_ATTESTATION_UNAVAILABLE',
-    });
+    if (!configured) {
+      const blocked = await request(`${base}/autopilot`, 'PUT', { enabled: true });
+      expect(blocked.status).toBe(409);
+      expect(await blocked.json()).toMatchObject({ code: 'AUTOPILOT_MODEL_POLICY_UNAVAILABLE' });
+      expect((await health()).executionAdmission).toMatchObject({
+        allowed: false,
+        reason: 'RUNTIME_ATTESTATION_UNAVAILABLE',
+      });
+    }
+    expect((await session()).autopilot.enabled).toBe(false);
+    expect(work()).toEqual([]);
 
     configuredModel = 'gpt-6-astra';
     expect((await health()).modelPolicy).toMatchObject({
@@ -353,6 +399,7 @@ test('publication, configured child diagnostics and unsupported automation agree
     });
     await publish(true);
     expect((await health()).modelPolicy.configuration).toBe('match');
+    expect((await session()).autopilot.enabled).toBe(false);
 
     const isolatedId = await createSession();
     expect(
@@ -377,8 +424,10 @@ test('publication, configured child diagnostics and unsupported automation agree
     expect(handle.capabilities?.split(',')).toContain('l1-model-policy-v1');
     expect(manifest.modelPolicyContract).toEqual({
       version: 1,
-      scope: 'schema-and-retention',
+      scope: 'configured-launch-and-retention',
+      defaultAssurance: 'configured',
       runtimeEnforcement: false,
+      strictAttestation: false,
     });
     const audit = database
       .prepare(
@@ -395,4 +444,4 @@ test('publication, configured child diagnostics and unsupported automation agree
     await app.close();
     await rm(directory, { recursive: true, force: true });
   }
-});
+}
