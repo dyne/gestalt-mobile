@@ -78,6 +78,8 @@ export function registerSessionRoutes(
       sessions.agentActivity,
       sessions.autopilotSnapshot,
       sessions.plan,
+      sessions.toolEfficiency,
+      sessions.currentSequence,
     );
     if (sessions.refreshActivity)
       registerRefreshActivity(app, {

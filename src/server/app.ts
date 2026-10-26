@@ -119,6 +119,9 @@ export type AppDependencies = {
       throughSequence: number,
     ): readonly import('../shared/contracts/session-event.js').SessionEvent[];
     agentActivity?(sessionId: string): AgentActivitySnapshot;
+    toolEfficiency?(
+      sessionId: string,
+    ): import('../shared/contracts/tool-efficiency.js').ToolEfficiencySnapshot;
     autopilotSnapshot?(
       sessionId: string,
     ): import('./features/autopilot/domain/autopilot-session.js').AutopilotSnapshot;

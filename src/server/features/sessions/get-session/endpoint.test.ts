@@ -8,6 +8,20 @@ import fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { registerGetSession } from './endpoint.js';
 describe('GET /api/sessions/:id', () => {
+  it('returns an authoritative journal cut for reconnect snapshot fencing', async () => {
+    const app = fastify();
+    registerGetSession(
+      app,
+      () => ({ id: 's' }) as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => 42,
+    );
+    expect((await app.inject('/api/sessions/s')).json().currentSequence).toBe(42);
+    await app.close();
+  });
   it('returns a stable not-found result', async () => {
     const app = fastify();
     registerGetSession(app, () => null);

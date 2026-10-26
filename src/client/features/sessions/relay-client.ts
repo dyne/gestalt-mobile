@@ -73,6 +73,8 @@ export type RelaySession = {
   selfDebug?: SelfDebugSession;
   plan?: SupervisedPlan;
   agentActivity?: AgentActivitySnapshot;
+  toolEfficiency?: import('../../../shared/contracts/tool-efficiency.js').ToolEfficiencySnapshot;
+  currentSequence?: number;
   autopilot?: AutopilotSnapshot;
   sessionStatus?: {
     state: 'working' | 'idle';

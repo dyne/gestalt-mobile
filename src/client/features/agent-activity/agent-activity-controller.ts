@@ -5,9 +5,14 @@
  */
 
 import { isAgentActivitySnapshot, type AgentActivitySnapshot } from './contracts.js';
-type Event = { sequence: number; type: string; payload: unknown };
+import {
+  parseToolEfficiencySnapshot,
+  type ToolEfficiencySnapshot,
+} from '../../../shared/contracts/tool-efficiency.js';
+type Event = { sessionId?: string; sequence: number; type: string; payload: unknown };
 export type AuthoritativeSessionSnapshot = {
   agentActivity?: unknown;
+  toolEfficiency?: unknown;
   autopilot?: unknown;
   pendingInteractions?: unknown;
   currentSequence?: number;
@@ -19,6 +24,7 @@ type Relay = {
 type Options = Readonly<{
   relay: Relay;
   publish: (items: ReadonlyMap<string, AgentActivitySnapshot>) => void;
+  publishEfficiency?: (items: ReadonlyMap<string, ToolEfficiencySnapshot>) => void;
   onEvent?: (id: string, event: Event) => void;
   /** The sole reconciliation owner forwards complete getSession authority. */
   onAuthoritativeSnapshot?: (id: string, snapshot: AuthoritativeSessionSnapshot) => void;
@@ -32,6 +38,7 @@ type Options = Readonly<{
 /** Session-local projection; Chat calls observe for its selected stream, cards own only other streams. */
 export class AgentActivityController {
   #snapshots = new Map<string, AgentActivitySnapshot>();
+  #efficiency = new Map<string, ToolEfficiencySnapshot>();
   #cursors = new Map<string, number>();
   #wanted = new Set<string>();
   #sockets = new Map<string, WebSocket>();
@@ -54,6 +61,9 @@ export class AgentActivityController {
   }
   get(id: string | null) {
     return id ? (this.#snapshots.get(id) ?? null) : null;
+  }
+  getEfficiency(id: string | null) {
+    return id ? (this.#efficiency.get(id) ?? null) : null;
   }
   bootstrap(
     sessions: readonly { id: string; agentActivity?: unknown }[],
@@ -102,11 +112,20 @@ export class AgentActivityController {
     this.#resyncing.delete(id);
     this.#reconnectAttempts.delete(id);
     this.#snapshots.delete(id);
+    this.#efficiency.delete(id);
+    this.#options.publishEfficiency?.(this.#efficiency);
     this.#cursors.delete(id);
     this.#options.publish(this.#snapshots);
   }
   observe(id: string, event: Event): void {
-    if (this.#disposed || !this.#wanted.has(id) || !Number.isInteger(event.sequence)) return;
+    if (
+      this.#disposed ||
+      !this.#wanted.has(id) ||
+      !Number.isSafeInteger(event.sequence) ||
+      event.sequence < 1 ||
+      (event.sessionId !== undefined && event.sessionId !== id)
+    )
+      return;
     const cursor = this.#cursors.get(id) ?? 0;
     if (event.sequence <= cursor) return;
     if (event.sequence > cursor + 1) {
@@ -117,6 +136,7 @@ export class AgentActivityController {
     this.#options.onEvent?.(id, event);
     if (event.type === 'agent.activity.updated' && isAgentActivitySnapshot(event.payload, id))
       this.#apply(id, event.sequence, event.payload);
+    if (event.type === 'tool.efficiency.updated') this.#applyEfficiency(id, event.payload);
   }
   async hydrate(id: string): Promise<void> {
     const version = this.#versions.get(id) ?? 0;
@@ -126,19 +146,20 @@ export class AgentActivityController {
       if (!this.#current(id, version)) return;
       const cursor = this.#cursors.get(id) ?? 0;
       const responseSequence = response.currentSequence;
-      if (Number.isInteger(responseSequence)) {
+      if (Number.isSafeInteger(responseSequence) && responseSequence! >= 0) {
         if (responseSequence! < cursor) return;
         this.#cursors.set(id, responseSequence!);
         if (isAgentActivitySnapshot(response.agentActivity, id))
           this.#apply(id, responseSequence!, response.agentActivity);
+        this.#applyEfficiency(id, response.toolEfficiency);
         this.#options.onAuthoritativeSnapshot?.(id, response);
-      } else if (
-        cursor === requestedCursor &&
-        isAgentActivitySnapshot(response.agentActivity, id)
-      ) {
+      } else if (cursor === requestedCursor) {
         // An unsequenced bootstrap response is only a hint; never overwrite a socket update.
-        this.#apply(id, cursor, response.agentActivity);
-        this.#options.onAuthoritativeSnapshot?.(id, response);
+        if (isAgentActivitySnapshot(response.agentActivity, id)) {
+          this.#apply(id, cursor, response.agentActivity);
+          this.#options.onAuthoritativeSnapshot?.(id, response);
+        }
+        this.#applyEfficiency(id, response.toolEfficiency);
       }
     } catch {
       this.#stale(id);
@@ -212,6 +233,12 @@ export class AgentActivityController {
     if (JSON.stringify(previous) === JSON.stringify(next)) return;
     this.#snapshots.set(id, next);
     this.#options.publish(this.#snapshots);
+  }
+  #applyEfficiency(id: string, value: unknown): void {
+    const next = parseToolEfficiencySnapshot(value, id);
+    if (!next || next.revision <= (this.#efficiency.get(id)?.revision ?? -1)) return;
+    this.#efficiency.set(id, next);
+    this.#options.publishEfficiency?.(this.#efficiency);
   }
   #stale(id: string): void {
     const value = this.#snapshots.get(id);
