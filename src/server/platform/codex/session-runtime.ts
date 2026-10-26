@@ -47,6 +47,7 @@ import {
 import { resolvedServerRequestId } from './server-request.js';
 import type { CodexRetrievalState } from '../retrieval/codex-xerj.js';
 import { xerjDeadline } from '../retrieval/managed-xerj.js';
+import { McpStartupTracker } from './mcp-startup-failure.js';
 
 export type AppServer = {
   rpc: {
@@ -158,6 +159,7 @@ class SessionResource {
   readonly completedProcessActions = new Map<string, boolean>();
   readonly turnThreads = new Map<string, string>();
   readonly childThreads = new Set<string>();
+  readonly mcpStartup = new McpStartupTracker();
 
   constructor(
     readonly sessionId: string,
@@ -1430,6 +1432,12 @@ export class CodexSessionRuntime {
       }
       const notificationUnsubscribe = process.rpc.onNotification((notification) => {
         if (!resource.active) return;
+        // Internal evidence may only be constructed by this resource's tracker.
+        if (notification.method === 'gestalt/mcpStartup') return;
+        this.publishMcpStartup(resource, notification);
+        // Current Codex renamed the legacy notification without adding child telemetry.
+        if (notification.method === 'mcpServer/startupStatus/updated')
+          notification = { ...notification, method: 'mcpServer/statusUpdated' };
         if (resource.retrieval?.repositories) {
           void resource.retrieval.repositories
             .observe(
@@ -1492,6 +1500,7 @@ export class CodexSessionRuntime {
         if (notification.method === 'mcpServer/statusUpdated') {
           const status = notification.params as { name?: string; status?: string } | null;
           if (
+            !asRecord(notification.params)?.threadId &&
             status?.name === 'gestalt-serena' &&
             ['failed', 'cancelled'].includes(status.status ?? '')
           ) {
@@ -1499,6 +1508,7 @@ export class CodexSessionRuntime {
             resource.capabilityFailuresReported.add(status.name);
           }
           if (
+            !asRecord(notification.params)?.threadId &&
             status?.name === 'gestalt-xerj' &&
             ['failed', 'cancelled'].includes(status.status ?? '')
           ) {
@@ -1616,6 +1626,10 @@ export class CodexSessionRuntime {
     this.reportCapabilityFailures(resource, session);
     if (state.diagnostic && !resource.retrievalFailureReported) {
       resource.retrievalFailureReported = true;
+      this.publishMcpStartup(resource, {
+        method: 'mcpServer/statusUpdated',
+        params: { name: 'gestalt-xerj', status: 'failed' },
+      });
       this.onNotification?.(
         session.id,
         {
@@ -1632,6 +1646,10 @@ export class CodexSessionRuntime {
       if (!capability.diagnostic || resource.capabilityFailuresReported.has(capability.serverName))
         continue;
       resource.capabilityFailuresReported.add(capability.serverName);
+      this.publishMcpStartup(resource, {
+        method: 'mcpServer/statusUpdated',
+        params: { name: capability.serverName, status: 'failed' },
+      });
       this.onNotification?.(
         session.id,
         {
@@ -1655,7 +1673,11 @@ export class CodexSessionRuntime {
         state.capabilities?.some(
           (capability) => capability.serverName === 'gestalt-serena' && capability.ready,
         )
-      )
+      ) {
+        this.publishMcpStartup(resource, {
+          method: 'mcpServer/statusUpdated',
+          params: { name: 'gestalt-serena', status: 'connected' },
+        });
         this.onNotification?.(
           session.id,
           {
@@ -1664,12 +1686,17 @@ export class CodexSessionRuntime {
           },
           { kind: 'root' },
         );
+      }
       return;
     }
     state.fallback();
     this.reportCapabilityFailures(resource, session);
     if (!state.capabilities && !resource.retrievalFailureReported) {
       resource.retrievalFailureReported = true;
+      this.publishMcpStartup(resource, {
+        method: 'mcpServer/statusUpdated',
+        params: { name: 'gestalt-xerj', status: 'failed' },
+      });
       this.onNotification?.(
         session.id,
         {
@@ -1706,6 +1733,27 @@ export class CodexSessionRuntime {
         : {}),
       ...this.permissionParams(session),
     });
+  }
+
+  private publishMcpStartup(
+    resource: SessionResource,
+    notification: { method: string; params: unknown },
+  ): void {
+    const status = resource.mcpStartup.observe(notification);
+    if (!status) return;
+    this.onNotification?.(
+      resource.sessionId,
+      { method: 'gestalt/mcpStartup', params: status },
+      {
+        kind:
+          status.threadId === resource.threadId
+            ? 'root'
+            : status.threadId && resource.childThreads.has(status.threadId)
+              ? 'child'
+              : 'unknown',
+        ...(status.threadId ? { physicalThreadId: status.threadId } : {}),
+      },
+    );
   }
 
   private resolveNotificationOrigin(

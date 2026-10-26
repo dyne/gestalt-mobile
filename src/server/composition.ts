@@ -33,6 +33,7 @@ import { createRecentThreadLister } from './platform/codex/recent-thread-lister.
 import { CodexSessionRuntime, type AppServer } from './platform/codex/session-runtime.js';
 import { normalizeCodexNotification } from './platform/codex/normalizer.js';
 import { decodeCodexFailure } from './platform/codex/codex-failure.js';
+import { parseMcpStartupStatus } from '../shared/contracts/mcp-startup-failure.js';
 import { KimiSessionRuntime } from './platform/kimi/kimi-session-runtime.js';
 import { KimiWebServerManager } from './platform/kimi/kimi-web-server-manager.js';
 import { KimiModelCatalog } from './platform/kimi/kimi-model-catalog.js';
@@ -1105,6 +1106,13 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         undefined,
         (sessionId, notification, origin) => {
           const occurredAt = new Date().toISOString();
+          if (notification.method === 'gestalt/mcpStartup') {
+            const status = parseMcpStartupStatus(notification.params);
+            if (!status) return;
+            events.publish(
+              journal.append(sessionId, 'agent.activity.mcp-startup', status, status.observedAt),
+            );
+          }
           const activityFacts = decodeAgentActivityFacts(sessionId, occurredAt, notification);
           const resolvedRequestId = resolvedServerRequestId(notification);
           if (resolvedRequestId) {

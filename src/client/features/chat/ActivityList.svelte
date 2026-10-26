@@ -7,6 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import type { HistoryActivity } from './activity-summary.js';
   import { presentActivity, summarizeCommandActivities } from './activity-presentation.js';
+  import McpStartupDetails from './McpStartupDetails.svelte';
   let {
     activities,
     variant = 'summary',
@@ -52,7 +53,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           <small class="activity-type"
             >{activity.kind}{activity.status ? ` · ${activity.status}` : ''}</small
           >
-          <span class="activity-content">{activity.content}</span>
+          {#if activity.startup}<McpStartupDetails startup={activity.startup} />{:else}<span
+              class="activity-content">{activity.content}</span
+            >{/if}
         </li>
       {/each}
     </ul>

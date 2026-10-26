@@ -6,6 +6,7 @@
 
 import type { FileChangeSummary } from './file-change.js';
 import type { OrgPlanAttention } from './org-plan-attention.js';
+import type { McpStartupStatus } from './mcp-startup-failure.js';
 
 export type AttentionAuditRecord = {
   requestId: string;
@@ -46,6 +47,7 @@ export type SafeActivitySnapshot = {
   actorTurnId?: string;
   occurredAt?: number;
   changes?: FileChangeSummary[];
+  mcpStartup?: McpStartupStatus;
 };
 export type SafeInteractionOutcome = 'approved' | 'denied' | 'answered' | 'dismissed' | 'failed';
 export type SafeInteractionSnapshot =

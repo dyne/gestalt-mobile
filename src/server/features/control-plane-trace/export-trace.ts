@@ -6,6 +6,7 @@
 
 import { readTransportDiagnostics } from '../../platform/persistence/sqlite-transport-diagnostics.js';
 import { DatabaseSync } from 'node:sqlite';
+import { parseMcpStartupStatus } from '../../../shared/contracts/mcp-startup-failure.js';
 
 type TraceRow = Readonly<{
   sequence: number;
@@ -198,16 +199,22 @@ export function exportControlPlaneTrace(
       .reverse()
       .filter((row) => relevant.test(row.type))
       .map((row) => {
-        const payload = redactDiagnosticPayload(objectPayload(row.payload_json)) as Record<
-          string,
-          unknown
-        >;
+        const raw = objectPayload(row.payload_json);
+        const payload = (
+          row.type === 'agent.activity.mcp-startup'
+            ? (parseMcpStartupStatus(raw) ?? {})
+            : redactDiagnosticPayload(raw)
+        ) as Record<string, unknown>;
         return {
           sequence: row.sequence,
           occurredAt: row.occurred_at,
           type: row.type,
           payload,
-          traceId: correlation(payload),
+          traceId:
+            row.type === 'agent.activity.mcp-startup'
+              ? ((payload.failure as { failureId?: string } | null)?.failureId ??
+                (typeof payload.attemptId === 'string' ? payload.attemptId : null))
+              : correlation(payload),
         };
       });
     return {
@@ -242,8 +249,19 @@ export function formatControlPlaneTrace(trace: ControlPlaneTrace): string {
   ];
   for (const event of trace.events) {
     const correlationLabel = event.traceId ? ` trace=${event.traceId}` : '';
+    const startup =
+      event.type === 'agent.activity.mcp-startup'
+        ? parseMcpStartupStatus(event.payload)
+        : undefined;
+    const startupLabel = startup
+      ? ` server=${startup.serverName} thread=${startup.threadId ?? 'unavailable'} runtime=${startup.runtimeId} attempt=${startup.attemptId} status=${startup.status}${
+          startup.failure
+            ? ` phase=${startup.failure.phase} code=${startup.failure.code} exit=${startup.failure.exitCode ?? 'unavailable'} signal=${startup.failure.signal ?? 'unavailable'} artifact=${startup.failure.artifactDigest ?? 'unavailable'}`
+            : ''
+        }`
+      : '';
     lines.push(
-      `${String(event.sequence).padStart(6)}  ${event.occurredAt}  ${event.type}${correlationLabel}`,
+      `${String(event.sequence).padStart(6)}  ${event.occurredAt}  ${event.type}${correlationLabel}${startupLabel}`,
     );
   }
   lines.push('', 'Diagnosis:');

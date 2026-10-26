@@ -22,6 +22,8 @@ import { CodexJsonRpcError } from './platform/codex/json-rpc-client.js';
 import { CodexSessionRuntime } from './platform/codex/session-runtime.js';
 import { SqliteAuthorizationStore } from './platform/auth/sqlite-authorization-store.js';
 import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
+import { exportControlPlaneTrace } from './features/control-plane-trace/export-trace.js';
+import type { McpStartupStatus } from '../shared/contracts/mcp-startup-failure.js';
 import {
   authorizationSessionId,
   authorizedDeviceId,
@@ -42,6 +44,7 @@ import { toOrgPlanCheckpointToolResponse } from '../shared/contracts/org-plan-ch
 import {
   applyProjectionEvent,
   createChatProjection,
+  acceptSnapshot,
 } from '../client/features/chat/chat-projection.js';
 
 function fakeAppServer(calls: string[]) {
@@ -6599,6 +6602,137 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('sessions', () => {
+    it('retains child MCP startup attempts through trace, activity, snapshot and reconnect without changing manual Off', async () => {
+      const fixture = await createProductionAutopilotFixture();
+      const { app, sessionId, handles, dataDir } = fixture;
+      onTestFinished(() => app.close());
+      expect(
+        (
+          await app.inject({
+            method: 'PUT',
+            url: `/api/sessions/${sessionId}/autopilot`,
+            payload: { enabled: false },
+          })
+        ).statusCode,
+      ).toBe(200);
+      const databasePath = join(dataDir, 'relay.sqlite');
+      const database = new DatabaseSync(databasePath);
+      onTestFinished(() => database.close());
+      const journal = new SqliteEventJournal(database);
+      const before = journal.currentSequence(sessionId);
+      const handle = handles.findLast((candidate) => candidate.calls.includes('thread/start'))!;
+      const callsBefore = [...handle.calls];
+      const notify = (status: string, name = 'context-mode', threadId: string | null = 'child-1') =>
+        handle.notify!({
+          method: 'mcpServer/startupStatus/updated',
+          params: {
+            name,
+            status,
+            threadId,
+            error: 'TOKEN=secret prompt model output stderr',
+            exitCode: 1,
+            signal: 'SIGKILL',
+          },
+        });
+      notify('starting');
+      notify('failed');
+      notify('failed');
+      notify('failed', 'gestalt-serena');
+      notify('failed', 'context-mode', 'child-2');
+      notify('starting');
+      notify('failed');
+      const failureCut = journal.currentSequence(sessionId);
+      const failureHistory = (await app.inject(`/api/sessions/${sessionId}/history`)).json();
+      const beforeRecovery = failureHistory.activities.find(
+        (row: { mcpStartup?: McpStartupStatus }) =>
+          row.mcpStartup?.threadId === 'child-1' && row.mcpStartup.serverName === 'context-mode',
+      );
+      expect(beforeRecovery.mcpStartup).toMatchObject({
+        status: 'failed',
+        failure: { exitCode: null, signal: null },
+      });
+      notify('ready');
+      notify('ready', 'context-mode', 'secret\nthread');
+      const trace = exportControlPlaneTrace(databasePath, sessionId);
+      const transitions = trace.events.filter(
+        (event) => event.type === 'agent.activity.mcp-startup',
+      );
+      const statuses = transitions.map((event) => event.payload as unknown as McpStartupStatus);
+      const failures = statuses.filter((status) => status.failure);
+      expect(failures).toHaveLength(4);
+      const childFailures = failures.filter(
+        (status) => status.threadId === 'child-1' && status.serverName === 'context-mode',
+      );
+      expect(childFailures).toHaveLength(2);
+      expect(new Set(childFailures.map((status) => status.attemptId)).size).toBe(2);
+      expect(new Set(statuses.map((status) => status.runtimeId)).size).toBe(1);
+      expect(
+        transitions
+          .filter((event) => (event.payload as unknown as McpStartupStatus).failure)
+          .map((event) => event.traceId),
+      ).toEqual(failures.map((status) => status.failure!.failureId));
+      expect(JSON.stringify(trace)).not.toMatch(/TOKEN|secret|prompt|stderr/);
+      const history = (await app.inject(`/api/sessions/${sessionId}/history`)).json();
+      const current = history.activities.filter(
+        (row: { mcpStartup?: McpStartupStatus }) => row.mcpStartup,
+      );
+      expect(current).toHaveLength(3);
+      expect(
+        current.find((row: { id: string }) => row.id === beforeRecovery.id).mcpStartup,
+      ).toMatchObject({ status: 'ready', failure: null });
+      expect(
+        current.filter(
+          (row: { mcpStartup: McpStartupStatus }) => row.mcpStartup.status === 'failed',
+        ),
+      ).toHaveLength(2);
+      const hydrated = acceptSnapshot(createChatProjection(sessionId), history);
+      expect(hydrated.activities.filter((row) => row.mcpStartup?.status === 'failed')).toHaveLength(
+        2,
+      );
+      expect(journal.replay(sessionId, before)).toMatchObject({ kind: 'replay' });
+      const replay = journal.replay(sessionId, failureCut);
+      if (replay.kind !== 'replay') throw new Error('Expected bounded replay');
+      const recovered = replay.events.reduce(
+        (projection, event) => applyProjectionEvent(projection, event),
+        acceptSnapshot(createChatProjection(sessionId), failureHistory),
+      );
+      expect(
+        recovered.activities.find((row) => row.id === beforeRecovery.id)?.mcpStartup,
+      ).toMatchObject({ status: 'ready', failure: null });
+      expect(handle.calls.filter((method) => method !== 'thread/read')).toEqual(
+        callsBefore.filter((method) => method !== 'thread/read'),
+      );
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+        autopilot: { enabled: false },
+      });
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const address = app.server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
+      const socket = new WebSocket(
+        `ws://127.0.0.1:${address.port}/api/sessions/${sessionId}/events?after=${failureCut}`,
+        {
+          headers: {
+            origin: relyingParty.publicOrigin,
+            cookie: 'gestalt_mobile_session=test-session',
+          },
+        },
+      );
+      onTestFinished(() => socket.close());
+      const messages: Array<{
+        event?: { type?: string; payload?: { status?: string; mcpStartup?: McpStartupStatus } };
+      }> = [];
+      socket.on('message', (data) => messages.push(JSON.parse(String(data))));
+      await vi.waitFor(() =>
+        expect(
+          messages.some(
+            (message) =>
+              message.event?.type === 'agent.activity.mcp-startup' &&
+              message.event.payload?.status === 'ready',
+          ),
+        ).toBe(true),
+      );
+      expect(JSON.stringify(messages)).not.toMatch(/TOKEN|secret|stderr/);
+    });
     it('hydrates chat and resyncs a large replay without materializing the journal', async () => {
       const fixture = await createProductionAutopilotFixture();
       const { app, sessionId } = fixture;

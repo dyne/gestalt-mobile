@@ -10,6 +10,10 @@ import type { SessionEvent } from '../../../shared/contracts/session-event.js';
 import { boundedAttentionReport } from '../../../shared/contracts/attention-report.js';
 import { eventRetentionCutoff } from './retention.js';
 import { replayOrResync, type SessionReplay } from '../events/replay.js';
+import {
+  mcpStartupActivity,
+  parseMcpStartupStatus,
+} from '../../../shared/contracts/mcp-startup-failure.js';
 
 export const autopilotAuditEventTypes = [
   'autopilot.turn-started',
@@ -57,6 +61,20 @@ export class SqliteEventJournal {
     occurredAt: string,
     autopilotOutboxId?: number,
   ): SessionEvent {
+    if (type === 'agent.activity.mcp-startup') {
+      const status = parseMcpStartupStatus(payload);
+      if (!status) throw new Error('INVALID_MCP_STARTUP_STATUS');
+      payload = status;
+    } else if (
+      type === 'activity.updated' &&
+      payload &&
+      typeof payload === 'object' &&
+      'mcpStartup' in payload
+    ) {
+      const status = parseMcpStartupStatus(payload.mcpStartup);
+      if (!status) throw new Error('INVALID_MCP_STARTUP_STATUS');
+      payload = mcpStartupActivity(status);
+    }
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const row = this.db

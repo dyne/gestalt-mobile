@@ -12,6 +12,7 @@ import type {
   SafeInteractionSnapshot,
 } from '../../../../shared/contracts/chat-snapshot.js';
 import type { SessionEvent } from '../../../../shared/contracts/session-event.js';
+import { parseMcpStartupStatus } from '../../../../shared/contracts/mcp-startup-failure.js';
 import {
   autopilotAuditLabel,
   autopilotAuditAttention,
@@ -124,6 +125,7 @@ function toActivityHistory(
       continue;
     const occurredAt = Date.parse(event.occurredAt);
     const changes = safeFileChanges(payload.changes);
+    const mcpStartup = parseMcpStartupStatus(payload.mcpStartup);
     activities.set(payload.id, {
       id: payload.id,
       label: payload.label,
@@ -132,6 +134,7 @@ function toActivityHistory(
       ...(typeof payload.actorTurnId === 'string' ? { actorTurnId: payload.actorTurnId } : {}),
       ...(Number.isFinite(occurredAt) ? { occurredAt } : {}),
       ...(changes.length ? { changes } : {}),
+      ...(mcpStartup ? { mcpStartup } : {}),
     });
   }
   return [...activities.values()];

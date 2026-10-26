@@ -16,6 +16,7 @@ import {
 } from '../../../shared/contracts/autopilot-audit.js';
 import { toActivity, type HistoryActivity } from './activity-summary.js';
 import type { ChatMessage } from './message-store.js';
+import { parseMcpStartupStatus } from '../../../shared/contracts/mcp-startup-failure.js';
 
 export type PromptState = 'submitting' | 'accepted' | 'failed' | 'canonical';
 export type TurnLifecycle = 'starting' | 'working' | 'finished' | 'interrupted' | 'recoverable';
@@ -438,6 +439,11 @@ export function hydrateCache(sessionId: string, cached: unknown): ChatProjection
               (activity.turnId === undefined || typeof activity.turnId === 'string'),
             ),
           )
+          .map((activity) => {
+            const { mcpStartup, ...safe } = activity;
+            const status = parseMcpStartupStatus(mcpStartup);
+            return { ...safe, ...(status ? { mcpStartup: status } : {}) };
+          })
           .slice(-200)
       : [],
     prompts: candidate.prompts
@@ -534,6 +540,9 @@ export function acceptSnapshot(current: ChatProjection, snapshot: ChatSnapshot):
     ...(item.actorTurnId ? { actorTurnId: item.actorTurnId } : {}),
     ...(item.occurredAt !== undefined ? { occurredAt: item.occurredAt } : {}),
     ...(item.changes ? { changes: item.changes } : {}),
+    ...(parseMcpStartupStatus(item.mcpStartup)
+      ? { mcpStartup: parseMcpStartupStatus(item.mcpStartup) }
+      : {}),
   }));
   const activities = canonicalActivities.reduce(upsertActivity, [...current.activities]);
   const turnTimes = new Map(snapshot.turns.map((turn) => [turn.id, turn]));
@@ -860,6 +869,7 @@ export function applyProjectionEvent(
     typeof payload.detail === 'string'
   ) {
     const changes = safeFileChanges(payload.changes);
+    const mcpStartup = parseMcpStartupStatus(payload.mcpStartup);
     next = {
       ...next,
       activities: upsertActivity(next.activities, {
@@ -868,6 +878,7 @@ export function applyProjectionEvent(
         detail: payload.detail,
         ...(occurredAt !== undefined ? { occurredAt } : {}),
         ...(changes.length ? { changes } : {}),
+        ...(mcpStartup ? { mcpStartup } : {}),
         ...(typeof payload.turnId === 'string'
           ? { turnId: payload.turnId }
           : next.activeTurnId

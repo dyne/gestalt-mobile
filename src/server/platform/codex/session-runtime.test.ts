@@ -22,6 +22,63 @@ import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
 describe('CodexSessionRuntime', () => {
+  it('retains required startup evidence without suppressing failure or accepting upstream internal evidence', async () => {
+    let notify: ((notification: { method: string; params: unknown }) => void) | undefined;
+    const notifications = vi.fn();
+    const failure = new Error('MCP_REQUIRED_STARTUP_FAILED');
+    const runtime = new CodexSessionRuntime(
+      () => ({
+        rpc: {
+          request: async (method) => {
+            if (method === 'thread/start') {
+              notify?.({ method: 'gestalt/mcpStartup', params: { runtimeId: 'spoofed-runtime' } });
+              notify?.({
+                method: 'mcpServer/startupStatus/updated',
+                params: {
+                  name: 'context-mode',
+                  status: 'failed',
+                  threadId: null,
+                  error: 'private stderr',
+                  exitCode: 1,
+                },
+              });
+              throw failure;
+            }
+            return {};
+          },
+          onNotification: (listener) => {
+            notify = listener;
+            return () => {};
+          },
+          onServerRequest: () => () => {},
+        },
+        close: () => {},
+      }),
+      undefined,
+      notifications,
+    );
+    const session = RelaySession.create({
+      id: 'required',
+      provider: 'codex',
+      workspaceId: 'w',
+      workspacePath: '/w',
+      profile: 'default',
+      effectiveSkillSelection: { skills: [] },
+      now: 't',
+    }).snapshot;
+    await expect(runtime.start(session, 't')).rejects.toBe(failure);
+    const startup = notifications.mock.calls.filter(
+      ([, event]) => event.method === 'gestalt/mcpStartup',
+    );
+    expect(startup).toHaveLength(1);
+    expect(startup[0]![1].params).toMatchObject({
+      threadId: null,
+      status: 'failed',
+      failure: { phase: 'startup', code: 'startup-failed', exitCode: null, signal: null },
+    });
+    expect(JSON.stringify(startup)).not.toMatch(/spoofed|private/);
+    runtime.stopAll();
+  });
   it('reconciles metadata on untouched threads and preserves genuine history failures', async () => {
     const calls: unknown[] = [];
     let status = 'idle';
