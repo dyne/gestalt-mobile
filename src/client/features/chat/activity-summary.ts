@@ -5,6 +5,7 @@
  */
 
 import type { FileChangeSummary } from '../../../shared/contracts/file-change.js';
+import type { McpStartupStatus } from '../../../shared/contracts/mcp-startup-failure.js';
 
 export type HistoryActivity = {
   id: string;
@@ -14,6 +15,7 @@ export type HistoryActivity = {
   actorTurnId?: string;
   occurredAt?: number;
   changes?: FileChangeSummary[];
+  mcpStartup?: McpStartupStatus;
 };
 
 function fileChangeSummaries(value: unknown): FileChangeSummary[] {

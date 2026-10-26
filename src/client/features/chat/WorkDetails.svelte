@@ -9,6 +9,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { presentActivity, summarizeCommandActivities } from './activity-presentation.js';
   import { summarizeChangedFiles, summarizeFileChangeTotals } from './file-change-summary.js';
   import { formatRelativeAge } from './message-time.js';
+  import McpStartupDetails from './McpStartupDetails.svelte';
 
   let { activities, now = Date.now() }: { activities: readonly HistoryActivity[]; now?: number } =
     $props();
@@ -71,7 +72,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           {#each nonCommandActivities as activity (activity.id)}
             <li data-status={activity.status}>
               <small>{activity.kind}{activity.status ? ` · ${activity.status}` : ''}</small>
-              <span>{activity.content}</span>
+              {#if activity.startup}<McpStartupDetails startup={activity.startup} />{:else}<span
+                  >{activity.content}</span
+                >{/if}
             </li>
           {/each}
         </ul>

@@ -65,6 +65,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     createToastQueue,
   } from './features/feedback/toast-queue.js';
   import { serenaAvailabilityFeedback } from './features/feedback/serena-feedback.js';
+  import { createMcpStartupFeedback } from './features/feedback/mcp-startup-feedback.js';
   import ToastEvidence from './features/feedback/ToastEvidence.svelte';
   import ToastViewport from './features/feedback/ToastViewport.svelte';
   import FilesystemTreeEvidence from './features/filesystem-tree/FilesystemTreeEvidence.svelte';
@@ -454,7 +455,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onSessionEvent: (event) => handleChatMetadataEvent(event),
     onRelayEvent: (event) => {
       if (sessionId) activityController.observe(sessionId, event);
-      const feedback = serenaAvailabilityFeedback(event);
+      if (sessionId) mcpStartupFeedback(sessionId, event);
+      const structuredSerenaFailure = chatView?.activities.some(
+        (activity) =>
+          activity.mcpStartup?.serverName === 'gestalt-serena' &&
+          activity.mcpStartup.threadId === null &&
+          activity.mcpStartup.failure,
+      );
+      const feedback = structuredSerenaFailure ? null : serenaAvailabilityFeedback(event);
       if (feedback) toastQueue.enqueue(feedback);
       if (
         event.type === 'activity.updated' &&
@@ -521,6 +529,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   );
   const sessionCache = createSessionCache();
   const toastQueue = createToastQueue({ historyStorage: browserNotificationHistoryStorage() });
+  const mcpStartupFeedback = createMcpStartupFeedback(toastQueue);
   const evidenceContext = new URLSearchParams(location.search).get('tree-evidence');
   const toastEvidence = new URLSearchParams(location.search).get('toast-evidence');
   const activityEvidence = new URLSearchParams(location.search).get('activity-evidence');

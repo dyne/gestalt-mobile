@@ -17,6 +17,8 @@ import { toAgentActivityDto } from '../agent-activity/activity-dto.js';
 import { createAgentActivitySnapshot, projectAgentActivity } from '../agent-activity/model.js';
 import { migrate } from '../../platform/persistence/migrate.js';
 import { SqliteEventJournal } from '../../platform/persistence/sqlite-event-journal.js';
+import { McpStartupTracker } from '../../platform/codex/mcp-startup-failure.js';
+import { mcpStartupActivity } from '../../../shared/contracts/mcp-startup-failure.js';
 
 const directories: string[] = [];
 afterEach(async () =>
@@ -24,6 +26,69 @@ afterEach(async () =>
 );
 
 describe('control-plane trace export', () => {
+  it('sanitizes startup metadata on persistence and export and rejects mismatched runtime correlation', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-startup-trace-'));
+    directories.push(directory);
+    const path = join(directory, 'relay.sqlite');
+    const database = new DatabaseSync(path);
+    migrate(database);
+    const at = new Date().toISOString();
+    database
+      .prepare(
+        'INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',
+      )
+      .run('s1', 'w', '/workspace', 'default', 'ready', 'active', at, at);
+    const journal = new SqliteEventJournal(database);
+    const status = new McpStartupTracker().observe({
+      method: 'mcpServer/startupStatus/updated',
+      params: { name: 'context-mode', status: 'failed', threadId: 'child' },
+    })!;
+    const poisoned = {
+      ...status,
+      error: 'secret',
+      environment: { TOKEN: 'secret' },
+      failure: { ...status.failure, stderr: 'secret', prompt: 'secret' },
+    };
+    const event = journal.append('s1', 'agent.activity.mcp-startup', poisoned, at);
+    journal.append(
+      's1',
+      'activity.updated',
+      { ...mcpStartupActivity(status), label: 'secret', detail: 'secret', mcpStartup: poisoned },
+      at,
+    );
+    expect(JSON.stringify(journal.replay('s1', 0))).not.toContain('secret');
+    expect(() =>
+      journal.append(
+        's1',
+        'agent.activity.mcp-startup',
+        { ...status, runtimeId: 'other-runtime' },
+        at,
+      ),
+    ).toThrow('INVALID_MCP_STARTUP_STATUS');
+    // Export revalidates even historical rows written outside the current adapter.
+    database
+      .prepare('UPDATE session_events SET payload_json = ? WHERE session_id = ? AND sequence = ?')
+      .run(JSON.stringify(poisoned), 's1', event.sequence);
+    expect(JSON.stringify(exportControlPlaneTrace(path, 's1'))).not.toContain('secret');
+    expect(exportControlPlaneTrace(path, 's1').events[0]).toMatchObject({
+      traceId: status.failure!.failureId,
+      payload: status,
+    });
+    expect(formatControlPlaneTrace(exportControlPlaneTrace(path, 's1'))).toContain(
+      'server=context-mode thread=child',
+    );
+    expect(formatControlPlaneTrace(exportControlPlaneTrace(path, 's1'))).toContain(
+      'phase=startup code=startup-failed exit=unavailable signal=unavailable artifact=unavailable',
+    );
+    database
+      .prepare('UPDATE session_events SET payload_json = ? WHERE session_id = ? AND sequence = ?')
+      .run(JSON.stringify({ ...poisoned, attemptId: 'mismatched' }), 's1', event.sequence);
+    expect(exportControlPlaneTrace(path, 's1').events[0]).toMatchObject({
+      traceId: null,
+      payload: {},
+    });
+    database.close();
+  });
   it('exports durable wait correlations and observation timestamps without command output', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-wait-trace-'));
     directories.push(directory);

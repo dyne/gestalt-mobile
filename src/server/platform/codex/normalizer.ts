@@ -9,6 +9,10 @@ import { countDiffLines, type FileChangeSummary } from '../../../shared/contract
 import { relative } from 'node:path';
 import type { NotificationOrigin } from './session-runtime.js';
 import {
+  mcpStartupActivity,
+  parseMcpStartupStatus,
+} from '../../../shared/contracts/mcp-startup-failure.js';
+import {
   unknownReadiness,
   readinessLabel,
   repositoryLabel,
@@ -26,6 +30,17 @@ export function normalizeCodexNotification(
   origin: NotificationOrigin = { kind: 'root' },
 ): SessionEvent | null {
   const connection = record(notification.params);
+  if (notification.method === 'gestalt/mcpStartup') {
+    const status = parseMcpStartupStatus(connection);
+    if (!status) return null;
+    return {
+      sessionId,
+      sequence,
+      occurredAt: status.observedAt,
+      type: 'activity.updated',
+      payload: mcpStartupActivity(status),
+    };
+  }
   if (notification.method === 'gestalt/retrievalReadiness') {
     const readiness = record(connection?.readiness);
     const repository = record(readiness?.repository);
@@ -86,6 +101,7 @@ export function normalizeCodexNotification(
   }
   if (
     notification.method === 'mcpServer/statusUpdated' &&
+    !connection?.threadId &&
     connection?.name === 'gestalt-xerj' &&
     ['failed', 'cancelled'].includes(String(connection.status))
   ) {
@@ -105,6 +121,7 @@ export function normalizeCodexNotification(
   }
   if (
     notification.method === 'mcpServer/statusUpdated' &&
+    !connection?.threadId &&
     connection?.name === 'gestalt-serena' &&
     ['connected', 'failed', 'cancelled'].includes(String(connection.status))
   ) {

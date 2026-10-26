@@ -5,11 +5,17 @@
  */
 
 import type { HistoryActivity } from './activity-summary.js';
+import {
+  parseMcpStartupStatus,
+  startupToolLabel,
+  type McpStartupStatus,
+} from '../../../shared/contracts/mcp-startup-failure.js';
 
 export type ActivityPresentation = {
   kind: string;
   status?: string;
   content: string;
+  startup?: McpStartupStatus;
 };
 
 export type CommandActivitySummary = {
@@ -33,6 +39,14 @@ export function summarizeCommandActivities(
 }
 
 export function presentActivity(activity: HistoryActivity): ActivityPresentation | null {
+  const startup = parseMcpStartupStatus(activity.mcpStartup);
+  if (startup)
+    return {
+      kind: startupToolLabel(startup.serverName),
+      status: startup.status,
+      content: '',
+      startup,
+    };
   if (isContextModeTool(activity)) return null;
 
   const [kind, status] = activity.label.split(' · ', 2);
