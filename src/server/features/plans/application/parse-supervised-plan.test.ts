@@ -65,6 +65,19 @@ function parse(source = plan()) {
 }
 
 describe('parseSupervisedPlan', () => {
+  it.each([
+    ['$gestalt:development-testing'],
+    ['$gestalt:coding', '$vite', '$gestalt:systematic-debugging'],
+    ['$gestalt:xerj', '$gestalt:serena'],
+  ])('preserves declared skill references without namespace restrictions: %j', (...skills) => {
+    const result = parse(
+      plan().replace('$gestalt:org-plan $context-mode:context-mode', skills.join(' ')),
+    );
+    expect(result.kind).toBe('available');
+    if (result.kind !== 'available') return;
+    expect(result.plan.steps[0]?.skills).toEqual(skills);
+  });
+
   it('projects optional measurements and preserves unavailable quota values', () => {
     const result = parse(
       plan().replace(

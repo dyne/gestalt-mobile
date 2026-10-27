@@ -167,6 +167,14 @@ added after a profile was saved. The editor labels them **Always advertised**
 and does not offer a disable control. Refresh discovery and start a new session
 after upgrading Gestalt Agents; running sessions retain their startup catalog.
 
+Advertised skills are available to consult; their instructions are loaded only
+when relevant, not all at session startup. Org Plan `:SKILLS:` may include exact
+`$gestalt:*` references alongside other available skills. Declared skills are
+required preparation, not an exclusive allowlist: executors may load additional
+relevant skills when challenges arise without revising the plan. Skill use does
+not expand scope or authority, and plan declarations do not enable unavailable
+conditional tools. Agents owns validation and the execution-time loading rules.
+
 `gestalt:xerj` is conditional retrieval infrastructure. For Codex, Mobile checks
 the manager's shared readiness contract and the owning thread's native MCP
 connection before accepting its first turn. Ready retrieval is mandatory even
