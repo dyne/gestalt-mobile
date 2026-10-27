@@ -58,6 +58,55 @@ Do not log prompts, model output, secrets, or environment values. Every accepted
 
 Deliberate non-goals: no framework rewrite, no global client store, no service locator, and no inversion of Org/native-plan authority.
 
+## Host-owned test execution
+
+Use `gestalt_test_runner` when tests need host execution, particularly integration
+tests that create their own Codex sandbox. The runner is enabled by default in
+compatible Mobile hosts; `--disable-test-runner` turns it off. Verify the running
+host with `list`; source changes alone do not prove deployment. If the tool is
+unavailable or disabled, report that prerequisite without bypassing the sandbox.
+
+Add suites as needed in `.gestalt/host-tests.json` at the **session workspace**
+root, preserving existing entries. This may differ from the repository root and
+Mobile's browsing `--cwd`. The file reloads at runtime; no private configuration,
+fingerprint approval, or restart is required. Example (replace absolute paths):
+
+```json
+{
+  "version": 1,
+  "suites": [
+    {
+      "id": "mobile-full",
+      "repository": "/work/gestalt-mobile",
+      "command": "/usr/bin/npm",
+      "args": ["test"],
+      "timeoutMs": 600000,
+      "maxOutputBytes": 8388608
+    }
+  ]
+}
+```
+
+Use the actual source checkout under test, including its uncommitted candidate,
+and verified host executable paths. Add separate named suites for focused tests,
+builds, or browser checks using existing repository scripts. Configuration grants
+host-user execution authority; do not add unrelated commands or installation
+steps. Keep machine-specific suite files out of commits.
+
+Only the root supervisor calls the API; executors request runs from the root.
+Call `list`, then `inspect` to verify the suite's source repository, then
+`start` with `suite` and a fresh UUID `requestId` (no `candidate` argument).
+Keep the writer idle until the returned `runId` reaches a terminal `status`.
+Reuse a request ID only to recover the same run; use a fresh ID for a rerun.
+For supervised long waits, follow the Org Plan process-event lease contract.
+
+Record run ID, source fingerprints, exit status, actual test counts and evidence
+paths. Inspect logs when counts are unknown. A zero exit alone does not prove
+coverage; invalidated, interrupted, cancelled, timed-out or overflowed runs never
+satisfy a gate. Host runs preserve Serena's intended sandbox checks. All completion
+checks above still apply. See [host test runner](docs/host-tests.md) for limits,
+private evidence placement, cancellation and troubleshooting.
+
 ## Passkey boundary
 
 Passkey authentication is built in, but TLS termination is external. Keep
