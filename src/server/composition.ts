@@ -6,6 +6,7 @@
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { FilesystemSessionDefaults } from './platform/persistence/filesystem-session-defaults.js';
 import { SessionModelConfig } from './platform/codex/session-model-config.js';
@@ -15,6 +16,10 @@ import { debuglog } from 'node:util';
 import { SqliteTransportDiagnostics } from './platform/persistence/sqlite-transport-diagnostics.js';
 import { buildApp } from './app.js';
 import { ManagedUpgrade } from './platform/maintenance/managed-upgrade.js';
+import { LocalHostTestRunner } from './platform/host-tests/runner.js';
+import { loadHostTestConfig, within } from './platform/host-tests/config.js';
+import { handleHostTestTool } from './features/host-tests/application/handle-tool.js';
+import { gestaltTestRunnerDynamicTool } from '../shared/contracts/host-tests.js';
 import { SelfDebugWorkspace } from './platform/self-debug/workspace.js';
 import {
   createSelfDebugSession,
@@ -166,6 +171,7 @@ export type ComposeRelayAppOptions = {
   passkeyAuthEnabled?: boolean;
   staticDir?: string;
   pwaIcon?: PwaIcon;
+  testRunnerConfig?: string;
   profiles: ProfileCatalog;
   installedCodexVersion: string | null;
   installedKimiVersion?: string | null;
@@ -235,6 +241,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   if (ownerHandle && ownerHandle.length !== 32)
     throw new Error('Authorization randomness must return exactly 32 bytes');
   const root = resolve(options.root);
+  const hostTestSuites = options.testRunnerConfig
+    ? await loadHostTestConfig(options.testRunnerConfig, root)
+    : undefined;
+  let hostTests: LocalHostTestRunner | undefined;
   const databasePath = options.dataDir
     ? join(resolve(options.dataDir), 'relay.sqlite')
     : resolveStateDatabasePath(
@@ -1269,6 +1279,28 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           }
           const session = withPendingInteractions(sessions.find(sessionId));
           if (!session) return false;
+          const toolCall = request.params as { tool?: unknown; arguments?: unknown } | null;
+          if (
+            request.method === 'item/tool/call' &&
+            toolCall?.tool === gestaltTestRunnerDynamicTool.name
+          ) {
+            const result = await handleHostTestTool(
+              hostTests,
+              {
+                sessionId,
+                workspace: session.workspacePath,
+                root: origin?.kind === 'root',
+                provider: session.provider,
+              },
+              toolCall.arguments,
+            );
+            return (
+              runtime?.resolveServerRequest(sessionId, String(request.id), {
+                success: true,
+                contentItems: [{ type: 'inputText', text: JSON.stringify(result) }],
+              }) === true
+            );
+          }
           if (isOrgPlanHealthCall(request)) {
             const observedPlan = supervisedPlans.find(sessionId);
             let executorBinding =
@@ -1901,6 +1933,25 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   }
   let app;
   try {
+    if (hostTestSuites) {
+      if (within(await realpath(root), await realpath(dirname(databasePath)))) {
+        throw new Error(
+          'Host test evidence must be outside the agent workspace; choose a private --data-dir',
+        );
+      }
+      hostTests = new LocalHostTestRunner(
+        hostTestSuites,
+        join(dirname(databasePath), 'host-test-runs'),
+        (sessionId, runId, observedAt) => {
+          if (!sessions.find(sessionId)) return;
+          events.publish(
+            journal.append(sessionId, 'host-test.completed', { runId, observedAt }, observedAt),
+          );
+          autopilot.rootProcessCompleted(sessionId, runId);
+        },
+      );
+      await hostTests.initialize();
+    }
     const transportDiagnostics = new SqliteTransportDiagnostics(database);
     app = await buildApp({
       transportDiagnostic: (id, event) => transportDiagnostics.record(id, event),
@@ -2248,8 +2299,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         idempotency,
         close:
           runtime || kimiRuntime
-            ? (id) => {
+            ? async (id) => {
                 autopilot.cancel(id, 'sessionEnded');
+                await hostTests?.cancelSession(id);
                 planMeasurementRefresh?.stop(id);
                 dismissPendingInteractions(id, new Date().toISOString());
                 activity.dispose(id);
@@ -2618,6 +2670,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
     });
   } catch (error) {
+    await hostTests?.close();
     authorization?.close();
     database.close();
     throw error;
@@ -2677,6 +2730,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   });
   app.addHook('onClose', async () => {
     closing = true;
+    await hostTests?.close();
     await xerjIndexer.close();
     for (const [sessionId, timer] of capacityRecoveryTimers) {
       clearTimeout(timer);

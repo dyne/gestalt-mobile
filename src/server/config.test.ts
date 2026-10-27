@@ -11,6 +11,13 @@ import { describe, expect, it } from 'vitest';
 import { CliUsageError, normalizePublicOrigin, parseConfig } from './config.js';
 
 describe('parseConfig', () => {
+  it('keeps host execution off by default and resolves explicit operator configuration', () => {
+    expect(parseConfig([], '/caller').testRunnerConfig).toBeUndefined();
+    expect(
+      parseConfig(['--test-runner-config', '../private/tests.json'], '/caller').testRunnerConfig,
+    ).toBe('/private/tests.json');
+    expect(() => parseConfig(['--test-runner-config'])).toThrow(CliUsageError);
+  });
   it('selects root-wide automatic, manual or disabled retrieval without permission changes', () => {
     for (const mode of ['auto', 'manual', 'off']) {
       expect(parseConfig(['--xerj', mode, '--cwd', 'universe'], '/caller')).toMatchObject({
