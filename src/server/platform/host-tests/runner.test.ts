@@ -7,12 +7,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { candidate } from './candidate.js';
-import { loadHostTestConfig, type HostTestSuite } from './config.js';
+import { loadWorkspaceHostTestConfig, type HostTestSuite } from './config.js';
 import { LocalHostTestRunner, parseTapCounts } from './runner.js';
 import type { HostTestResult } from '../../../shared/contracts/host-tests.js';
 const exec = promisify(execFile);
@@ -43,24 +43,28 @@ async function fixture(source = "console.log('# tests 1\\n# pass 1\\n# fail 0\\n
     ],
     { cwd: repository },
   );
-  const digest = await candidate(repository);
   const suite: HostTestSuite = {
     id: 'full',
     repository,
     command: process.execPath,
     args: ['test.cjs'],
-    candidate: digest,
     timeoutMs: 5000,
     maxOutputBytes: 65536,
   };
+  const config = join(repository, '.gestalt/host-tests.json');
+  await mkdir(join(repository, '.gestalt'));
+  const configure = async (suites = [suite]) =>
+    writeFile(config, JSON.stringify({ version: 1, suites }));
+  await configure();
+  const digest = await candidate(repository);
   const completed = vi.fn();
   const evidence = join(root, 'evidence');
-  const runner = new LocalHostTestRunner([suite], evidence, completed);
+  const runner = new LocalHostTestRunner(evidence, completed);
   await runner.initialize();
   cleanups.push(() => runner.close());
   const owner = { sessionId: 'session-one', workspace: repository };
   const start = (requestId = randomUUID()) =>
-    runner.request(owner, { operation: 'start', suite: 'full', candidate: digest, requestId });
+    runner.request(owner, { operation: 'start', suite: 'full', requestId });
   const result = async (id: string) =>
     runner.request(owner, { operation: 'status', runId: id }) as Promise<HostTestResult>;
   const finish = async (id: string) => {
@@ -70,10 +74,107 @@ async function fixture(source = "console.log('# tests 1\\n# pass 1\\n# fail 0\\n
     });
     return result(id);
   };
-  return { root, repository, suite, digest, evidence, runner, owner, start, finish, completed };
+  return {
+    root,
+    repository,
+    suite,
+    config,
+    configure,
+    digest,
+    evidence,
+    runner,
+    owner,
+    start,
+    finish,
+    completed,
+  };
 }
 
 describe('host-owned tests', () => {
+  it('preserves active-run ownership and cancellation while runtime suites change', async () => {
+    const f = await fixture('setInterval(()=>{},1000)');
+    const run = (await f.start()) as HostTestResult;
+    await f.configure([{ ...f.suite, id: 'renamed' }]);
+    expect(
+      await f.runner.request(f.owner, {
+        operation: 'start',
+        suite: 'renamed',
+        requestId: randomUUID(),
+      }),
+    ).toEqual({ error: 'repositoryBusy' });
+    await writeFile(f.config, '{');
+    expect(
+      await f.runner.request(f.owner, { operation: 'status', runId: run.runId }),
+    ).toMatchObject({ state: 'running' });
+    await f.runner.request(f.owner, { operation: 'cancel', runId: run.runId });
+    expect((await f.finish(run.runId)).state).toBe('cancelled');
+    await f.configure([{ ...f.suite, args: ['-e', 'process.exit(0)'] }]);
+    const next = (await f.start()) as HostTestResult;
+    expect((await f.finish(next.runId)).state).toBe('passed');
+  });
+  it('loads runtime workspace suites without digest approval and retains evidence across reload and restart', async () => {
+    const f = await fixture();
+    await rm(f.config);
+    expect(await f.runner.request(f.owner, { operation: 'list' })).toEqual({ suites: [] });
+    const path = join(f.repository, '.gestalt/host-tests.json');
+    const suite = f.suite;
+    await writeFile(path, JSON.stringify({ version: 1, suites: [suite] }));
+    expect(await f.runner.request(f.owner, { operation: 'inspect', suite: 'full' })).toMatchObject({
+      repository: f.repository,
+    });
+    const request = { operation: 'start' as const, suite: 'full', requestId: randomUUID() };
+    const [run, duplicate] = (await Promise.all([
+      f.runner.request(f.owner, request),
+      f.runner.request(f.owner, request),
+    ])) as HostTestResult[];
+    expect(duplicate.runId).toBe(run.runId);
+    const result = await f.finish(run.runId);
+    expect(result).toMatchObject({ state: 'passed', candidate: await candidate(f.repository) });
+    expect(result.finalCandidate).toBe(result.candidate);
+    expect(
+      JSON.parse(await readFile(join(f.evidence, run.runId, 'invocation.json'), 'utf8')),
+    ).toMatchObject({ repository: f.repository, args: ['test.cjs'] });
+    await writeFile(
+      path,
+      JSON.stringify({ version: 1, suites: [{ ...suite, args: ['-e', 'process.exit(7)'] }] }),
+    );
+    expect(await f.runner.request(f.owner, request)).toMatchObject({ runId: run.runId });
+    const second = (await f.runner.request(f.owner, {
+      ...request,
+      requestId: randomUUID(),
+    })) as HostTestResult;
+    expect(await f.finish(second.runId)).toMatchObject({ state: 'failed', exitCode: 7 });
+    await rm(path);
+    expect(await f.runner.request(f.owner, { operation: 'list' })).toEqual({ suites: [] });
+    await f.runner.close();
+    const next = new LocalHostTestRunner(f.evidence);
+    await next.initialize();
+    cleanups.push(() => next.close());
+    expect(await next.request(f.owner, request)).toMatchObject({
+      runId: run.runId,
+      state: 'passed',
+    });
+    expect(await next.request(f.owner, { ...request, suite: 'other' })).toEqual({
+      error: 'requestIdConflict',
+    });
+  });
+
+  it('fails closed on malformed runtime configuration, outside repositories and escaping config links', async () => {
+    const f = await fixture();
+    const path = join(f.repository, '.gestalt/host-tests.json');
+    await writeFile(path, '{');
+    await expect(loadWorkspaceHostTestConfig(f.repository)).rejects.toThrow();
+    await writeFile(
+      path,
+      JSON.stringify({ version: 1, suites: [{ ...f.suite, repository: f.root }] }),
+    );
+    await expect(loadWorkspaceHostTestConfig(f.repository)).rejects.toThrow('outside');
+    await rm(path);
+    const outside = join(f.root, 'outside.json');
+    await writeFile(outside, JSON.stringify({ version: 1, suites: [] }));
+    await symlink(outside, path);
+    await expect(loadWorkspaceHostTestConfig(f.repository)).rejects.toThrow('within');
+  });
   it('settles a session shutdown racing a start and rejects all new work during host shutdown', async () => {
     const f = await fixture('setInterval(()=>{},1000)');
     const starting = f.start();
@@ -105,20 +206,17 @@ describe('host-owned tests', () => {
     expect(f.completed).toHaveBeenCalledWith(f.owner.sessionId, run.runId, result.observedAt);
   });
 
-  it('fails closed on unauthorized and changed candidates without starting a process', async () => {
+  it('runs changed candidates without reauthorization and rejects unconfigured suites', async () => {
     const f = await fixture();
-    f.suite.candidate = null;
-    expect(await f.start()).toEqual({ error: 'candidateNotAuthorized' });
-    f.suite.candidate = f.digest;
     await writeFile(join(f.repository, 'untracked'), 'new input');
-    expect(await f.start()).toEqual({ error: 'candidateChanged' });
-    expect(f.completed).not.toHaveBeenCalled();
-    expect(await f.runner.request(f.owner, { operation: 'inspect', suite: 'full' })).toMatchObject({
-      authorized: false,
-    });
+    const run = (await f.start()) as HostTestResult;
+    expect(run.candidate).not.toBe(f.digest);
+    expect((await f.finish(run.runId)).state).toBe('passed');
+    await f.configure([]);
+    expect(await f.start()).toEqual({ error: 'suiteUnavailable' });
   });
 
-  it('deduplicates concurrent starts and rejects request ID reuse for another candidate', async () => {
+  it('deduplicates concurrent starts and rejects request ID reuse for another suite', async () => {
     const f = await fixture('setTimeout(()=>{},150)');
     const id = randomUUID();
     const [a, b] = (await Promise.all([f.start(id), f.start(id)])) as HostTestResult[];
@@ -128,8 +226,7 @@ describe('host-owned tests', () => {
     expect(
       await f.runner.request(f.owner, {
         operation: 'start',
-        suite: 'full',
-        candidate: '0'.repeat(64),
+        suite: 'other',
         requestId: id,
       }),
     ).toEqual({ error: 'requestIdConflict' });
@@ -155,11 +252,13 @@ describe('host-owned tests', () => {
   it('bounds runtime and output, and preserves nonzero exit', async () => {
     const slow = await fixture('setInterval(()=>{},1000)');
     slow.suite.timeoutMs = 100;
+    await slow.configure();
     expect((await slow.finish(((await slow.start()) as HostTestResult).runId)).state).toBe(
       'timedOut',
     );
     const loud = await fixture("process.stdout.write('x'.repeat(100000));setInterval(()=>{},1000)");
     loud.suite.maxOutputBytes = 1024;
+    await loud.configure();
     const result = await loud.finish(((await loud.start()) as HostTestResult).runId);
     expect(result.state).toBe('outputLimit');
     expect(result.outputBytes).toBe(1024);
@@ -194,14 +293,13 @@ describe('host-owned tests', () => {
     const run = (await f.start(id)) as HostTestResult;
     await f.finish(run.runId);
     await f.runner.close();
-    const next = new LocalHostTestRunner([f.suite], f.evidence);
+    const next = new LocalHostTestRunner(f.evidence);
     await next.initialize();
     cleanups.push(() => next.close());
     expect(
       await next.request(f.owner, {
         operation: 'start',
         suite: 'full',
-        candidate: f.digest,
         requestId: id,
       }),
     ).toMatchObject({ runId: run.runId, state: 'passed' });
@@ -227,7 +325,7 @@ describe('host-owned tests', () => {
     const result = await f.finish(run.runId);
     await f.runner.close();
     await writeFile(result.resultPath, JSON.stringify({ ...result, state: 'running' }));
-    const next = new LocalHostTestRunner([f.suite], f.evidence);
+    const next = new LocalHostTestRunner(f.evidence);
     await next.initialize();
     cleanups.push(() => next.close());
     expect(await next.request(f.owner, { operation: 'status', runId: run.runId })).toMatchObject({
@@ -237,17 +335,14 @@ describe('host-owned tests', () => {
   });
 });
 
-it('requires private operator configuration outside the workspace', async () => {
+it('keeps evidence outside the session workspace even when the browsing root contains it', async () => {
   const f = await fixture();
-  const config = join(f.root, 'config.json');
-  const body = JSON.stringify({ version: 1, suites: [f.suite] });
-  await writeFile(config, body, { mode: 0o600 });
-  expect(await loadHostTestConfig(config, f.repository)).toHaveLength(1);
-  await chmod(config, 0o644);
-  await expect(loadHostTestConfig(config, f.repository)).rejects.toThrow('private');
-  const inside = join(f.repository, 'runner.json');
-  await writeFile(inside, body, { mode: 0o600 });
-  await expect(loadHostTestConfig(inside, f.repository)).rejects.toThrow('outside');
+  expect(await f.runner.request({ ...f.owner, workspace: f.root }, { operation: 'list' })).toEqual({
+    error: 'evidenceInsideWorkspace',
+  });
+  expect(await f.runner.request(f.owner, { operation: 'list' })).toMatchObject({
+    suites: [{ id: 'full' }],
+  });
 });
 
 it('fingerprints untracked inputs, rejects symlink ancestor escapes, and keeps unknown reporters unknown', async () => {

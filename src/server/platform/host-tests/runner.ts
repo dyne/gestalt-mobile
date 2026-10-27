@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import type { HostTestRequest, HostTestResult } from '../../../shared/contracts/host-tests.js';
 import type { HostTestOwner, HostTestRunner } from '../../features/host-tests/application/ports.js';
 import { candidate } from './candidate.js';
-import { within, type HostTestSuite } from './config.js';
+import { loadWorkspaceHostTestConfig, within, type HostTestSuite } from './config.js';
 
 // The host owns a lifetime pipe; even a host crash closes it. Tests cannot inherit
 // that pipe or the IPC channel. The guardian reaps its own group, never a stored PID.
@@ -31,12 +31,13 @@ child.once('exit',(exitCode,signal)=>{if(process.connected)process.send({exitCod
 
 type Active = {
   result: HostTestResult;
+  repository: string;
   stop(reason: HostTestResult['state']): void;
   done: Promise<void>;
 };
 type Completed = (sessionId: string, runId: string, observedAt: string) => void;
 
-/** One host-owned runner per relay. All suites are immutable operator configuration. */
+/** One host-owned runner per relay. Each run retains its resolved configuration. */
 export class LocalHostTestRunner implements HostTestRunner {
   private readonly results = new Map<string, HostTestResult>();
   private readonly active = new Map<string, Active>();
@@ -46,9 +47,11 @@ export class LocalHostTestRunner implements HostTestRunner {
   private closing = false;
 
   constructor(
-    private readonly suites: readonly HostTestSuite[],
     private readonly evidenceRoot: string,
     private readonly completed: Completed = () => {},
+    private readonly workspaceSuites: (
+      workspace: string,
+    ) => Promise<HostTestSuite[]> = loadWorkspaceHostTestConfig,
   ) {}
 
   async initialize(): Promise<void> {
@@ -124,13 +127,26 @@ export class LocalHostTestRunner implements HostTestRunner {
       if (input.operation === 'cancel') this.active.get(result.runId)?.stop('cancelled');
       return structuredClone(result);
     }
+    if (input.operation === 'start') {
+      const previous = [...this.results.values()].find(
+        (result) => result.sessionId === owner.sessionId && result.requestId === input.requestId,
+      );
+      if (previous) {
+        return previous.suite === input.suite
+          ? structuredClone(previous)
+          : { error: 'requestIdConflict' };
+      }
+    }
     const workspace = await realpath(owner.workspace);
-    const available = this.suites.filter((suite) => within(workspace, suite.repository));
+    if (within(workspace, await realpath(this.evidenceRoot)))
+      return { error: 'evidenceInsideWorkspace' };
+    const suites = await this.workspaceSuites(workspace);
+    const available = suites.filter((suite) => within(workspace, suite.repository));
     if (input.operation === 'list')
       return {
         suites: available.map((suite) => ({
           id: suite.id,
-          authorizedCandidate: suite.candidate,
+          repository: suite.repository,
           timeoutMs: suite.timeoutMs,
         })),
       };
@@ -142,37 +158,28 @@ export class LocalHostTestRunner implements HostTestRunner {
       const current = await candidate(suite.repository);
       return {
         suite: suite.id,
+        repository: suite.repository,
         candidate: current,
-        authorized: suite.candidate === current,
         fingerprintScope:
           'Git-visible files, modes, index, HEAD and branch; excludes ignored dependencies and host toolchains',
       };
     }
-    const previous = [...this.results.values()].find(
-      (result) => result.sessionId === owner.sessionId && result.requestId === input.requestId,
-    );
-    if (previous)
-      return previous.suite === suite.id && previous.candidate === input.candidate
-        ? structuredClone(previous)
-        : { error: 'requestIdConflict' };
-    return this.start(owner, suite, input.candidate, input.requestId, generation);
+    return this.start(owner, suite, input.requestId, generation);
   }
 
   private async start(
     owner: HostTestOwner,
     suite: HostTestSuite,
-    expected: string,
     requestId: string,
     generation: number,
   ): Promise<unknown> {
     if (this.closing) return { error: 'hostShuttingDown' };
-    if (suite.candidate !== expected) return { error: 'candidateNotAuthorized' };
     if (this.results.size >= 1000) return { error: 'evidenceCapacityReached' };
     if (this.reservations.has(suite.repository)) return { error: 'repositoryBusy' };
     if (this.reservations.size >= 2) return { error: 'hostRunnerBusy' };
     this.reservations.add(suite.repository);
     try {
-      if ((await candidate(suite.repository)) !== expected) return { error: 'candidateChanged' };
+      const current = await candidate(suite.repository);
       if (this.closing) return { error: 'hostShuttingDown' };
       const runId = randomUUID();
       const directory = join(this.evidenceRoot, runId);
@@ -184,7 +191,7 @@ export class LocalHostTestRunner implements HostTestRunner {
         requestId,
         sessionId: owner.sessionId,
         suite: suite.id,
-        candidate: expected,
+        candidate: current,
         finalCandidate: null,
         state: 'running',
         startedAt: now,
@@ -208,7 +215,7 @@ export class LocalHostTestRunner implements HostTestRunner {
           timeoutMs: suite.timeoutMs,
           maxOutputBytes: suite.maxOutputBytes,
           fingerprintVersion: 1,
-          candidate: expected,
+          candidate: current,
           nodeVersion: process.version,
           platform: process.platform,
           arch: process.arch,
@@ -231,7 +238,7 @@ export class LocalHostTestRunner implements HostTestRunner {
       }
       return structuredClone(result);
     } finally {
-      if (![...this.active.values()].some((run) => run.result.suite === suite.id))
+      if (![...this.active.values()].some((run) => run.repository === suite.repository))
         this.reservations.delete(suite.repository);
     }
   }
@@ -272,7 +279,7 @@ export class LocalHostTestRunner implements HostTestRunner {
       reason ??= state;
       child.stdin?.end();
     };
-    this.active.set(result.runId, { result, stop, done });
+    this.active.set(result.runId, { result, repository: suite.repository, stop, done });
     const timeout = setTimeout(() => stop('timedOut'), suite.timeoutMs);
     let summary = '';
     child.stdin?.on('error', () => {});

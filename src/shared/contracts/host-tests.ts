@@ -15,7 +15,6 @@ export const hostTestRequest = z.discriminatedUnion('operation', [
     .object({
       operation: z.literal('start'),
       suite,
-      candidate: z.string().regex(/^[a-f0-9]{64}$/),
       requestId: runId,
     })
     .strict(),
@@ -27,14 +26,13 @@ export const gestaltTestRunnerDynamicTool = {
   type: 'function',
   name: 'gestalt_test_runner',
   description:
-    'Run host-configured test suites outside the agent shell sandbox. Root supervisor only. Disabled unless the operator configures a suite and approves its exact Git-visible candidate digest. list/inspect do not execute code. start uses an idempotent requestId; status/cancel require the returned runId. Never accepts commands, environment, or paths. Results include UTC observations and private evidence paths; counts can be unknown. Does not approve milestones or resume Autopilot.',
+    'Run workspace test suites outside the agent shell sandbox as the host user. Enabled by default; root supervisor only. Create or edit .gestalt/host-tests.json in the session workspace using normal file tools; suites reload at runtime without restart or fingerprint approval. list/inspect do not execute code. start requires suite and an idempotent requestId; status/cancel require runId. Tool arguments never accept commands, environment, or paths. Results retain automatic source fingerprints, UTC observations and private evidence; counts can be unknown. Keep the writer idle during tests. Does not approve milestones or resume Autopilot.',
   inputSchema: {
     type: 'object',
     additionalProperties: false,
     properties: {
       operation: { type: 'string', enum: ['list', 'inspect', 'start', 'status', 'cancel'] },
       suite: { type: 'string' },
-      candidate: { type: 'string' },
       requestId: { type: 'string' },
       runId: { type: 'string' },
     },

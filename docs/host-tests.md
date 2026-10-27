@@ -1,20 +1,29 @@
 # Host-owned test runner
 
-Gestalt Mobile can own test processes independently of an agent's shell sandbox.
-This allows integration tests to create their normal Codex sandbox without adding
-an outer agent sandbox. The host process must itself run in a suitable environment;
-this API does not escape a sandbox surrounding Mobile, repair Codex, or disable
-Serena's permission enforcement.
+Gestalt Mobile enables the host-owned test runner by default. Root Codex
+supervisors can run tests from source checkouts, including uncommitted work,
+without a private operator configuration, manual fingerprint approval, or a
+restart when suites change. No tests start automatically.
 
-## Operator setup
+Tests run as the host user, outside the agent shell sandbox. This lets Serena
+integration tests create their intended Codex sandbox without an outer agent
+sandbox. The API does not escape a sandbox surrounding Mobile, repair Codex, or
+disable Serena's permission enforcement. Use trusted workspaces and dependencies:
+agents able to edit suite configuration can select host executables and arguments.
+Host execution grants access to the host user's filesystem, including HOME.
 
-The runner is disabled unless Mobile starts with `--test-runner-config PATH`.
-Fingerprinting requires `/usr/bin/git`; it does not resolve Git through a
-potentially repository-controlled PATH.
-Create that configuration as a private, user-owned file (mode `0600`) outside the
-workspace, for example `~/.config/gestalt/host-tests.json`. Do not put it in the
-repository or make it writable through agent workspace access. Paths below are
-examples; use the actual absolute executable and checkout paths on your host.
+## Runtime configuration
+
+Start Mobile normally; no test-runner activation flag is required:
+
+```bash
+gestalt mobile --cwd "$HOME" --host 127.0.0.1 --port 3000 \
+  --public-origin https://your-mobile.example
+```
+
+The root supervisor creates `.gestalt/host-tests.json` in its **session workspace**
+using normal file tools. This is the selected project workspace, which may be
+nested beneath the root browsed by Mobile's `--cwd`. For a session in `/work`:
 
 ```json
 {
@@ -25,7 +34,6 @@ examples; use the actual absolute executable and checkout paths on your host.
       "repository": "/work/gestalt-playwright-mcp",
       "command": "/usr/bin/npm",
       "args": ["test"],
-      "candidate": null,
       "timeoutMs": 600000,
       "maxOutputBytes": 8388608
     }
@@ -33,113 +41,93 @@ examples; use the actual absolute executable and checkout paths on your host.
 }
 ```
 
-Start Mobile from your normal host environment, preserving your other options:
+Use actual absolute checkout and executable paths. A repository must be a Git
+root or worktree within the session workspace. The runner reloads configuration
+on each list, inspect, or new start request. A missing file means no suites;
+malformed configuration fails closed. The file is bounded to 64 KiB and 32 suites;
+symlink configuration files and paths escaping the workspace are rejected.
+Each started run retains its resolved command and arguments. Editing configuration
+affects future runs; status and cancellation remain available after file removal
+or invalid edits. Keep the writer idle while its checkout is tested.
 
-```bash
-gestalt-mobile --cwd /work \
-  --test-runner-config "$HOME/.config/gestalt/host-tests.json"
-```
-
-The relay data directory must also be outside the agent workspace when the runner
-is enabled, so an agent cannot rewrite retained evidence. The default host state
-directory meets this requirement; a workspace-local development `--data-dir`
-does not. Keep the operator configuration and data directory outside any additional
-agent-writable roots as well.
-
-With `candidate: null`, the supervisor can inspect the checkout but cannot run it.
-After reviewing the checkout and command, copy the digest returned by `inspect`
-into `candidate` and restart Mobile to load that authorization. Configuration is
-loaded once; editing a repository or an Org Plan cannot enable host execution.
-Changed candidates require a new operator authorization. Unchanged candidates may
-be rerun, so this is not a single-use authorization.
-
-This authorizes execution of repository code as the host user. A named `npm test`
-still executes scripts and dependencies; the name is not a security boundary.
-Use only trusted code and trusted dependencies, or run Mobile's test environment
-in a separately provisioned VM/container that supports the required sandbox.
-No provider credentials or relay control tokens are forwarded. The runner forwards
-only PATH, HOME, USER, LOGNAME, LANG, LC_ALL, TZ and TMPDIR, plus CI=1 and NO_COLOR=1.
-Tests still have the host user's filesystem access, including files under HOME.
+The old `--test-runner-config` option and candidate authorization fields have been
+removed. To turn off host tests, start Mobile with `--disable-test-runner`.
+Creating a workspace file cannot override that option.
 
 ## Supervisor API
 
-Codex sessions expose `gestalt_test_runner`. The host accepts only requests bound
-to the session's root thread; child and unknown callers cannot start or inspect
-runs. Kimi does not use this API. The session workspace must contain the configured
-repository. No request accepts a command, executable, working directory, environment,
-or another session's identity.
+Codex sessions expose `gestalt_test_runner`. Only the session's root thread can
+use it; child, unknown, and Kimi callers are rejected. Tool arguments never accept
+commands, environment, paths, or another session's identity.
 
 ```json
 { "operation": "list" }
 { "operation": "inspect", "suite": "manager-full" }
+{ "operation": "start", "suite": "manager-full", "requestId": "<new UUID>" }
 ```
 
-After the operator authorizes the reported digest:
-
-```json
-{
-  "operation": "start",
-  "suite": "manager-full",
-  "candidate": "<64-character digest from inspect>",
-  "requestId": "<new UUID>"
-}
-```
-
-The response contains a `runId`. Reuse the same `requestId` when retrying a lost
-start response; it returns the existing run, including after a host restart.
-Reusing it for another candidate is rejected. A fresh UUID requests a fresh run.
+`list` and `inspect` identify the canonical source checkout. `inspect` reports an
+automatically computed source fingerprint for evidence; no approval is required
+and `start` does not accept a candidate fingerprint. Start returns promptly with
+a `runId`. Reuse the same `requestId` only to recover the original response,
+including after a restart or configuration/source change. Reusing it for a
+different suite is rejected. Use a fresh UUID for a fresh run.
 
 ```json
 { "operation": "status", "runId": "<returned UUID>" }
 { "operation": "cancel", "runId": "<returned UUID>" }
 ```
 
-Start returns promptly. Status and cancellation are session-scoped. Cancellation
-is asynchronous: poll status until it is terminal. For supervised long work use
-the existing version-2 wait lease with `processResultAvailable`/`processExited`;
-completion publishes a host process observation without enabling Autopilot or
-clearing attention. If the run completes before a lease is registered, status
-already contains the result; do not assume a future wake is still needed.
+Status and cancellation are session-scoped. Cancellation is asynchronous; inspect
+status until terminal. For supervised long work use the version-2 wait lease with
+`processResultAvailable` and `processExited`. Completion publishes a host process
+observation without enabling Autopilot or clearing attention. Check status for
+completion-before-lease races rather than assuming a future wake is needed.
 
-The runner permits two concurrent repositories and one run per repository. It
-caps runtime at one hour and each log at 16 MiB. Session closure and host shutdown
-cancel owned jobs. A guardian lifetime pipe also tears down the owned process
-group when Mobile dies; deliberate descendants that escape the group are outside
-this lifecycle guarantee. This process ownership mechanism is not an OS sandbox.
+## Ownership and evidence
 
-## Evidence and limitations
+The runner allows two concurrent repositories and one run per repository. Runtime
+is capped at one hour and output at 16 MiB. Session closure and host shutdown
+cancel owned jobs. A guardian lifetime pipe tears down the owned process group
+when Mobile dies; descendants deliberately escaping the group are outside this
+guarantee. This process ownership mechanism is not an OS sandbox.
 
-Private artifacts live under the relay data directory's `host-test-runs/<runId>`:
+The runner forwards only PATH, HOME, USER, LOGNAME, LANG, LC_ALL, TZ and TMPDIR,
+plus CI=1 and NO_COLOR=1. It does not forward provider credentials or relay control
+tokens. Configuration can select any executable and argv, so a test name or
+environment filtering is not a security boundary.
 
-- `invocation.json`: configured command/arguments, repository, candidate,
-  limits and runtime identity.
-- `output.log`: bounded stdout/stderr, never included in the tool response or
-  relay event log. Test output may contain sensitive data; access and share it
-  accordingly.
-- `result.json`: state, exit code/signal, candidate digests, optional TAP counts,
-  log digest and UTC timestamps.
+Private artifacts live in the relay data directory's `host-test-runs/<runId>`:
 
-`processExitedAt` is when the host receives the guardian's test-exit observation;
-it is not an upstream timestamp or an exact kernel exit time. `observedAt` is the
-final result observation after cleanup and candidate verification. A successful
-status is published only after that result is written. Restart converts retained
-running records to `interrupted`, never success, and never signals persisted PIDs.
-The runner stops accepting new jobs at 1,000 retained results; archive evidence
-while the host is stopped rather than deleting artifacts during review.
+- `invocation.json`: resolved command, argv, repository, fingerprint, limits and runtime.
+- `output.log`: bounded stdout/stderr, excluded from tool responses and event logs.
+- `result.json`: terminal state, exit code/signal, initial/final fingerprints,
+  optional TAP counts, log digest and UTC observations.
 
-Candidate version 1 binds HEAD, branch, index, and Git-visible tracked/untracked
-file contents and modes. Submodules and escaping symlinks are rejected. Ignored
-dependencies, environment, toolchain contents, and external services are **not**
-covered. The live checkout is checked before and after execution, not snapshotted:
-keep the writer idle until completion. Changes detected afterward produce
-`invalidated`, even when the test exits zero; edits reverted during a run cannot
-be detected by this two-point check.
+Evidence must stay outside the **session workspace** and any additional
+agent-writable roots. Mobile can browse `$HOME` while sessions use project
+directories beneath it. If a session itself contains the evidence directory,
+requests return `evidenceInsideWorkspace`; choose a narrower session workspace or
+an external private `--data-dir`. Status/cancel for existing runs remain usable.
+The host enforces private evidence-directory and file permissions.
 
-`passed` means the configured command exited zero and its candidate stayed the
-same. It does not accept an Org milestone. TAP counts are reported only when a
-small complete output has one consistent summary; other formats and mixed output
-return `counts: null`. Review logs for actual test identities, skips, and coverage.
-Timeout, cancellation, output overflow, and interrupted evidence are never passes.
-The runner does not automatically install dependencies, update browsers, commit,
-or change plan state. Installing this new host version and explicitly configuring
-it are required before an existing session can use the API.
+`processExitedAt` records host receipt of the guardian's exit observation, not an
+upstream timestamp or exact kernel exit time. `observedAt` is the final observation
+after cleanup and source verification. Restart marks abandoned runs `interrupted`,
+never successful, and never signals stored PIDs. Archive evidence while the host
+is stopped after 1,000 retained results.
+
+Fingerprints automatically bind HEAD, branch, index, Git-visible tracked/untracked
+file contents and modes. `/usr/bin/git` is required. Submodules and escaping source
+symlinks are unsupported. Ignored dependencies, environment, toolchains and external
+services are not covered. Before/after checks are not snapshots and cannot detect
+edits reverted during execution. Detected source changes produce `invalidated`
+even when the command exits zero.
+
+`passed` means the command exited zero and its source fingerprint stayed unchanged;
+it does not accept an Org milestone. Mixed, large, or unsupported reporter output
+returns `counts: null`; inspect logs for test identities, skips and coverage.
+Timeout, cancellation, overflow and interrupted evidence never count as passes.
+The runner does not install dependencies, update browsers, commit, or change plans.
+Deploy this host version and restart before relying on the new behavior; source
+implementation alone does not activate an already running host.

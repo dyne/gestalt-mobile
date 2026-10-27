@@ -623,11 +623,12 @@ when configuring GitHub, rotating credentials, or recovering a partial release.
 
 ## Host-owned test suites
 
-The optional `--test-runner-config` enables a supervisor API for tests that must
-run outside an agent's shell sandbox. See [host test runner](docs/host-tests.md)
-for explicit candidate authorization, start/status/cancel calls, evidence, and
-the execution boundary. It is disabled by default and does not change Serena
-or shell sandbox permissions.
+The host test runner is enabled by default. Root supervisors configure suites at
+runtime in the session workspace's `.gestalt/host-tests.json` and run them as the
+host user, outside the agent shell sandbox, without fingerprint approval or a
+restart. See [host test runner](docs/host-tests.md) for configuration, calls,
+evidence and the execution boundary. Use `--disable-test-runner` to turn it off.
+Serena's own sandbox checks remain in place.
 
 ## Copyright and license
 

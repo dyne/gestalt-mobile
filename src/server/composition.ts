@@ -17,7 +17,7 @@ import { SqliteTransportDiagnostics } from './platform/persistence/sqlite-transp
 import { buildApp } from './app.js';
 import { ManagedUpgrade } from './platform/maintenance/managed-upgrade.js';
 import { LocalHostTestRunner } from './platform/host-tests/runner.js';
-import { loadHostTestConfig, within } from './platform/host-tests/config.js';
+import { loadWorkspaceHostTestConfig, within } from './platform/host-tests/config.js';
 import { handleHostTestTool } from './features/host-tests/application/handle-tool.js';
 import { gestaltTestRunnerDynamicTool } from '../shared/contracts/host-tests.js';
 import { SelfDebugWorkspace } from './platform/self-debug/workspace.js';
@@ -171,7 +171,7 @@ export type ComposeRelayAppOptions = {
   passkeyAuthEnabled?: boolean;
   staticDir?: string;
   pwaIcon?: PwaIcon;
-  testRunnerConfig?: string;
+  testRunnerEnabled?: boolean;
   profiles: ProfileCatalog;
   installedCodexVersion: string | null;
   installedKimiVersion?: string | null;
@@ -241,9 +241,6 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   if (ownerHandle && ownerHandle.length !== 32)
     throw new Error('Authorization randomness must return exactly 32 bytes');
   const root = resolve(options.root);
-  const hostTestSuites = options.testRunnerConfig
-    ? await loadHostTestConfig(options.testRunnerConfig, root)
-    : undefined;
   let hostTests: LocalHostTestRunner | undefined;
   const databasePath = options.dataDir
     ? join(resolve(options.dataDir), 'relay.sqlite')
@@ -1933,14 +1930,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   }
   let app;
   try {
-    if (hostTestSuites) {
-      if (within(await realpath(root), await realpath(dirname(databasePath)))) {
-        throw new Error(
-          'Host test evidence must be outside the agent workspace; choose a private --data-dir',
-        );
-      }
+    if (options.testRunnerEnabled !== false) {
       hostTests = new LocalHostTestRunner(
-        hostTestSuites,
         join(dirname(databasePath), 'host-test-runs'),
         (sessionId, runId, observedAt) => {
           if (!sessions.find(sessionId)) return;
@@ -1948,6 +1939,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             journal.append(sessionId, 'host-test.completed', { runId, observedAt }, observedAt),
           );
           autopilot.rootProcessCompleted(sessionId, runId);
+        },
+        async (workspace) => {
+          if (!within(await realpath(root), await realpath(workspace)))
+            throw new Error('Host test workspace is outside the configured root');
+          return loadWorkspaceHostTestConfig(workspace);
         },
       );
       await hostTests.initialize();
