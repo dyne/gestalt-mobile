@@ -621,6 +621,14 @@ browser command while lane separation is introduced; no assertions are removed.
 Maintainers should follow the [npm release operations guide](docs/releasing.md)
 when configuring GitHub, rotating credentials, or recovering a partial release.
 
+## Host-owned test suites
+
+The optional `--test-runner-config` enables a supervisor API for tests that must
+run outside an agent's shell sandbox. See [host test runner](docs/host-tests.md)
+for explicit candidate authorization, start/status/cancel calls, evidence, and
+the execution boundary. It is disabled by default and does not change Serena
+or shell sandbox permissions.
+
 ## Copyright and license
 
 Copyright (C) 2026 Dyne.org foundation

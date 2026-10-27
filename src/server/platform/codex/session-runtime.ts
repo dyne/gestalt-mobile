@@ -30,6 +30,7 @@ import { gestaltQuizDynamicTool } from '../../../shared/contracts/quiz.js';
 import { gestaltOrgPlanAttentionDynamicTool } from '../../../shared/contracts/org-plan-attention.js';
 import { gestaltOrgPlanCheckpointDynamicTool } from '../../../shared/contracts/org-plan-checkpoint.js';
 import { gestaltOrgPlanHealthDynamicTool } from '../../../shared/contracts/org-plan-health.js';
+import { gestaltTestRunnerDynamicTool } from '../../../shared/contracts/host-tests.js';
 import { gestaltAutopilotWaitLeaseDynamicTool } from '../../../shared/contracts/autopilot-wait-lease.js';
 import { gestaltAgentCapacityRecoveryDynamicTool } from '../../../shared/contracts/agent-capacity-recovery.js';
 import { countDiffLines } from '../../../shared/contracts/file-change.js';
@@ -1231,6 +1232,7 @@ export class CodexSessionRuntime {
             gestaltOrgPlanAttentionDynamicTool,
             gestaltOrgPlanCheckpointDynamicTool,
             gestaltOrgPlanHealthDynamicTool,
+            gestaltTestRunnerDynamicTool,
             gestaltAutopilotWaitLeaseDynamicTool,
             gestaltAgentCapacityRecoveryDynamicTool,
           ],
@@ -1358,6 +1360,7 @@ export class CodexSessionRuntime {
         gestaltOrgPlanAttentionDynamicTool,
         gestaltOrgPlanCheckpointDynamicTool,
         gestaltOrgPlanHealthDynamicTool,
+        gestaltTestRunnerDynamicTool,
         gestaltAutopilotWaitLeaseDynamicTool,
         gestaltAgentCapacityRecoveryDynamicTool,
       ],
