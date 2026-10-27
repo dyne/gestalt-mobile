@@ -20,8 +20,8 @@ export type RelayConfig = {
   skillsProfile?: string;
   /** Optional PWA install icon, resolved from the invoking directory. */
   iconPath?: string;
-  /** Operator-owned test suite authority, loaded once by the host. */
-  testRunnerConfig?: string;
+  /** Host tests use runtime workspace configuration unless explicitly disabled. */
+  testRunnerEnabled?: boolean;
 };
 
 export type RelyingPartyConfig = Readonly<{
@@ -45,9 +45,8 @@ const optionNames = new Set([
   '--skills',
   '--icon',
   '--xerj',
-  '--test-runner-config',
 ]);
-const flagNames = new Set(['--disable-passkey-auth']);
+const flagNames = new Set(['--disable-passkey-auth', '--disable-test-runner']);
 
 export function parseConfig(args: string[], cwd = process.cwd()): RelayConfig {
   const values = new Map<string, string>();
@@ -95,9 +94,7 @@ export function parseConfig(args: string[], cwd = process.cwd()): RelayConfig {
     dataDir: values.get('--data-dir'),
     skillsProfile: values.get('--skills'),
     iconPath: values.has('--icon') ? resolveIconPath(cwd, values.get('--icon')!) : undefined,
-    testRunnerConfig: values.has('--test-runner-config')
-      ? resolve(cwd, values.get('--test-runner-config')!)
-      : undefined,
+    testRunnerEnabled: !flags.has('--disable-test-runner'),
   };
 }
 
