@@ -77,7 +77,11 @@ export type AvailableSkill = z.infer<typeof availableSkillSchema>;
 export type SkillDiscoveryError = { message: string };
 export type SkillCatalogResult = { skills: AvailableSkill[]; errors: SkillDiscoveryError[] };
 
-/** Gestalt workflow skills are session infrastructure, not optional profile entries. */
+/**
+ * Keep Gestalt skills discoverable independently of optional profile entries.
+ * Advertising does not load instructions or restrict Org Plan declarations:
+ * executors load declared and other relevant skills on demand.
+ */
 export function isAlwaysAdvertisedSkill(skill: Pick<AvailableSkill, 'name' | 'enabled'>): boolean {
   return (
     isGestaltSkillName(skill.name) &&
