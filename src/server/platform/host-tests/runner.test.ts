@@ -95,6 +95,13 @@ describe('host-owned tests', () => {
     const f = await fixture();
     const run = (await f.start()) as HostTestResult;
     await vi.waitFor(() => expect(f.completed).toHaveBeenCalledOnce());
+    expect(f.runner.resultState(f.owner.sessionId, run.runId)).toBe('completed');
+    expect(f.runner.resultState('another-session', run.runId)).toBe('missing');
+    expect(f.runner.supervisionSummary(f.owner.sessionId)).toMatchObject({
+      running: 0,
+      unread: 1,
+      runs: [{ runId: run.runId, suite: 'full', state: 'passed' }],
+    });
     expect(f.runner.hasUnreadResult(f.owner.sessionId)).toBe(true);
     expect(f.runner.hasUnreadResult('another-session')).toBe(false);
     await f.runner.close();
@@ -119,6 +126,11 @@ describe('host-owned tests', () => {
       ),
     );
     expect(restarted.hasUnreadResult(f.owner.sessionId)).toBe(false);
+    expect(restarted.supervisionSummary(f.owner.sessionId)).toMatchObject({
+      running: 0,
+      unread: 0,
+      runs: [],
+    });
     const recovered = new LocalHostTestRunner(f.evidence);
     await recovered.initialize();
     cleanups.push(() => recovered.close());

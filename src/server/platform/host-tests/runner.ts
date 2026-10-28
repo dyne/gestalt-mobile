@@ -9,7 +9,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, openSync, writeSync } from 'node:fs';
 import { lstat, mkdir, readFile, readdir, realpath, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { HostTestRequest, HostTestResult } from '../../../shared/contracts/host-tests.js';
+import type {
+  HostTestRunnerRequest,
+  HostTestResult,
+} from '../../../shared/contracts/host-tests.js';
 import type { HostTestOwner, HostTestRunner } from '../../features/host-tests/application/ports.js';
 import { candidate } from './candidate.js';
 import { loadWorkspaceHostTestConfig, within, type HostTestSuite } from './config.js';
@@ -99,7 +102,7 @@ export class LocalHostTestRunner implements HostTestRunner {
     }
   }
 
-  async request(owner: HostTestOwner, input: HostTestRequest): Promise<unknown> {
+  async request(owner: HostTestOwner, input: HostTestRunnerRequest): Promise<unknown> {
     const generation = this.sessionGenerations.get(owner.sessionId) ?? 0;
     if (input.operation !== 'start') return this.dispatch(owner, input, generation);
     const key = owner.sessionId + ':' + input.requestId;
@@ -119,7 +122,7 @@ export class LocalHostTestRunner implements HostTestRunner {
 
   private async dispatch(
     owner: HostTestOwner,
-    input: HostTestRequest,
+    input: HostTestRunnerRequest,
     generation: number,
   ): Promise<unknown> {
     if (input.operation === 'status' || input.operation === 'cancel') {
@@ -357,6 +360,38 @@ export class LocalHostTestRunner implements HostTestRunner {
       (result) =>
         result.sessionId === sessionId && result.state !== 'running' && !result.resultReadAt,
     );
+  }
+
+  resultState(sessionId: string, runId: string): 'running' | 'completed' | 'missing' {
+    const result = this.results.get(runId);
+    return !result || result.sessionId !== sessionId
+      ? 'missing'
+      : result.state === 'running'
+        ? 'running'
+        : 'completed';
+  }
+
+  supervisionSummary(sessionId: string) {
+    const results = [...this.results.values()].filter((result) => result.sessionId === sessionId);
+    const pending = results
+      .filter((result) => result.state === 'running' || !result.resultReadAt)
+      .sort(
+        (a, b) =>
+          Number(b.state === 'running') - Number(a.state === 'running') ||
+          b.startedAt.localeCompare(a.startedAt) ||
+          a.runId.localeCompare(b.runId),
+      );
+    return {
+      enabled: true,
+      running: results.filter((result) => result.state === 'running').length,
+      unread: results.filter((result) => result.state !== 'running' && !result.resultReadAt).length,
+      runs: pending.slice(0, 8).map((result) => ({
+        runId: result.runId,
+        suite: result.suite,
+        state: result.state,
+      })),
+      omitted: Math.max(0, pending.length - 8),
+    };
   }
 
   private async readResult(result: HostTestResult): Promise<HostTestResult> {

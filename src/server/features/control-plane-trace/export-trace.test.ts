@@ -26,6 +26,17 @@ afterEach(async () =>
 );
 
 describe('control-plane trace export', () => {
+  it('retains a run-scoped wait identity while excluding execution output', () => {
+    expect(
+      redactDiagnosticPayload({
+        runId: '00000000-0000-4000-8000-000000000001',
+        output: 'private execution output',
+        prompt: 'private input',
+      }),
+    ).toEqual({
+      runId: '00000000-0000-4000-8000-000000000001',
+    });
+  });
   it('sanitizes startup metadata on persistence and export and rejects mismatched runtime correlation', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-startup-trace-'));
     directories.push(directory);
