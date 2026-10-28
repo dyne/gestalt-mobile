@@ -85,7 +85,8 @@ export type SkillCatalogResult = { skills: AvailableSkill[]; errors: SkillDiscov
 export function isAlwaysAdvertisedSkill(skill: Pick<AvailableSkill, 'name' | 'enabled'>): boolean {
   return (
     isGestaltSkillName(skill.name) &&
-    (!['gestalt:xerj', 'gestalt:serena'].includes(skill.name) || skill.enabled)
+    (!['gestalt:xerj', 'gestalt:serena', 'gestalt:playwright'].includes(skill.name) ||
+      skill.enabled)
   );
 }
 
@@ -230,7 +231,7 @@ export function applySkillSelectionSnapshot(
   );
   return catalog.map((skill) => ({
     ...skill,
-    enabled: ['gestalt:xerj', 'gestalt:serena'].includes(skill.name)
+    enabled: ['gestalt:xerj', 'gestalt:serena', 'gestalt:playwright'].includes(skill.name)
       ? skill.enabled
       : isAlwaysAdvertisedSkill(skill)
         ? true

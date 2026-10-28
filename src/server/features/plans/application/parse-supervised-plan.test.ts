@@ -65,6 +65,35 @@ function parse(source = plan()) {
 }
 
 describe('parseSupervisedPlan', () => {
+  it('retains only the supported optional top-level Managed MCP requirement', () => {
+    const source = plan().replace(
+      '- Notes :: Keep values immutable.',
+      '- Notes :: Keep values immutable.\n- Managed MCP :: playwright',
+    );
+    const result = parse(source);
+    expect(result.kind).toBe('available');
+    if (result.kind === 'available')
+      expect(result.plan.steps[0]?.managedMcp).toEqual(['playwright']);
+    expect(parse(source.replace('Managed MCP :: playwright', 'Managed MCP :: unknown')).kind).toBe(
+      'unavailable',
+    );
+    expect(
+      parse(
+        source.replace(
+          'Managed MCP :: playwright',
+          'Managed MCP :: playwright\n- Managed MCP :: playwright',
+        ),
+      ).kind,
+    ).toBe('unavailable');
+    expect(
+      parse(
+        plan().replace(
+          '- Why :: A relay needs a canonical pointer.',
+          '- Managed MCP :: playwright\n- Why :: A relay needs a canonical pointer.',
+        ),
+      ).kind,
+    ).toBe('unavailable');
+  });
   it('projects optional measurements and preserves unavailable quota values', () => {
     const result = parse(
       plan().replace(

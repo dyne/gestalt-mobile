@@ -162,10 +162,21 @@ configuration or skill files. Exact skill paths remain authoritative, while
 paths inside Codex's versioned plugin cache are rebound to the currently
 discovered plugin version when their marketplace, plugin, and skill-relative
 path still match. Fixed Gestalt workflow skills are session infrastructure: Mobile
-always enables and advertises them, including skills
+always enables and advertises its workflow skills, including skills
 added after a profile was saved. The editor labels them **Always advertised**
 and does not offer a disable control. Refresh discovery and start a new session
 after upgrading Gestalt Agents; running sessions retain their startup catalog.
+
+Browser access is a separate, explicit profile choice. The profile editor's
+**Browser access (Playwright)** control permits the host to activate a managed
+browser when the root supervisor or current Org milestone requests it; enabling
+the control leaves an idle session idle. Existing version-1 profiles remain off.
+New saved sessions retain their validated capability snapshot, including on
+resume; changing an ambient profile does not silently change existing consent.
+`gestalt:playwright` is conditional and appears only with verified connected
+browser tools. Kimi cannot activate it. See [Managed browser access](docs/managed-playwright.md)
+for installation, the distinct CLI profile format, controls, permissions,
+workspace state, supported runtime boundaries, and component compatibility.
 
 `gestalt:xerj` is conditional retrieval infrastructure. For Codex, Mobile checks
 the manager's shared readiness contract and the owning thread's native MCP

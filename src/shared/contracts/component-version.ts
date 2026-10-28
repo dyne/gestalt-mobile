@@ -13,6 +13,7 @@ export type ComponentVersion = Readonly<{
     | 'codex'
     | 'xerj'
     | 'serena'
+    | 'playwright'
     | 'uv'
     | 'serena-python';
   label: string;

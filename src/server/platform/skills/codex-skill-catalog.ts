@@ -101,7 +101,7 @@ export class CodexSkillCatalog implements SkillCatalog {
         const stable = availableSkillSchema.safeParse(skill);
         if (!stable.success)
           throw new SkillProfileError('INVALID_SKILL_DISCOVERY', 'Invalid Codex skill metadata.');
-        return stable.data.name === 'gestalt:xerj'
+        return ['gestalt:xerj', 'gestalt:playwright'].includes(stable.data.name)
           ? { ...stable.data, enabled: false }
           : stable.data;
       });

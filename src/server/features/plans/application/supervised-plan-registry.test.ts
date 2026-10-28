@@ -70,6 +70,8 @@ it('latches mandatory-policy failures independently per session until a validate
     modelPolicyRequired: true,
   });
   expect(registry.find('a')).toEqual(update.plan);
+  expect(registry.findCurrent('a')).toBeNull();
+  expect(registry.findCurrent('b')).toEqual(update.plan);
   expect(registry.modelPolicyStatus('a')).toBe('unavailable');
   expect(registry.modelPolicyStatus('b')).toBe('legacy');
   registry.accept('a', { kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' });
@@ -79,7 +81,25 @@ it('latches mandatory-policy failures independently per session until a validate
   registry.accept('a', { kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' });
   expect(registry.modelPolicyStatus('a')).toBe('unavailable');
   registry.accept('a', update);
+  expect(registry.findCurrent('a')).toEqual(update.plan);
   expect(registry.modelPolicyStatus('a')).toBe('legacy');
   registry.clear('a');
   expect(registry.modelPolicyStatus('a')).toBe('legacy');
+});
+
+it('does not let an invalid legacy publication retain capability authority', () => {
+  const registry = new SupervisedPlanRegistry();
+  const update = {
+    kind: 'updated' as const,
+    plan: plan('UNREVIEWED'),
+    identity: 'p',
+    planPath: '/work/plan.org',
+    reason: 'resync' as const,
+  };
+  registry.accept('a', update);
+  registry.accept('a', { kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' });
+  expect(registry.find('a')).toEqual(update.plan);
+  expect(registry.findCurrent('a')).toBeNull();
+  registry.accept('a', update);
+  expect(registry.findCurrent('a')).toEqual(update.plan);
 });

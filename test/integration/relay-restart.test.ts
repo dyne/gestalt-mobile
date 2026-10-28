@@ -312,6 +312,14 @@ test('uses the original snapshot only when a detached session sends after profil
       { path: '/skills/new/SKILL.md', enabled: false },
       { name: 'gestalt:xerj', enabled: false },
       { name: 'gestalt:serena', enabled: false },
+      { name: 'gestalt:playwright', enabled: false },
     ]);
+  expect(
+    (
+      requests.find((request) => request.method === 'thread/resume')?.params as {
+        config?: { mcp_servers?: Record<string, { enabled?: boolean }> };
+      }
+    )?.config?.mcp_servers?.['gestalt-playwright']?.enabled,
+  ).toBe(false);
   await second.close();
 });

@@ -62,6 +62,7 @@ export type PlanStep = Readonly<{
   priority: PlanPriority;
   reviewStatus?: PlanReviewStatus;
   skills?: readonly string[];
+  managedMcp?: readonly ['playwright'];
   description: PlanStepDescription;
   measurement?: PlanStepMeasurement;
   modelPolicy?: PlanModelPolicy;
