@@ -6,6 +6,7 @@
 
 import type { DatabaseSync } from 'node:sqlite';
 import type { TransportDiagnostic } from '../../../shared/contracts/chat-transport-diagnostics.js';
+import { closedSessionIds } from './retention.js';
 
 export const transportLimit = 2048;
 export const transportRetentionMs = 48 * 60 * 60 * 1000;
@@ -25,7 +26,7 @@ export class SqliteTransportDiagnostics {
         .run(sessionId, now, JSON.stringify(fields));
       this.database
         .prepare(
-          'DELETE FROM chat_transport_diagnostics WHERE occurred_at < ? OR id <= COALESCE((SELECT id FROM chat_transport_diagnostics ORDER BY id DESC LIMIT 1 OFFSET ?), 0)',
+          `DELETE FROM chat_transport_diagnostics WHERE session_id IN (${closedSessionIds}) AND (occurred_at < ? OR id <= COALESCE((SELECT id FROM chat_transport_diagnostics WHERE session_id IN (${closedSessionIds}) ORDER BY id DESC LIMIT 1 OFFSET ?), 0))`,
         )
         .run(now - transportRetentionMs, transportLimit);
     } catch {
@@ -49,7 +50,7 @@ export function readTransportDiagnostics(
   const rows = available
     ? database
         .prepare(
-          'SELECT id, occurred_at AS occurredAt, metadata_json FROM chat_transport_diagnostics WHERE session_id = ? AND occurred_at >= ? ORDER BY id DESC LIMIT ?',
+          `SELECT id, occurred_at AS occurredAt, metadata_json FROM chat_transport_diagnostics WHERE session_id = ? AND (session_id NOT IN (${closedSessionIds}) OR occurred_at >= ?) ORDER BY id DESC LIMIT ?`,
         )
         .all(sessionId, now - transportRetentionMs, transportLimit)
         .reverse()
@@ -57,7 +58,8 @@ export function readTransportDiagnostics(
   return {
     available,
     coverage: 'retained-only' as const,
-    globalRecordLimit: transportLimit,
+    closedSessionRecordLimit: transportLimit,
+    exportRecordLimit: transportLimit,
     retentionMs: transportRetentionMs,
     records: rows.flatMap((row) => {
       try {

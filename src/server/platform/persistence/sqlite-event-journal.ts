@@ -8,7 +8,7 @@ import type { DatabaseSync } from 'node:sqlite';
 
 import type { SessionEvent } from '../../../shared/contracts/session-event.js';
 import { boundedAttentionReport } from '../../../shared/contracts/attention-report.js';
-import { eventRetentionCutoff } from './retention.js';
+import { closedSessionIds, eventRetentionCutoff } from './retention.js';
 import { replayOrResync, type SessionReplay } from '../events/replay.js';
 import {
   mcpStartupActivity,
@@ -117,7 +117,7 @@ export class SqliteEventJournal {
       if (this.retain !== undefined) {
         this.db
           .prepare(
-            'DELETE FROM session_events WHERE session_id = ? AND sequence NOT IN (SELECT sequence FROM session_events WHERE session_id = ? ORDER BY sequence DESC LIMIT ?)',
+            `DELETE FROM session_events WHERE session_id = ? AND session_id IN (${closedSessionIds}) AND sequence NOT IN (SELECT sequence FROM session_events WHERE session_id = ? ORDER BY sequence DESC LIMIT ?)`,
           )
           .run(sessionId, sessionId, this.retain);
       } else {
@@ -125,9 +125,9 @@ export class SqliteEventJournal {
         if (cutoff)
           this.db
             .prepare(
-              'DELETE FROM session_events WHERE session_id = ? AND julianday(occurred_at) < julianday(?)',
+              `DELETE FROM session_events WHERE session_id IN (${closedSessionIds}) AND julianday(occurred_at) < julianday(?)`,
             )
-            .run(sessionId, cutoff);
+            .run(cutoff);
       }
       const event = { sessionId, sequence: row.sequence, type, occurredAt, payload };
       this.db.exec('COMMIT');

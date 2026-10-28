@@ -59,6 +59,7 @@ it('persists call replacement and deduplication independently of journal retenti
     const loaded = new ToolEfficiencyProjection(new SqliteToolEfficiencyStore(db));
     expect(loaded.snapshot('s')).toEqual(expected);
     expect(loaded.observe(completed)).toBeNull();
+    db.exec("UPDATE relay_sessions SET state='stopped',desired_state='stopped' WHERE id='s'");
     for (let n = 0; n < 5; n++) journal.append('s', 'irrelevant', {}, '2026-10-26T18:50:00Z');
     expect(journal.replay('s', 0).kind).toBe('resync');
     expect(
