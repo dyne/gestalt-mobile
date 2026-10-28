@@ -23,6 +23,43 @@ import {
   type SupervisionProtocolState,
 } from './supervision-protocol.js';
 
+it('validates run-scoped durable leases and consumes only a matching process event', () => {
+  const runId = '00000000-0000-4000-8000-000000000001';
+  const base = startSupervisionProtocol('initial');
+  const report = {
+    id: 'report',
+    leaseId: 'lease',
+    runId,
+    wakeConditions: ['processResultAvailable'] as const,
+    resumeAt: '2026-10-28T01:00:00Z',
+  };
+  const parked = registerProactiveWait(base, report);
+  expect(parseSupervisionProtocolState(parked)?.waitLease?.runId).toBe(runId);
+  expect(registerProactiveWait(base, { ...report, runId: 'not-a-run' })).toBe(base);
+  expect(
+    parseSupervisionProtocolState({
+      ...parked,
+      waitLease: { ...parked.waitLease, runId: 'invalid' },
+    }),
+  ).toBeUndefined();
+  expect(
+    parseSupervisionProtocolState({
+      ...parked,
+      waitLease: { ...parked.waitLease, wakeConditions: ['agentActivityChanged'] },
+    }),
+  ).toBeUndefined();
+  const event = {
+    leaseId: 'lease',
+    condition: 'processResultAvailable' as const,
+    progressKey: 'changed',
+  };
+  expect(consumeObservableWake(parked, event)).toBe(parked);
+  expect(
+    consumeObservableWake(parked, { ...event, runId: '00000000-0000-4000-8000-000000000002' }),
+  ).toBe(parked);
+  expect(consumeObservableWake(parked, { ...event, runId }).waitLease).toBeNull();
+});
+
 const facts = (change: Partial<SemanticProgressFacts> = {}): SemanticProgressFacts => ({
   plan: { identity: 'plan-a', fingerprint: 'fingerprint-1', currentPosition: 'L1.1' },
   review: { status: 'UNREVIEWED' },

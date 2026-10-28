@@ -149,7 +149,14 @@ import {
   type AutopilotWaitLease,
 } from '../shared/contracts/autopilot-wait-lease.js';
 import { agentCapacityRecoveryToolResponse } from '../shared/contracts/agent-capacity-recovery.js';
-import { isOrgPlanHealthCall } from '../shared/contracts/org-plan-health.js';
+import {
+  isOrgPlanHealthCall,
+  parseOrgPlanHealthArguments,
+} from '../shared/contracts/org-plan-health.js';
+import {
+  compactSupervisionSnapshot,
+  SupervisionSnapshots,
+} from './features/autopilot/application/supervision-snapshot.js';
 import { ExecutorModelEvidenceReader } from './features/plans/application/executor-model-evidence.js';
 import { ExecutorLaunchValidationReader } from './features/plans/application/executor-launch-validation.js';
 import { requireModelPolicyAdmission } from './features/plans/domain/model-policy-admission.js';
@@ -242,6 +249,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     throw new Error('Authorization randomness must return exactly 32 bytes');
   const root = resolve(options.root);
   let hostTests: LocalHostTestRunner | undefined;
+  const supervisionSnapshots = new SupervisionSnapshots();
   const databasePath = options.dataDir
     ? join(resolve(options.dataDir), 'relay.sqlite')
     : resolveStateDatabasePath(
@@ -449,6 +457,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   );
   const autopilot = new AutopilotCoordinator({
     pendingProcessResult: (sessionId) => hostTests?.hasUnreadResult(sessionId) ?? false,
+    processResultState: (sessionId, runId) => hostTests?.resultState(sessionId, runId) ?? 'missing',
     modelPolicyStatus: (sessionId) => supervisedPlans.modelPolicyStatus(sessionId),
     store: autopilotStore,
     now: () => new Date().toISOString(),
@@ -1289,6 +1298,26 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 workspace: session.workspacePath,
                 root: origin?.kind === 'root',
                 provider: session.provider,
+                waitForRun: (runId, maxWaitMs) => {
+                  const current = sessions.find(sessionId);
+                  if (
+                    origin?.kind !== 'root' ||
+                    !current?.activeTurnId ||
+                    origin.physicalTurnId !== current.activeTurnId
+                  )
+                    return false;
+                  const state = autopilotStore.find(sessionId);
+                  if (!state?.requestedEnabled) return false;
+                  const leaseId = `host-test:${runId}:${current.activeTurnId}`;
+                  if (state.supervision?.waitLease?.id === leaseId) return true;
+                  return autopilot.registerProactiveWait(sessionId, {
+                    id: leaseId,
+                    leaseId,
+                    runId,
+                    maxWaitMs,
+                    wakeConditions: ['processResultAvailable'],
+                  });
+                },
               },
               toolCall.arguments,
             );
@@ -1349,27 +1378,57 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                   };
               }
             }
-            const modelPolicy = await executorModelEvidence.read(sessionId);
-            const executorLaunch = await executorLaunchValidation.read(sessionId);
+            const [modelPolicy, executorLaunch] = await Promise.all([
+              executorModelEvidence.read(sessionId),
+              executorLaunchValidation.read(sessionId),
+            ]);
             const snapshot = autopilot.snapshot(sessionId);
+            const args = parseOrgPlanHealthArguments(toolCall?.arguments)!;
+            const healthReport =
+              args.view === 'compact'
+                ? supervisionSnapshots.read(
+                    sessionId,
+                    compactSupervisionSnapshot({
+                      autopilot: snapshot,
+                      plan: supervisedPlans.find(sessionId),
+                      planIdentity: supervisedPlans.identity(sessionId),
+                      activity: activity.snapshot(sessionId, new Date().toISOString()),
+                      pendingInteractions: blockingInteractions(sessionId).length,
+                      tests: hostTests?.supervisionSummary(sessionId) ?? {
+                        enabled: false,
+                        running: 0,
+                        unread: 0,
+                        omitted: 0,
+                        runs: [],
+                      },
+                      wait: autopilotStore.find(sessionId)?.supervision?.waitLease ?? null,
+                      binding: executorBinding
+                        ? { status: executorBinding.status, code: executorBinding.code }
+                        : null,
+                      modelPolicy,
+                      launch: executorLaunch,
+                    }),
+                    args.sinceRevision,
+                  )
+                : {
+                    state: snapshot.state,
+                    enabled: snapshot.enabled,
+                    health: snapshot.health,
+                    reason: snapshot.reason,
+                    ...(snapshot.executionAdmission
+                      ? { executionAdmission: snapshot.executionAdmission }
+                      : {}),
+                    ...(modelPolicy ? { modelPolicy } : {}),
+                    ...(executorLaunch ? { executorLaunch } : {}),
+                    ...(executorBinding ? { executorBinding } : {}),
+                  };
             return (
               runtime?.resolveServerRequest(sessionId, String(request.id), {
                 success: true,
                 contentItems: [
                   {
                     type: 'inputText',
-                    text: JSON.stringify({
-                      state: snapshot.state,
-                      enabled: snapshot.enabled,
-                      health: snapshot.health,
-                      reason: snapshot.reason,
-                      ...(snapshot.executionAdmission
-                        ? { executionAdmission: snapshot.executionAdmission }
-                        : {}),
-                      ...(modelPolicy ? { modelPolicy } : {}),
-                      ...(executorLaunch ? { executorLaunch } : {}),
-                      ...(executorBinding ? { executorBinding } : {}),
-                    }),
+                    text: JSON.stringify(healthReport),
                   },
                 ],
               }) === true

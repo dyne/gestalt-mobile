@@ -481,6 +481,159 @@ async function createUnauthorizedProductionApp(root: string, dataDir: string) {
 
 describe('production composition', () => {
   describeCompositionConcern('autopilot', () => {
+    it('serves compact supervision deltas and wakes only for the selected host run', async () => {
+      let coordinator: import('./features/autopilot/application/service.js').AutopilotCoordinator;
+      const f = await createProductionAutopilotFixture({
+        autopilotSchedule: () => () => {},
+        onAutopilotCoordinator: (value) => {
+          coordinator = value;
+        },
+      });
+      onTestFinished(() => f.app.close());
+      const exec = promisify(execFile);
+      await exec('git', ['init', '-q', f.workspacePath]);
+      await exec(
+        'git',
+        [
+          '-c',
+          'user.name=Fixture',
+          '-c',
+          'user.email=fixture@example.invalid',
+          'commit',
+          '--allow-empty',
+          '-qm',
+          'fixture',
+        ],
+        { cwd: f.workspacePath },
+      );
+      const marker = join(f.dataDir, 'release-test');
+      await mkdir(join(f.workspacePath, '.gestalt'), { recursive: true });
+      await writeFile(
+        join(f.workspacePath, '.gestalt/host-tests.json'),
+        JSON.stringify({
+          version: 1,
+          suites: [
+            {
+              id: 'controlled',
+              repository: f.workspacePath,
+              command: process.execPath,
+              args: [
+                '-e',
+                "setInterval(()=>{if(require('node:fs').existsSync(process.argv[1]))process.exit(0)},20)",
+                marker,
+              ],
+              timeoutMs: 10_000,
+              maxOutputBytes: 4096,
+            },
+          ],
+        }),
+      );
+      expect(
+        (
+          await f.app.inject({
+            method: 'POST',
+            url: `/api/sessions/${f.sessionId}/turns`,
+            payload: { text: 'Synthetic run wait fixture' },
+          })
+        ).statusCode,
+      ).toBe(202);
+      const session = (await f.app.inject(`/api/sessions/${f.sessionId}`)).json();
+      const handle = f.handles.find((value) => value.calls.includes('turn/start'))!;
+      let requestId = 5000;
+      const call = async (tool: string, args: unknown) => {
+        const response = (await handle.request!({
+          id: ++requestId,
+          method: 'item/tool/call',
+          params: {
+            threadId: session.threadId,
+            turnId: session.activeTurnId,
+            tool,
+            arguments: args,
+          },
+        })) as { contentItems: Array<{ text: string }> };
+        return JSON.parse(response.contentItems[0]!.text);
+      };
+      const initial = await call('gestalt_org_plan_health', { view: 'compact' });
+      expect(initial.snapshot).toMatchObject({
+        plan: { l1: { id: 'parent' } },
+        tests: { running: 0, unread: 0 },
+        control: { enabled: true },
+      });
+      expect(Buffer.byteLength(JSON.stringify(initial))).toBeLessThan(2500);
+      const unchanged = await call('gestalt_org_plan_health', {
+        view: 'compact',
+        sinceRevision: initial.revision,
+      });
+      expect(unchanged).toEqual({ revision: initial.revision, unchanged: true });
+      expect(Buffer.byteLength(JSON.stringify(unchanged))).toBeLessThan(120);
+      expect(await call('gestalt_org_plan_health', {})).toMatchObject({
+        enabled: true,
+        health: expect.any(Object),
+      });
+      const run = await call('gestalt_test_runner', {
+        operation: 'start',
+        suite: 'controlled',
+        requestId: '00000000-0000-4000-8000-000000000002',
+      });
+      expect(run.state).toBe('running');
+      const changed = await call('gestalt_org_plan_health', {
+        view: 'compact',
+        sinceRevision: initial.revision,
+      });
+      expect(changed.changes.tests).toMatchObject({
+        running: 1,
+        runs: [{ runId: run.runId, state: 'running' }],
+      });
+      expect(changed.snapshot).toBeUndefined();
+      expect(
+        await call('gestalt_test_runner', {
+          operation: 'wait',
+          runId: run.runId,
+          maxWaitMs: 60_000,
+        }),
+      ).toEqual({ accepted: true, runId: run.runId });
+      // A retried request must not register another lease or reset its deadline.
+      expect(
+        await call('gestalt_test_runner', {
+          operation: 'wait',
+          runId: run.runId,
+          maxWaitMs: 60_000,
+        }),
+      ).toEqual({ accepted: true, runId: run.runId });
+      expect(coordinator!.rootProcessCompleted(f.sessionId, 'another-run')).toBe(false);
+      expect(coordinator!.semanticEvent(f.sessionId, 'processResultAvailable')).toBe(false);
+      const parked = await call('gestalt_org_plan_health', {
+        view: 'compact',
+        sinceRevision: changed.revision,
+      });
+      expect(parked.changes.wait).toMatchObject({ runId: run.runId });
+      const database = new DatabaseSync(join(f.dataDir, 'relay.sqlite'));
+      onTestFinished(() => database.close());
+      const count = (type: string) =>
+        database
+          .prepare('SELECT COUNT(*) AS count FROM session_events WHERE session_id=? AND type=?')
+          .get(f.sessionId, type)?.count;
+      expect(count('autopilot.wait-registered')).toBe(1);
+      expect(count('autopilot.wait-woken')).toBe(0);
+      await writeFile(marker, 'done');
+      await vi.waitFor(() => expect(count('autopilot.wait-woken')).toBe(1), { timeout: 5000 });
+      expect(
+        await call('gestalt_test_runner', { operation: 'wait', runId: run.runId }),
+      ).toMatchObject({
+        accepted: false,
+        reason: 'runCompleted',
+        next: 'continueSameTurn',
+        result: { state: 'passed', exitCode: 0 },
+      });
+      expect(
+        await call('gestalt_test_runner', {
+          operation: 'wait',
+          runId: '00000000-0000-4000-8000-000000000099',
+        }),
+      ).toEqual({ error: 'runNotFound' });
+      expect(count('autopilot.wait-woken')).toBe(1);
+    });
+
     it('does not park after a host test completes before process-wait registration', async () => {
       let coordinator: import('./features/autopilot/application/service.js').AutopilotCoordinator;
       const f = await createProductionAutopilotFixture({

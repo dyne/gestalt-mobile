@@ -99,6 +99,7 @@ export type AutopilotDependencies = Readonly<{
   activity(sessionId: string): AgentActivitySnapshot | null;
   pendingInteraction(sessionId: string): boolean;
   pendingProcessResult?(sessionId: string): boolean;
+  processResultState?(sessionId: string, runId: string): 'running' | 'completed' | 'missing';
   attention?(sessionId: string): StructuredBlock | null;
   schedule(callback: () => void, delayMs: number): () => void;
   nextControlId(sessionId: string, generation: number): string;
@@ -477,6 +478,11 @@ export class AutopilotCoordinator {
       });
       if (state.supervision.waitLease && validated.health.wait.wakeCategories.length > 0) {
         this.parkedSubscriptions.set(sessionId, state.supervision.waitLease.id);
+        const runId = state.supervision.waitLease.runId;
+        if (runId && this.deps.processResultState?.(sessionId, runId) === 'completed') {
+          this.rootProcessCompleted(sessionId, runId);
+          return;
+        }
         if (state.supervision.waitLease.resumeAt)
           this.armWaitDeadline(
             sessionId,
@@ -569,6 +575,7 @@ export class AutopilotCoordinator {
     report: Readonly<{
       id: string;
       leaseId: string;
+      runId?: string;
       wakeConditions: readonly ObservableWakeCondition[];
       maxWaitMs: number;
     }>,
@@ -582,10 +589,22 @@ export class AutopilotCoordinator {
     )
       return false;
     const now = this.deps.now();
+    const runState = report.runId
+      ? this.deps.processResultState?.(sessionId, report.runId)
+      : undefined;
+    if (
+      report.runId &&
+      (!runState ||
+        runState === 'missing' ||
+        !report.wakeConditions.some((condition) =>
+          ['processExited', 'processResultAvailable'].includes(condition),
+        ))
+    )
+      return false;
     const processWakeSatisfied =
       report.wakeConditions.some((condition) =>
         ['processExited', 'processResultAvailable'].includes(condition),
-      ) && this.deps.pendingProcessResult?.(sessionId);
+      ) && (report.runId ? runState === 'completed' : this.deps.pendingProcessResult?.(sessionId));
     if (
       processWakeSatisfied ||
       this.executorWakeAlreadySatisfied(sessionId, state, report.wakeConditions)
@@ -726,6 +745,9 @@ export class AutopilotCoordinator {
               },
             }),
             leaseId: wake.leaseId,
+            ...(state.supervision.waitLease?.runId
+              ? { runId: state.supervision.waitLease.runId }
+              : {}),
             reportId: state.supervision.lastReportId,
             wakeCondition: wake.condition,
             resumeAt: state.supervision.waitLease?.resumeAt ?? null,
@@ -782,7 +804,12 @@ export class AutopilotCoordinator {
     const progressKey = createHash('sha256')
       .update(`${this.progressKey(sessionId)}\0root-process\0${processId}`)
       .digest('hex');
-    return this.observableWake(sessionId, { leaseId: lease.id, condition, progressKey });
+    return this.observableWake(sessionId, {
+      leaseId: lease.id,
+      condition,
+      progressKey,
+      runId: processId,
+    });
   }
   enable(
     sessionId: string,
@@ -1982,6 +2009,7 @@ export class AutopilotCoordinator {
         payload: {
           ...this.wakeAttribution(next),
           leaseId: nextLease.id,
+          ...(nextLease.runId ? { runId: nextLease.runId } : {}),
           reportId: next.supervision?.lastReportId,
           resumeAt: nextLease.resumeAt ?? null,
           wakeConditions: nextLease.wakeConditions,
@@ -2323,6 +2351,7 @@ export class AutopilotCoordinator {
                   ...this.wakeAttribution(state),
                   wakeReason: 'deadline',
                   leaseId,
+                  ...(lease.runId ? { runId: lease.runId } : {}),
                   reportId: state.supervision.lastReportId,
                   resumeAt,
                   observedAt,

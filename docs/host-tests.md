@@ -78,11 +78,57 @@ different suite is rejected. Use a fresh UUID for a fresh run.
 { "operation": "cancel", "runId": "<returned UUID>" }
 ```
 
-Status and cancellation are session-scoped. Cancellation is asynchronous; inspect
-status until terminal. For supervised long work use the version-2 wait lease with
-`processResultAvailable` and `processExited`. Completion publishes a host process
-observation without enabling Autopilot or clearing attention. Check status for
-completion-before-lease races rather than assuming a future wake is needed.
+Status and cancellation are session-scoped. Cancellation is asynchronous.
+For supervised work, prefer a run-specific wait over repeated status calls:
+
+```json
+{ "operation": "wait", "runId": "<returned UUID>", "maxWaitMs": 600000 }
+```
+
+If the run has finished, this returns `accepted:false`, `next:continueSameTurn`
+and its result immediately. Otherwise it registers a wait for that exact run and
+returns `accepted:true`. Yield only after acceptance. Completion before or during
+registration is detected; another command or test run cannot satisfy this wait.
+Repeated requests in the same turn reuse the lease without extending its deadline.
+The deadline defaults to ten minutes and accepts the same one-minute to 24-hour
+range as a version-2 Autopilot lease. Read the result once after waking, using
+`status` or `wait`. Unknown or foreign run IDs are rejected.
+
+Registration requires an active root turn and already-enabled Autopilot. When
+continuation is unavailable, continue supervising in the same turn; `wait` never
+enables Autopilot, clears attention, or approves a milestone. A host restart
+retains the run identity and consumes its completion when supervision is restored;
+the safety deadline remains a fallback. Older hosts without `wait` still use
+status and the version-2 process-event lease contract.
+
+## Compact supervision reads
+
+Use one `gestalt_org_plan_health` call instead of separate health, plan summary,
+agent-list and test-status discovery calls:
+
+```json
+{ "view": "compact" }
+{ "view": "compact", "sinceRevision": "<revision from the previous response>" }
+```
+
+The initial response contains a compact snapshot of control health, the current
+L1/L2, executor binding and model-policy status, agent activity, running/unread
+host runs, and the active wait. Follow-up reads return only changed top-level
+sections or `{ "revision": "...", "unchanged": true }`. `null` explicitly clears
+a removed section. A missing or evicted revision returns a full compact snapshot
+with `reset:true`; history is bounded and session-scoped. Observation timestamps
+alone do not change a revision. Agent and run lists contain at most eight entries
+and include omitted counts; the current executor and active work take priority.
+The plan section includes a content revision covering instructions, skills and
+model policy while excluding measurement updates. When that revision changes,
+read the relevant plan content; descriptions are intentionally absent from the
+compact response.
+
+An unchanged revision describes this read, not permission to skip future
+ownership, policy or test gates. Compact reads preserve unknown and denied
+states. Use `gestalt_org_plan_health({})` for full launch/model-policy evidence;
+use a run's result for fingerprints, exit status, counts and private evidence paths.
+Compact reads do not mark terminal test results as read.
 
 ## Ownership and evidence
 

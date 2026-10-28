@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { HostTestRequest } from '../../../../shared/contracts/host-tests.js';
+import type { HostTestRunnerRequest } from '../../../../shared/contracts/host-tests.js';
 
 export type HostTestOwner = { sessionId: string; workspace: string };
 export interface HostTestRunner {
-  request(owner: HostTestOwner, input: HostTestRequest): Promise<unknown>;
+  request(owner: HostTestOwner, input: HostTestRunnerRequest): Promise<unknown>;
   cancelSession(sessionId: string): Promise<void>;
   close(): Promise<void>;
 }

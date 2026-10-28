@@ -98,7 +98,12 @@ Call `list`, then `inspect` to verify the suite's source repository, then
 `start` with `suite` and a fresh UUID `requestId` (no `candidate` argument).
 Keep the writer idle until the returned `runId` reaches a terminal `status`.
 Reuse a request ID only to recover the same run; use a fresh ID for a rerun.
-For supervised long waits, follow the Org Plan process-event lease contract.
+For supervised long waits on hosts that advertise it, prefer `wait` with the
+returned `runId` over polling; yield only after `accepted:true`. Otherwise follow
+the Org Plan process-event lease contract. Prefer the compact view of
+`gestalt_org_plan_health` for combined supervision state, and pass its revision as
+`sinceRevision` on later reads. Use full health and run results for their evidence
+gates; compact state does not grant execution authority or prove test coverage.
 
 Record run ID, source fingerprints, exit status, actual test counts and evidence
 paths. Inspect logs when counts are unknown. A zero exit alone does not prove

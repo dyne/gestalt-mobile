@@ -37,6 +37,7 @@ const statusTypes = ['autopilot.updated', 'agent.activity.updated', 'session.sta
 // Export structural telemetry only. Event types alone do not imply payload safety.
 const diagnosticFields = new Set([
   'leaseId',
+  'runId',
   'reportId',
   'resumeAt',
   'wakeCondition',

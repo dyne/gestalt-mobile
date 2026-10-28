@@ -5,6 +5,7 @@
  */
 
 import { z } from 'zod';
+import { AUTOPILOT_WAIT_MIN_MS, AUTOPILOT_WAIT_MAX_MS } from './autopilot-wait-lease.js';
 
 const suite = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 const runId = z.string().uuid();
@@ -20,21 +21,39 @@ export const hostTestRequest = z.discriminatedUnion('operation', [
     .strict(),
   z.object({ operation: z.literal('status'), runId }).strict(),
   z.object({ operation: z.literal('cancel'), runId }).strict(),
+  z
+    .object({
+      operation: z.literal('wait'),
+      runId,
+      maxWaitMs: z
+        .number()
+        .int()
+        .min(AUTOPILOT_WAIT_MIN_MS)
+        .max(AUTOPILOT_WAIT_MAX_MS)
+        .default(600_000),
+    })
+    .strict(),
 ]);
 export type HostTestRequest = z.infer<typeof hostTestRequest>;
+export type HostTestRunnerRequest = Exclude<HostTestRequest, { operation: 'wait' }>;
 export const gestaltTestRunnerDynamicTool = {
   type: 'function',
   name: 'gestalt_test_runner',
   description:
-    'Run workspace test suites outside the agent shell sandbox as the host user. Enabled by default; root supervisor only. Create or edit .gestalt/host-tests.json in the session workspace using normal file tools; suites reload at runtime without restart or fingerprint approval. list/inspect do not execute code. start requires suite and an idempotent requestId; status/cancel require runId. Tool arguments never accept commands, environment, or paths. Results retain automatic source fingerprints, UTC observations and private evidence; counts can be unknown. Keep the writer idle during tests. Does not approve milestones or resume Autopilot.',
+    'Run workspace test suites as the host user; root supervisor only. Configure .gestalt/host-tests.json in the session workspace; suites reload without restart. list/inspect are read-only. start requires suite and UUID requestId; status/cancel/wait require runId. Prefer wait over polling: it returns a completed result or registers a run-specific Autopilot wait (maxWaitMs defaults to 600000). Yield only when accepted:true; otherwise continue in the same turn. No commands, environment or paths in arguments. Retains source fingerprints and private evidence; counts can be unknown. Keep the writer idle during tests. Never enables Autopilot or approves milestones.',
   inputSchema: {
     type: 'object',
     additionalProperties: false,
     properties: {
-      operation: { type: 'string', enum: ['list', 'inspect', 'start', 'status', 'cancel'] },
+      operation: { type: 'string', enum: ['list', 'inspect', 'start', 'status', 'cancel', 'wait'] },
       suite: { type: 'string' },
       requestId: { type: 'string' },
       runId: { type: 'string' },
+      maxWaitMs: {
+        type: 'integer',
+        minimum: AUTOPILOT_WAIT_MIN_MS,
+        maximum: AUTOPILOT_WAIT_MAX_MS,
+      },
     },
     required: ['operation'],
   },
