@@ -481,6 +481,89 @@ async function createUnauthorizedProductionApp(root: string, dataDir: string) {
 
 describe('production composition', () => {
   describeCompositionConcern('autopilot', () => {
+    it('does not park after a host test completes before process-wait registration', async () => {
+      let coordinator: import('./features/autopilot/application/service.js').AutopilotCoordinator;
+      const f = await createProductionAutopilotFixture({
+        autopilotSchedule: () => () => {},
+        onAutopilotCoordinator: (value) => {
+          coordinator = value;
+        },
+      });
+      onTestFinished(() => f.app.close());
+      const exec = promisify(execFile);
+      await exec('git', ['init', '-q', f.workspacePath]);
+      await exec(
+        'git',
+        [
+          '-c',
+          'user.name=Fixture',
+          '-c',
+          'user.email=fixture@example.invalid',
+          'commit',
+          '--allow-empty',
+          '-qm',
+          'fixture',
+        ],
+        { cwd: f.workspacePath },
+      );
+      await mkdir(join(f.workspacePath, '.gestalt'), { recursive: true });
+      await writeFile(
+        join(f.workspacePath, '.gestalt/host-tests.json'),
+        JSON.stringify({
+          version: 1,
+          suites: [
+            {
+              id: 'fast',
+              repository: f.workspacePath,
+              command: process.execPath,
+              args: ['-e', 'process.exit(0)'],
+              timeoutMs: 5000,
+              maxOutputBytes: 4096,
+            },
+          ],
+        }),
+      );
+      const session = (await f.app.inject(`/api/sessions/${f.sessionId}`)).json();
+      const call = async (id: number, args: unknown) => {
+        const response = (await f.handles.find((handle) => handle.request)!.request!({
+          id,
+          method: 'item/tool/call',
+          params: { threadId: session.threadId, tool: 'gestalt_test_runner', arguments: args },
+        })) as { contentItems: Array<{ text: string }> };
+        return JSON.parse(response.contentItems[0]!.text);
+      };
+      const run = await call(900, {
+        operation: 'start',
+        suite: 'fast',
+        requestId: '00000000-0000-4000-8000-000000000001',
+      });
+      expect(run.state).toBe('running');
+      const database = new DatabaseSync(join(f.dataDir, 'relay.sqlite'));
+      onTestFinished(() => database.close());
+      await vi.waitFor(
+        () =>
+          expect(
+            database
+              .prepare(
+                "SELECT COUNT(*) AS count FROM session_events WHERE session_id=? AND type='host-test.completed'",
+              )
+              .get(f.sessionId)?.count,
+          ).toBe(1),
+        { timeout: 5000 },
+      );
+      const report = {
+        id: 'focused-running',
+        leaseId: 'focused-wait',
+        wakeConditions: ['processResultAvailable'] as const,
+        maxWaitMs: 600_000,
+      };
+      expect(coordinator!.registerProactiveWait(f.sessionId, report)).toBe('wakeAlreadySatisfied');
+      expect(await call(901, { operation: 'status', runId: run.runId })).toMatchObject({
+        state: 'passed',
+      });
+      expect(coordinator!.registerProactiveWait(f.sessionId, report)).toBe(true);
+    });
+
     const versionedText = (state: 'TODO' | 'DONE' = 'TODO', strict = false) =>
       '#+MODEL_POLICY_VERSION: 1\n' +
       (strict ? '#+MODEL_POLICY_ASSURANCE: runtime-attested\n' : '') +

@@ -43,6 +43,7 @@ export class LocalHostTestRunner implements HostTestRunner {
   private readonly active = new Map<string, Active>();
   private readonly reservations = new Set<string>();
   private readonly requests = new Map<string, Promise<unknown>>();
+  private readonly resultReads = new Map<string, Promise<HostTestResult>>();
   private readonly sessionGenerations = new Map<string, number>();
   private closing = false;
 
@@ -125,7 +126,7 @@ export class LocalHostTestRunner implements HostTestRunner {
       const result = this.results.get(input.runId);
       if (!result || result.sessionId !== owner.sessionId) return { error: 'runNotFound' };
       if (input.operation === 'cancel') this.active.get(result.runId)?.stop('cancelled');
-      return structuredClone(result);
+      return this.readResult(result);
     }
     if (input.operation === 'start') {
       const previous = [...this.results.values()].find(
@@ -133,7 +134,7 @@ export class LocalHostTestRunner implements HostTestRunner {
       );
       if (previous) {
         return previous.suite === input.suite
-          ? structuredClone(previous)
+          ? this.readResult(previous)
           : { error: 'requestIdConflict' };
       }
     }
@@ -348,6 +349,34 @@ export class LocalHostTestRunner implements HostTestRunner {
         }
       })();
     });
+  }
+
+  /** Completed evidence is a level-triggered wake until its owning supervisor reads it. */
+  hasUnreadResult(sessionId: string): boolean {
+    return [...this.results.values()].some(
+      (result) =>
+        result.sessionId === sessionId && result.state !== 'running' && !result.resultReadAt,
+    );
+  }
+
+  private async readResult(result: HostTestResult): Promise<HostTestResult> {
+    const pending = this.resultReads.get(result.runId);
+    if (pending) return structuredClone(await pending);
+    const snapshot = structuredClone(result);
+    if (snapshot.state !== 'running' && !snapshot.resultReadAt) {
+      snapshot.resultReadAt = new Date().toISOString();
+      const read = this.persist(snapshot).then(() => {
+        this.results.set(snapshot.runId, snapshot);
+        return snapshot;
+      });
+      this.resultReads.set(snapshot.runId, read);
+      try {
+        return structuredClone(await read);
+      } finally {
+        this.resultReads.delete(snapshot.runId);
+      }
+    }
+    return snapshot;
   }
 
   private async persist(result: HostTestResult): Promise<void> {
