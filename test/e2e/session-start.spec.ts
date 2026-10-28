@@ -7,6 +7,7 @@
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { chatSnapshot } from './chat-snapshot-fixture.js';
+import { screenshotPath } from './screenshot-path.js';
 
 test.beforeEach(async ({ page }) => mockAuthenticatedStatus(page));
 
@@ -257,7 +258,7 @@ for (const width of [1280, 390]) {
     const sendBox = (await page.getByRole('button', { name: 'Send prompt' }).boundingBox())!;
     const navigationBox = (await page.getByLabel('Primary').boundingBox())!;
     expect(sendBox.y + sendBox.height).toBeLessThanOrEqual(navigationBox.y);
-    await page.screenshot({ path: `output/playwright/new-empty-chat-${width}.png` });
+    await page.screenshot({ path: screenshotPath(`new-empty-chat-${width}.png`) });
     await page.getByRole('button', { name: 'Sessions', exact: true }).click();
     await page.getByRole('button', { name: 'Chat', exact: true }).click();
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));

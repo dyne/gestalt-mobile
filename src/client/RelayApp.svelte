@@ -1396,7 +1396,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function loadSkills(workspaceId: string, profile: string): Promise<void> {
-    const next = new SkillsState(relay);
+    const next = new SkillsState(relay, (message) =>
+      toastQueue.enqueue({ kind: 'error', code: 'SKILL_PROFILE_OPERATION_FAILED', message }),
+    );
     await next.load(workspaceId, profile);
     skillsState = next;
     skillsLoaded = true;

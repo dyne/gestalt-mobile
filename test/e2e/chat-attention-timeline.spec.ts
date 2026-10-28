@@ -8,6 +8,7 @@ import { test, expect } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { ChatRelayFixture } from './chat-relay-fixture.js';
 import { chatSnapshot } from './chat-snapshot-fixture.js';
+import { screenshotPath } from './screenshot-path.js';
 
 for (const width of [390, 1280]) {
   test(`quiz stays above chat, shares file rendering and enters resolution history at ${width}px`, async ({
@@ -102,7 +103,7 @@ for (const width of [390, 1280]) {
     await expect(page.getByRole('dialog').getByLabel('Highlighted line 2')).toBeVisible();
     await page.getByRole('button', { name: 'Close file preview' }).click();
     await panel.getByRole('radio', { name: 'Yes', exact: true }).check();
-    await page.screenshot({ path: `output/playwright/chat-attention-pending-${width}.png` });
+    await page.screenshot({ path: screenshotPath(`chat-attention-pending-${width}.png`) });
     await panel.getByRole('button', { name: 'Send answers' }).click();
     await expect(panel.getByText('Submitting…')).toBeVisible();
     await expect(page.getByRole('link', { name: 'Source', exact: true })).toHaveCount(1);
@@ -149,6 +150,6 @@ for (const width of [390, 1280]) {
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
       ),
     ).toBe(true);
-    await page.screenshot({ path: `output/playwright/chat-attention-resolved-${width}.png` });
+    await page.screenshot({ path: screenshotPath(`chat-attention-resolved-${width}.png`) });
   });
 }

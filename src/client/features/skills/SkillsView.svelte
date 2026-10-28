@@ -140,6 +140,33 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         ? 'Saved the selected profile.'
         : 'Creating a new saved profile.'}
     </p>
+    <fieldset class="browser-access" aria-describedby="browser-help browser-status">
+      <legend>Browser access</legend>
+      <label class="browser-toggle" for="skills-playwright">
+        <input
+          id="skills-playwright"
+          type="checkbox"
+          checked={snapshot.playwrightEnabled}
+          onchange={(event) => {
+            snapshot.setPlaywrightEnabled(event.currentTarget.checked);
+            changed();
+          }}
+        />
+        <span>Browser access (Playwright)</span>
+      </label>
+      <p id="browser-status" role="status">
+        {snapshot.playwrightEnabled
+          ? 'Configured · runtime unavailable'
+          : 'Off · browser access disabled'}
+      </p>
+      <p id="browser-help">
+        Allow the Gestalt host to start Playwright when a Codex supervisor or active plan requests
+        it. Enabling this option does not start a browser immediately. Login state is stored in a
+        dedicated browser profile for this workspace, separate from your personal browser. Host
+        browser access follows MCP permissions, beyond the agent shell sandbox. Kimi cannot use this
+        capability.
+      </p>
+    </fieldset>
     <div class="profile-actions">
       <button
         type="button"
@@ -173,7 +200,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   {:else if snapshot.status.kind === 'invalid-profile' || snapshot.status.kind === 'error'}
     <p id="skills-status" class="error" role="alert">{snapshot.status.message}</p>
   {:else if snapshot.status.kind === 'save-failed'}
-    <p id="skills-status" class="error" role="alert" tabindex="-1" bind:this={saveError}>
+    <p id="skills-status" role="status" tabindex="-1" bind:this={saveError}>
       {snapshot.status.message}
     </p>
   {:else if snapshot.status.kind === 'saved'}
@@ -274,6 +301,38 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </section>
 
 <style>
+  .browser-access {
+    min-inline-size: 0;
+    margin: 0;
+    border: 1px solid var(--theme-border);
+    border-radius: 0.5rem;
+    padding: 0.5rem;
+    overflow-wrap: anywhere;
+  }
+  .browser-access p {
+    max-inline-size: 70ch;
+    margin-block: 0.65rem 0;
+  }
+  .browser-access legend {
+    font-weight: 650;
+  }
+  .browser-toggle {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.65rem;
+    min-block-size: 3rem;
+  }
+  .browser-toggle input {
+    flex: 0 0 auto;
+    inline-size: 1.25rem;
+    min-block-size: 1.25rem;
+  }
+  .browser-toggle span {
+    flex: 1 1 100%;
+    min-inline-size: 0;
+    overflow-wrap: normal;
+  }
   .skills-view {
     min-inline-size: 0;
     padding: 1rem max(1rem, env(safe-area-inset-right)) calc(5rem + env(safe-area-inset-bottom))

@@ -10,6 +10,7 @@ import { registerListAvailableSkills } from './list-available/endpoint.js';
 import { registerListSkillProfiles } from './list-profiles/endpoint.js';
 import { registerReplaceSkillProfile } from './replace-profile/endpoint.js';
 import { registerDeleteSkillProfile } from './delete-profile/endpoint.js';
+import type { SkillProfile } from './model/skill-profile.js';
 
 describe('skills REPR endpoints', () => {
   it('maps a workspace catalog to documented effective state without contents', async () => {
@@ -105,21 +106,14 @@ describe('skills REPR endpoints', () => {
 
   it('lists valid and corrupt profiles independently and atomically replaces a profile', async () => {
     const app = fastify();
-    const profiles = new Map<
-      string,
-      { version: 1; name: string; skills: Array<{ name: string; path: string; enabled: boolean }> }
-    >();
+    const profiles = new Map<string, SkillProfile>();
     const deps = {
       listGlobalProfileNames: async () => ['broken', 'work'],
       readGlobalProfile: async (name: string) => {
         if (name === 'broken') throw new Error('bad yaml');
         return profiles.get(name);
       },
-      replaceGlobalProfile: async (profile: {
-        version: 1;
-        name: string;
-        skills: Array<{ name: string; path: string; enabled: boolean }>;
-      }) => {
+      replaceGlobalProfile: async (profile: SkillProfile) => {
         profiles.set(profile.name, profile);
       },
       profilePath: (name: string) => `/home/test/.gestalt/skill-profiles/${name}.yml`,

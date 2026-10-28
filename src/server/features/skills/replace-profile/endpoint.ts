@@ -10,8 +10,9 @@ import type { SkillProfileStore } from '../application/ports.js';
 import { createSkillProfile, normalizeSkillProfileName } from '../model/skill-profile.js';
 import { SkillProfileError } from '../model/errors.js';
 import { problem } from '../../../platform/http/problem.js';
+import { profileCapabilitiesSchema } from '../../../../shared/contracts/profile-capabilities.js';
 
-const requestSchema = z
+const legacyRequestSchema = z
   .object({
     version: z.literal(1),
     name: z.string(),
@@ -20,6 +21,10 @@ const requestSchema = z
     ),
   })
   .strict();
+const requestSchema = z.discriminatedUnion('version', [
+  legacyRequestSchema,
+  legacyRequestSchema.extend({ version: z.literal(2), capabilities: profileCapabilitiesSchema }),
+]);
 export type ReplaceSkillProfileDependencies = Pick<
   SkillProfileStore,
   'readGlobalProfile' | 'replaceGlobalProfile'

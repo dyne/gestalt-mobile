@@ -84,6 +84,7 @@ export async function startSession(
     const sourceProfile = selectedProfile ?? projectProfile;
     const reconciledSkills = reconcileSkillSelectionSnapshot(catalog.skills, sourceProfile?.skills);
     effectiveSkillSelection = {
+      ...(sourceProfile?.capabilities ? { capabilities: sourceProfile.capabilities } : {}),
       ...(selectedProfile ? { selectedProfileName: selectedProfile.name } : {}),
       skills: [
         ...reconciledSkills.skills.map((skill) => ({

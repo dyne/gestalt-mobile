@@ -7,6 +7,7 @@
 import { test, expect } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { chatSnapshot } from './chat-snapshot-fixture.js';
+import { screenshotPath } from './screenshot-path.js';
 
 for (const width of [390, 1280]) {
   test(`Autopilot blocker opens focused independent DEBUG at ${width}px`, async ({ page }) => {
@@ -131,7 +132,7 @@ for (const width of [390, 1280]) {
     await expect(dialog).toContainText(problem.supervisorReport);
     await expect(dialog).toContainText('The blocked session stays paused.');
     expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-    await page.screenshot({ path: `output/playwright/attention-debug-${width}.png` });
+    await page.screenshot({ path: screenshotPath(`attention-debug-${width}.png`) });
     await dialog.getByRole('button', { name: 'Cancel' }).click();
     await expect(button).toBeFocused();
     expect(creates).toBe(0);

@@ -8,6 +8,10 @@ import { isAbsolute, normalize } from 'node:path';
 import { parseDocument, stringify } from 'yaml';
 import { z } from 'zod';
 import { SkillProfileError } from './errors.js';
+import {
+  profileCapabilitiesSchema,
+  type ProfileCapabilities,
+} from '../../../../shared/contracts/profile-capabilities.js';
 
 const profileNamePattern = /^[a-z0-9](?:[a-z0-9-]{0,62})?$/;
 
@@ -89,7 +93,7 @@ export function isGestaltSkillName(name: string): boolean {
   return name.startsWith('gestalt:');
 }
 
-const profileDocumentSchema = z
+const legacyProfileDocumentSchema = z
   .object({
     version: z.literal(1),
     name: z.string().min(1),
@@ -97,11 +101,20 @@ const profileDocumentSchema = z
   })
   .strict();
 
-/** A named, version-1 user-global or workspace-default skill selection. */
+const profileDocumentSchema = z.discriminatedUnion('version', [
+  legacyProfileDocumentSchema,
+  legacyProfileDocumentSchema.extend({
+    version: z.literal(2),
+    capabilities: profileCapabilitiesSchema,
+  }),
+]);
+
+/** Named skill selection; version 1 cannot grant browser access. */
 export type SkillProfile = {
-  version: 1;
+  version: 1 | 2;
   name: string;
   skills: SkillSelection;
+  capabilities?: ProfileCapabilities;
 };
 
 /**
@@ -309,10 +322,16 @@ export function compileSkillOverride(input: {
 export function createSkillProfile(input: {
   name: string;
   skills: readonly SkillSelectionEntry[];
+  capabilities?: ProfileCapabilities;
 }): SkillProfile {
+  const capabilities =
+    input.capabilities === undefined
+      ? undefined
+      : profileCapabilitiesSchema.parse(input.capabilities);
   return {
-    version: 1,
+    version: capabilities === undefined ? 1 : 2,
     name: normalizeSkillProfileName(input.name),
+    ...(capabilities === undefined ? {} : { capabilities }),
     // Gestalt skills are mandatory thread infrastructure. Legacy profiles are
     // normalized on read so they cannot pin a stale plugin-cache version or
     // expose a meaningless enable/disable control in the editor.
@@ -320,7 +339,7 @@ export function createSkillProfile(input: {
   };
 }
 
-/** Parse the version-1 YAML document without performing filesystem access. */
+/** Import strict versioned YAML without silently dropping unknown fields. */
 export function parseSkillProfileYaml(source: string): SkillProfile {
   const document = parseDocument(source, { prettyErrors: false, strict: true, uniqueKeys: true });
   if (document.errors.length > 0) {
@@ -333,8 +352,8 @@ export function parseSkillProfileYaml(source: string): SkillProfile {
   return createSkillProfile(parsed.data);
 }
 
-/** Serialize the canonical version-1 YAML document in deterministic path order. */
+/** Export deterministic YAML, retaining explicit capability choices. */
 export function serializeSkillProfileYaml(profile: SkillProfile): string {
   const canonical = createSkillProfile(profile);
-  return stringify({ version: 1, name: canonical.name, skills: canonical.skills });
+  return stringify(canonical);
 }

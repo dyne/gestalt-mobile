@@ -7,6 +7,7 @@ import { expect, test } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { ChatRelayFixture } from './chat-relay-fixture.js';
 import { chatSnapshot } from './chat-snapshot-fixture.js';
+import { screenshotPath } from './screenshot-path.js';
 
 test('keeps a failed prompt copyable and reports an unavailable workspace as a warning', async ({
   page,
@@ -133,7 +134,7 @@ for (const viewport of [
     expect(fixture.protocol.filter((call) => call.kind === 'resume')).toHaveLength(1);
     expect(fixture.protocol.filter((call) => call.kind === 'turn')).toHaveLength(1);
     await page.screenshot({
-      path: `output/playwright/session-writer-access-${viewport.name}.png`,
+      path: screenshotPath(`session-writer-access-${viewport.name}.png`),
       fullPage: true,
     });
   });

@@ -7,6 +7,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { ChatRelayFixture } from './chat-relay-fixture.js';
 import { chatSnapshot } from './chat-snapshot-fixture.js';
+import { screenshotPath } from './screenshot-path.js';
 
 test('Ready duration advances locally and survives switching tabs', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 844 });
@@ -268,7 +269,7 @@ for (const viewport of [
       ),
     ).toBe(true);
     await page.screenshot({
-      path: `output/playwright/chat-timeline-restored-${viewport.name}.png`,
+      path: screenshotPath(`chat-timeline-restored-${viewport.name}.png`),
       fullPage: false,
     });
   });
@@ -887,7 +888,7 @@ for (const shot of [
     await waitForSettledScroll(page);
     if (shot.fontScale === 100)
       await page.screenshot({
-        path: `output/playwright/chat-timeline-pending-${shot.name}-${shot.fontScale}.png`,
+        path: screenshotPath(`chat-timeline-pending-${shot.name}-${shot.fontScale}.png`),
       });
     await approve.click();
     await expect.poll(() => fixture.commands.length).toBe(1);
@@ -901,7 +902,7 @@ for (const shot of [
     await waitForSettledScroll(page);
     if (shot.fontScale === 100)
       await page.screenshot({
-        path: `output/playwright/chat-timeline-submitting-${shot.name}-${shot.fontScale}.png`,
+        path: screenshotPath(`chat-timeline-submitting-${shot.name}-${shot.fontScale}.png`),
       });
     fixture.interactions.get('approval-1')?.resolve({ kind: 'abort' });
     const retry = page.getByRole('button', { name: 'Retry' });
@@ -914,7 +915,7 @@ for (const shot of [
     await waitForSettledScroll(page);
     if (shot.fontScale === 100)
       await page.screenshot({
-        path: `output/playwright/chat-timeline-failed-${shot.name}-${shot.fontScale}.png`,
+        path: screenshotPath(`chat-timeline-failed-${shot.name}-${shot.fontScale}.png`),
       });
     const replacement = fixture.deferInteraction('approval-1');
     await retry.click();
@@ -946,7 +947,7 @@ for (const shot of [
       );
     }
     await page.screenshot({
-      path: `output/playwright/chat-timeline-resolved-${shot.name}-${shot.fontScale}.png`,
+      path: screenshotPath(`chat-timeline-resolved-${shot.name}-${shot.fontScale}.png`),
     });
     fixture.event('session-1', 1, 'agentMessageDelta', {
       itemId: 'commentary-1',
@@ -966,7 +967,7 @@ for (const shot of [
     await waitForSettledScroll(page);
     if (shot.fontScale === 100)
       await page.screenshot({
-        path: `output/playwright/chat-timeline-working-${shot.name}-${shot.fontScale}.png`,
+        path: screenshotPath(`chat-timeline-working-${shot.name}-${shot.fontScale}.png`),
       });
     fixture.event('session-1', 2, 'agentMessageDelta', {
       itemId: 'answer-1',
@@ -1012,6 +1013,6 @@ for (const shot of [
       );
     }
     await page.screenshot({
-      path: `output/playwright/chat-timeline-finished-${shot.name}-${shot.fontScale}.png`,
+      path: screenshotPath(`chat-timeline-finished-${shot.name}-${shot.fontScale}.png`),
     });
   });

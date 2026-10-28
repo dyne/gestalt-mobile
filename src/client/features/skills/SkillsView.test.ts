@@ -74,6 +74,23 @@ async function renderedAlwaysAdvertised() {
 }
 
 describe('SkillsView', () => {
+  it('labels browser consent separately, defaults off, and explains unavailable host access', async () => {
+    const state = await rendered();
+    const toggle = screen.getByRole('checkbox', { name: 'Browser access (Playwright)' });
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByText('Off · browser access disabled')).toBeTruthy();
+    await fireEvent.click(toggle);
+    expect(state.playwrightEnabled).toBe(true);
+    expect(screen.getByText('Configured · runtime unavailable')).toBeTruthy();
+    expect(screen.getByText(/Kimi cannot use this capability/)).toBeTruthy();
+    await fireEvent.input(screen.getByLabelText('Save as'), { target: { value: 'browser' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+    expect(client.replaceSkillProfile).toHaveBeenCalledWith(
+      'browser',
+      expect.objectContaining({ version: 2, capabilities: { playwright: { enabled: true } } }),
+    );
+  });
+
   it('uses a profile selector, path-keyed checkboxes, and compact safe skill details', async () => {
     const state = await rendered();
     expect(screen.getByLabelText('Skill profile')).toBeTruthy();

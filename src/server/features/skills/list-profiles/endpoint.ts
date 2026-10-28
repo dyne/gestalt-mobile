@@ -34,6 +34,7 @@ export function registerListSkillProfiles(
                     version: profile.version,
                     path: deps.profilePath(name),
                     skills: profile.skills,
+                    ...(profile.capabilities ? { capabilities: profile.capabilities } : {}),
                   }
                 : {
                     name,
