@@ -1103,6 +1103,8 @@ describe('production composition', () => {
     it.each([
       'match',
       'mismatch',
+      'supervisor-terra',
+      'unsupported-terra-effort',
       'off-during-read',
       'policy-during-read',
       'same-plan-during-read',
@@ -1151,7 +1153,11 @@ describe('production composition', () => {
             };
           },
         },
-        versionedText(),
+        ['supervisor-terra', 'unsupported-terra-effort'].includes(scenario)
+          ? versionedText()
+              .replace(':MODEL: gpt-6.1-sol', ':MODEL: gpt-6.1-terra')
+              .replace(':REASONING_EFFORT: medium', ':REASONING_EFFORT: high')
+          : versionedText(),
       );
       onTestFinished(() => f.app.close());
       const actualRootThreadId = (await f.app.inject(`/api/sessions/${f.sessionId}`)).json()
@@ -1170,7 +1176,19 @@ describe('production composition', () => {
       let childStarts = 0;
       for (const handle of f.handles)
         handle.respond = async (method, params) => {
-          if (method === 'model/list') return policyCatalog;
+          if (method === 'model/list')
+            return ['supervisor-terra', 'unsupported-terra-effort'].includes(scenario)
+              ? {
+                  data: [
+                    {
+                      id: 'gpt-6.1-terra',
+                      supportedReasoningEfforts: [
+                        { reasoningEffort: scenario === 'supervisor-terra' ? 'high' : 'medium' },
+                      ],
+                    },
+                  ],
+                }
+              : policyCatalog;
           if (method === 'thread/read' && (params as { threadId: string }).threadId === 'child-1') {
             sawRead = true;
             if (
@@ -1252,15 +1270,15 @@ describe('production composition', () => {
       }
       pendingRead.resolve({});
       pendingRecovery.resolve({});
-      if (scenario === 'match' || scenario === 'same-plan-during-read') {
+      if (['match', 'mismatch', 'supervisor-terra', 'same-plan-during-read'].includes(scenario)) {
         await vi.waitFor(() => expect(childStarts).toBe(1));
         const call = f.handles
           .flatMap((handle) => handle.requests)
           .find((call) => call.method === 'turn/start');
         expect(call?.params).toMatchObject({
           threadId: 'child-1',
-          model: 'gpt-6.1-sol',
-          effort: 'medium',
+          model: scenario === 'supervisor-terra' ? 'gpt-6.1-terra' : 'gpt-6.1-sol',
+          effort: scenario === 'supervisor-terra' ? 'high' : 'medium',
         });
       } else {
         await vi.waitFor(() =>
@@ -4581,7 +4599,7 @@ describe('production composition', () => {
         ).toContain('Launch task_name l1_g2 for canonical L1');
         expect(
           (starts[3]?.params as { input?: Array<{ text?: string }> }).input?.[0]?.text,
-        ).toContain('agent_type org-plan-executor and reasoning_effort high');
+        ).toContain('The supervisor chooses the exact runtime-supported model');
         // Capacity recovery is allowed only for the active root control. It
         // recycles that writer but must retain the one durable g2 handoff.
         const rootHandle = fixture.handles.find((candidate) =>

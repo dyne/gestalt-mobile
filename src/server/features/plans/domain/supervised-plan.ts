@@ -9,11 +9,18 @@ export type PlanPriority = 'A' | 'B' | 'C';
 export type PlanLevel = 1 | 2;
 export type PlanReviewStatus = 'UNREVIEWED' | 'REVIEWED';
 
-export type PlanModelId = 'gpt-6-luna' | 'gpt-6-sol' | 'gpt-6.1-sol';
+/** Exact model IDs are selected by the supervisor and checked against the runtime catalog. */
+export type PlanModelId = string;
+export const validPlanModel = (value: unknown): value is string =>
+  typeof value === 'string' &&
+  value !== 'none' &&
+  /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$/.test(value);
+export const validPlanEffort = (value: unknown): value is string =>
+  typeof value === 'string' && /^[a-z][a-z0-9_-]{0,23}$/.test(value);
 export type PlanModelPolicy = Readonly<{
   version: 1;
   model: PlanModelId;
-  reasoningEffort: 'medium' | 'high' | 'xhigh';
+  reasoningEffort: string;
   rationale: string;
   allowedFallbacks: readonly PlanModelId[];
   escalationTrigger: string;

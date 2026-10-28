@@ -153,21 +153,21 @@ describe('versioned policy admission prerequisites', () => {
     [
       {
         ...versioned,
-        steps: [{ ...versioned.steps[0]!, modelPolicy: { ...policy, reasoningEffort: 'ultra' } }],
+        steps: [{ ...versioned.steps[0]!, modelPolicy: { ...policy, reasoningEffort: 'INVALID' } }],
       },
       'EFFORT_UNSUPPORTED',
     ],
     [
       {
         ...versioned,
-        steps: [{ ...versioned.steps[0]!, modelPolicy: { ...policy, reasoningEffort: 'high' } }],
+        steps: [{ ...versioned.steps[0]!, modelPolicy: { ...policy, reasoningEffort: '' } }],
       },
       'EFFORT_UNSUPPORTED',
     ],
     [
       {
         ...versioned,
-        steps: [{ ...versioned.steps[0]!, modelPolicy: { ...policy, model: 'gpt-6-astra' } }],
+        steps: [{ ...versioned.steps[0]!, modelPolicy: { ...policy, model: 'invalid model' } }],
       },
       'MODEL_PROHIBITED',
     ],
