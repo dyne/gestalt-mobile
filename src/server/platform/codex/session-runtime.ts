@@ -30,6 +30,7 @@ import { gestaltQuizDynamicTool } from '../../../shared/contracts/quiz.js';
 import { gestaltOrgPlanAttentionDynamicTool } from '../../../shared/contracts/org-plan-attention.js';
 import { gestaltOrgPlanCheckpointDynamicTool } from '../../../shared/contracts/org-plan-checkpoint.js';
 import { gestaltOrgPlanHealthDynamicTool } from '../../../shared/contracts/org-plan-health.js';
+import { gestaltTestRunnerDynamicTool } from '../../../shared/contracts/host-tests.js';
 import { gestaltAutopilotWaitLeaseDynamicTool } from '../../../shared/contracts/autopilot-wait-lease.js';
 import { gestaltAgentCapacityRecoveryDynamicTool } from '../../../shared/contracts/agent-capacity-recovery.js';
 import { gestaltManagedPlaywrightDynamicTool } from '../../../shared/contracts/managed-playwright.js';
@@ -517,12 +518,10 @@ export class CodexSessionRuntime {
       threadId: childThreadId,
       input: [{ type: 'text', text, text_elements: [] }],
       clientUserMessageId,
-      ...((policy?.model ?? session.modelSettings?.executorModel)
-        ? { model: policy?.model ?? session.modelSettings?.executorModel }
-        : {}),
-      ...((policy?.reasoningEffort ?? session.modelSettings?.executorReasoningEffort)
-        ? { effort: policy?.reasoningEffort ?? session.modelSettings?.executorReasoningEffort }
-        : {}),
+      // Defaults apply at launch. Without an explicit L1 policy, preserve the
+      // existing child's choices rather than repinning it on every follow-up.
+      ...(policy?.model ? { model: policy.model } : {}),
+      ...(policy?.reasoningEffort ? { effort: policy.reasoningEffort } : {}),
     };
     let response: unknown;
     try {
@@ -1265,6 +1264,7 @@ export class CodexSessionRuntime {
             gestaltOrgPlanAttentionDynamicTool,
             gestaltOrgPlanCheckpointDynamicTool,
             gestaltOrgPlanHealthDynamicTool,
+            gestaltTestRunnerDynamicTool,
             gestaltAutopilotWaitLeaseDynamicTool,
             gestaltAgentCapacityRecoveryDynamicTool,
             gestaltManagedPlaywrightDynamicTool,
@@ -1394,6 +1394,7 @@ export class CodexSessionRuntime {
         gestaltOrgPlanAttentionDynamicTool,
         gestaltOrgPlanCheckpointDynamicTool,
         gestaltOrgPlanHealthDynamicTool,
+        gestaltTestRunnerDynamicTool,
         gestaltAutopilotWaitLeaseDynamicTool,
         gestaltAgentCapacityRecoveryDynamicTool,
         gestaltManagedPlaywrightDynamicTool,

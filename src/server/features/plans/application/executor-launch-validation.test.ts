@@ -60,6 +60,33 @@ const observed = (
 });
 
 describe('prelaunch model selection evidence', () => {
+  it('admits the supervisor Terra/high choice using the runtime catalog rather than the default tiers', async () => {
+    const base = context();
+    const ctx: ExecutorPolicyContext = {
+      ...base,
+      plan: {
+        ...base.plan!,
+        steps: [
+          {
+            ...base.plan!.steps[0]!,
+            modelPolicy: {
+              ...policy,
+              model: 'gpt-6.1-terra',
+              reasoningEffort: 'high',
+            },
+          },
+        ],
+      },
+    };
+    const reader = new ExecutorLaunchValidationReader(() => ctx, {
+      read: async () => observed([{ id: 'gpt-6.1-terra', reasoningEfforts: ['high'] }]),
+    });
+    expect(await reader.read('s')).toMatchObject({
+      validated: true,
+      code: 'CATALOG_MATCH',
+      requested: { model: 'gpt-6.1-terra', reasoningEffort: 'high' },
+    });
+  });
   it('validates an existing TODO policy before any child exists without fabricating settings or a server revision', async () => {
     const read = vi.fn(async () => observed());
     const reader = new ExecutorLaunchValidationReader(context, { read });

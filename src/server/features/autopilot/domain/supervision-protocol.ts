@@ -195,6 +195,7 @@ export type SupervisionProtocolState = Readonly<{
   lastReportId: string | null;
   waitLease: Readonly<{
     id: string;
+    runId?: string;
     probeKey: string;
     wakeConditions: readonly ObservableWakeCondition[];
     resumeAt?: string;
@@ -256,6 +257,7 @@ export type ProbeReport =
 
 export type ProactiveWaitReport = Readonly<{
   id: string;
+  runId?: string;
   leaseId: string;
   wakeConditions: readonly ObservableWakeCondition[];
   resumeAt: string;
@@ -276,12 +278,14 @@ export function registerProactiveWait(
     return state;
   const wakeConditions = uniqueSupportedWakeConditions(report.wakeConditions);
   if (!report.leaseId || wakeConditions.length === 0) return state;
+  if (report.runId !== undefined && !validRunWait(report.runId, wakeConditions)) return state;
   return {
     ...state,
     outcome: 'parked',
     lastReportId: report.id,
     waitLease: {
       id: report.leaseId,
+      ...(report.runId ? { runId: report.runId } : {}),
       probeKey: state.progressKey,
       wakeConditions,
       resumeAt: report.resumeAt,
@@ -315,6 +319,7 @@ export function reportProbe(
 
 export type ObservableWake = Readonly<{
   leaseId: string;
+  runId?: string;
   condition: ObservableWakeCondition;
   progressKey: string;
 }>;
@@ -330,6 +335,9 @@ export function consumeObservableWake(
     !lease ||
     wake.leaseId !== lease.id ||
     !lease.wakeConditions.includes(wake.condition) ||
+    (lease.runId &&
+      ['processExited', 'processResultAvailable'].includes(wake.condition) &&
+      wake.runId !== lease.runId) ||
     wake.progressKey === lease.probeKey
   )
     return state;
@@ -532,6 +540,9 @@ function parseWaitLease(value: unknown): SupervisionProtocolState['waitLease'] |
   );
   if (wakeConditions.length !== candidate.wakeConditions.length) return undefined;
   const resumeAt = candidate.resumeAt;
+  const runId = candidate.runId;
+  if (runId !== undefined && (!validRunWait(runId, wakeConditions) || resumeAt === undefined))
+    return undefined;
   if (
     resumeAt !== undefined &&
     (typeof resumeAt !== 'string' || !Number.isFinite(Date.parse(resumeAt)))
@@ -542,5 +553,14 @@ function parseWaitLease(value: unknown): SupervisionProtocolState['waitLease'] |
     probeKey: candidate.probeKey,
     wakeConditions,
     ...(typeof resumeAt === 'string' ? { resumeAt } : {}),
+    ...(typeof runId === 'string' ? { runId } : {}),
   };
+}
+
+function validRunWait(runId: unknown, conditions: readonly ObservableWakeCondition[]): boolean {
+  return (
+    typeof runId === 'string' &&
+    /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(runId) &&
+    conditions.some((condition) => ['processExited', 'processResultAvailable'].includes(condition))
+  );
 }

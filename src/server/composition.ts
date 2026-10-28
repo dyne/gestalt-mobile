@@ -6,6 +6,7 @@
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { FilesystemSessionDefaults } from './platform/persistence/filesystem-session-defaults.js';
 import { SessionModelConfig } from './platform/codex/session-model-config.js';
@@ -15,6 +16,10 @@ import { debuglog } from 'node:util';
 import { SqliteTransportDiagnostics } from './platform/persistence/sqlite-transport-diagnostics.js';
 import { buildApp } from './app.js';
 import { ManagedUpgrade } from './platform/maintenance/managed-upgrade.js';
+import { LocalHostTestRunner } from './platform/host-tests/runner.js';
+import { loadWorkspaceHostTestConfig, within } from './platform/host-tests/config.js';
+import { handleHostTestTool } from './features/host-tests/application/handle-tool.js';
+import { gestaltTestRunnerDynamicTool } from '../shared/contracts/host-tests.js';
 import { SelfDebugWorkspace } from './platform/self-debug/workspace.js';
 import {
   createSelfDebugSession,
@@ -147,7 +152,14 @@ import {
   type AutopilotWaitLease,
 } from '../shared/contracts/autopilot-wait-lease.js';
 import { agentCapacityRecoveryToolResponse } from '../shared/contracts/agent-capacity-recovery.js';
-import { isOrgPlanHealthCall } from '../shared/contracts/org-plan-health.js';
+import {
+  isOrgPlanHealthCall,
+  parseOrgPlanHealthArguments,
+} from '../shared/contracts/org-plan-health.js';
+import {
+  compactSupervisionSnapshot,
+  SupervisionSnapshots,
+} from './features/autopilot/application/supervision-snapshot.js';
 import { ExecutorModelEvidenceReader } from './features/plans/application/executor-model-evidence.js';
 import { ExecutorLaunchValidationReader } from './features/plans/application/executor-launch-validation.js';
 import { requireModelPolicyAdmission } from './features/plans/domain/model-policy-admission.js';
@@ -169,6 +181,7 @@ export type ComposeRelayAppOptions = {
   passkeyAuthEnabled?: boolean;
   staticDir?: string;
   pwaIcon?: PwaIcon;
+  testRunnerEnabled?: boolean;
   profiles: ProfileCatalog;
   installedCodexVersion: string | null;
   installedKimiVersion?: string | null;
@@ -238,6 +251,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   if (ownerHandle && ownerHandle.length !== 32)
     throw new Error('Authorization randomness must return exactly 32 bytes');
   const root = resolve(options.root);
+  let hostTests: LocalHostTestRunner | undefined;
+  const supervisionSnapshots = new SupervisionSnapshots();
   const databasePath = options.dataDir
     ? join(resolve(options.dataDir), 'relay.sqlite')
     : resolveStateDatabasePath(
@@ -444,6 +459,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     },
   );
   const autopilot = new AutopilotCoordinator({
+    pendingProcessResult: (sessionId) => hostTests?.hasUnreadResult(sessionId) ?? false,
+    processResultState: (sessionId, runId) => hostTests?.resultState(sessionId, runId) ?? 'missing',
     modelPolicyStatus: (sessionId) => supervisedPlans.modelPolicyStatus(sessionId),
     store: autopilotStore,
     now: () => new Date().toISOString(),
@@ -1304,6 +1321,48 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               }) === true
             );
           }
+          const toolCall = request.params as { tool?: unknown; arguments?: unknown } | null;
+          if (
+            request.method === 'item/tool/call' &&
+            toolCall?.tool === gestaltTestRunnerDynamicTool.name
+          ) {
+            const result = await handleHostTestTool(
+              hostTests,
+              {
+                sessionId,
+                workspace: session.workspacePath,
+                root: origin?.kind === 'root',
+                provider: session.provider,
+                waitForRun: (runId, maxWaitMs) => {
+                  const current = sessions.find(sessionId);
+                  if (
+                    origin?.kind !== 'root' ||
+                    !current?.activeTurnId ||
+                    origin.physicalTurnId !== current.activeTurnId
+                  )
+                    return false;
+                  const state = autopilotStore.find(sessionId);
+                  if (!state?.requestedEnabled) return false;
+                  const leaseId = `host-test:${runId}:${current.activeTurnId}`;
+                  if (state.supervision?.waitLease?.id === leaseId) return true;
+                  return autopilot.registerProactiveWait(sessionId, {
+                    id: leaseId,
+                    leaseId,
+                    runId,
+                    maxWaitMs,
+                    wakeConditions: ['processResultAvailable'],
+                  });
+                },
+              },
+              toolCall.arguments,
+            );
+            return (
+              runtime?.resolveServerRequest(sessionId, String(request.id), {
+                success: true,
+                contentItems: [{ type: 'inputText', text: JSON.stringify(result) }],
+              }) === true
+            );
+          }
           if (isOrgPlanHealthCall(request)) {
             const observedPlan = supervisedPlans.find(sessionId);
             let executorBinding =
@@ -1354,27 +1413,57 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                   };
               }
             }
-            const modelPolicy = await executorModelEvidence.read(sessionId);
-            const executorLaunch = await executorLaunchValidation.read(sessionId);
+            const [modelPolicy, executorLaunch] = await Promise.all([
+              executorModelEvidence.read(sessionId),
+              executorLaunchValidation.read(sessionId),
+            ]);
             const snapshot = autopilot.snapshot(sessionId);
+            const args = parseOrgPlanHealthArguments(toolCall?.arguments)!;
+            const healthReport =
+              args.view === 'compact'
+                ? supervisionSnapshots.read(
+                    sessionId,
+                    compactSupervisionSnapshot({
+                      autopilot: snapshot,
+                      plan: supervisedPlans.find(sessionId),
+                      planIdentity: supervisedPlans.identity(sessionId),
+                      activity: activity.snapshot(sessionId, new Date().toISOString()),
+                      pendingInteractions: blockingInteractions(sessionId).length,
+                      tests: hostTests?.supervisionSummary(sessionId) ?? {
+                        enabled: false,
+                        running: 0,
+                        unread: 0,
+                        omitted: 0,
+                        runs: [],
+                      },
+                      wait: autopilotStore.find(sessionId)?.supervision?.waitLease ?? null,
+                      binding: executorBinding
+                        ? { status: executorBinding.status, code: executorBinding.code }
+                        : null,
+                      modelPolicy,
+                      launch: executorLaunch,
+                    }),
+                    args.sinceRevision,
+                  )
+                : {
+                    state: snapshot.state,
+                    enabled: snapshot.enabled,
+                    health: snapshot.health,
+                    reason: snapshot.reason,
+                    ...(snapshot.executionAdmission
+                      ? { executionAdmission: snapshot.executionAdmission }
+                      : {}),
+                    ...(modelPolicy ? { modelPolicy } : {}),
+                    ...(executorLaunch ? { executorLaunch } : {}),
+                    ...(executorBinding ? { executorBinding } : {}),
+                  };
             return (
               runtime?.resolveServerRequest(sessionId, String(request.id), {
                 success: true,
                 contentItems: [
                   {
                     type: 'inputText',
-                    text: JSON.stringify({
-                      state: snapshot.state,
-                      enabled: snapshot.enabled,
-                      health: snapshot.health,
-                      reason: snapshot.reason,
-                      ...(snapshot.executionAdmission
-                        ? { executionAdmission: snapshot.executionAdmission }
-                        : {}),
-                      ...(modelPolicy ? { modelPolicy } : {}),
-                      ...(executorLaunch ? { executorLaunch } : {}),
-                      ...(executorBinding ? { executorBinding } : {}),
-                    }),
+                    text: JSON.stringify(healthReport),
                   },
                 ],
               }) === true
@@ -1717,10 +1806,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           assertCurrent();
           const report = await executorModelEvidence.read(sessionId);
           assertCurrent();
+          const settingsChange =
+            report && ['MODEL_MISMATCH', 'EFFORT_MISMATCH'].includes(report.code);
           if (
             !report ||
             report.child.threadId !== threadId ||
-            report.configuration === 'mismatch' ||
+            (report.configuration === 'mismatch' && !settingsChange) ||
             [
               'CONTROLLER_BINDING_INVALID',
               'CONTEXT_CHANGED',
@@ -1729,6 +1820,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             ].includes(report.code)
           )
             throw new Error(`EXECUTOR_POLICY_BLOCKED:${report?.code ?? 'CHILD_BINDING_UNKNOWN'}`);
+          // The supervisor's current L1 choice is applied at this safe turn
+          // boundary, including a deliberate change from the child's old model.
+          await runtime!.validateExecutorPolicy(sessionId, report.requested);
+          assertCurrent();
           return { ...report.requested, assertCurrent };
         },
       )
@@ -1953,6 +2048,24 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   }
   let app;
   try {
+    if (options.testRunnerEnabled !== false) {
+      hostTests = new LocalHostTestRunner(
+        join(dirname(databasePath), 'host-test-runs'),
+        (sessionId, runId, observedAt) => {
+          if (!sessions.find(sessionId)) return;
+          events.publish(
+            journal.append(sessionId, 'host-test.completed', { runId, observedAt }, observedAt),
+          );
+          autopilot.rootProcessCompleted(sessionId, runId);
+        },
+        async (workspace) => {
+          if (!within(await realpath(root), await realpath(workspace)))
+            throw new Error('Host test workspace is outside the configured root');
+          return loadWorkspaceHostTestConfig(workspace);
+        },
+      );
+      await hostTests.initialize();
+    }
     const transportDiagnostics = new SqliteTransportDiagnostics(database);
     app = await buildApp({
       transportDiagnostic: (id, event) => transportDiagnostics.record(id, event),
@@ -2300,8 +2413,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         idempotency,
         close:
           runtime || kimiRuntime
-            ? (id) => {
+            ? async (id) => {
                 autopilot.cancel(id, 'sessionEnded');
+                await hostTests?.cancelSession(id);
                 planMeasurementRefresh?.stop(id);
                 dismissPendingInteractions(id, new Date().toISOString());
                 activity.dispose(id);
@@ -2670,6 +2784,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
     });
   } catch (error) {
+    await hostTests?.close();
     authorization?.close();
     database.close();
     throw error;
@@ -2729,6 +2844,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   });
   app.addHook('onClose', async () => {
     closing = true;
+    await hostTests?.close();
     await xerjIndexer.close();
     for (const [sessionId, timer] of capacityRecoveryTimers) {
       clearTimeout(timer);

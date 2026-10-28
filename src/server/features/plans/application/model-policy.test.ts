@@ -106,12 +106,41 @@ describe('L1 model-policy-v1 retention', () => {
     expect(legacy).not.toHaveProperty('plan.steps.0.modelPolicy');
   });
 
-  it.each(['gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol'])(
-    'accepts exact %s with none fallbacks',
-    (model) => {
-      expect(
-        parse(source().replace('gpt-6-luna', model).replace('gpt-6-sol gpt-6.1-sol', 'none')).kind,
-      ).toBe('available');
+  it.each([
+    'gpt-6-luna',
+    'gpt-6-sol',
+    'gpt-6.1-sol',
+    'gpt-6.1-terra',
+    'gpt-6-astra',
+    'provider/custom-model',
+  ])('accepts exact %s with none fallbacks', (model) => {
+    expect(
+      parse(source().replace('gpt-6-luna', model).replace('gpt-6-sol gpt-6.1-sol', 'none')).kind,
+    ).toBe('available');
+  });
+
+  it.each(['low', 'high', 'xhigh', 'max', 'ultra'])(
+    'retains an explicit supervisor effort %s without an exception prerequisite',
+    (effort) => {
+      const result = parse(
+        source()
+          .replace('gpt-6-luna', 'gpt-6.1-terra')
+          .replace(':REASONING_EFFORT: medium', `:REASONING_EFFORT: ${effort}`),
+      );
+      expect(result).toMatchObject({
+        kind: 'available',
+        plan: {
+          steps: [
+            {
+              modelPolicy: {
+                model: 'gpt-6.1-terra',
+                reasoningEffort: effort,
+                necessity: null,
+              },
+            },
+          ],
+        },
+      });
     },
   );
 
@@ -158,14 +187,13 @@ describe('L1 model-policy-v1 retention', () => {
       'drawer version',
       (s: string) => s.replace(':ID: first', ':ID: first\n:MODEL_POLICY_VERSION: 1'),
     ],
-    ['Astra', (s: string) => s.replace('gpt-6-luna', 'gpt-6-astra')],
-    ['alias', (s: string) => s.replace('gpt-6-luna', 'gpt-6')],
-    ['unsupported effort', (s: string) => s.replace('EFFORT: medium', 'EFFORT: low')],
-    ['unjustified high', (s: string) => s.replace('EFFORT: medium', 'EFFORT: high')],
+    ['malformed model', (s: string) => s.replace('gpt-6-luna', 'model with spaces')],
+    ['unbounded model', (s: string) => s.replace('gpt-6-luna', 'x'.repeat(65))],
+    ['malformed effort', (s: string) => s.replace('EFFORT: medium', 'EFFORT: HIGH')],
     ['medium exception', (s: string) => s.replace(':MODEL:', necessity + ':MODEL:')],
     [
-      'fallback alias',
-      (s: string) => s.replace('FALLBACKS: gpt-6-sol gpt-6.1-sol', 'FALLBACKS: auto'),
+      'malformed fallback',
+      (s: string) => s.replace('FALLBACKS: gpt-6-sol gpt-6.1-sol', 'FALLBACKS: invalid$model'),
     ],
     [
       'fallback repeats selected',

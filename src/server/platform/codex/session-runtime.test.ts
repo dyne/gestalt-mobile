@@ -15,6 +15,7 @@ import {
 import { gestaltOrgPlanAttentionDynamicTool } from '../../../shared/contracts/org-plan-attention.js';
 import { gestaltOrgPlanCheckpointDynamicTool } from '../../../shared/contracts/org-plan-checkpoint.js';
 import { gestaltOrgPlanHealthDynamicTool } from '../../../shared/contracts/org-plan-health.js';
+import { gestaltTestRunnerDynamicTool } from '../../../shared/contracts/host-tests.js';
 import { gestaltAutopilotWaitLeaseDynamicTool } from '../../../shared/contracts/autopilot-wait-lease.js';
 import { gestaltAgentCapacityRecoveryDynamicTool } from '../../../shared/contracts/agent-capacity-recovery.js';
 import { gestaltManagedPlaywrightDynamicTool } from '../../../shared/contracts/managed-playwright.js';
@@ -183,10 +184,11 @@ describe('CodexSessionRuntime', () => {
       expect.objectContaining({ threadId: 'root-thread', model: 'gpt-6-sol', effort: 'high' }),
       expect.objectContaining({
         threadId: 'executor-thread',
-        model: 'gpt-6.1-sol',
-        effort: 'xhigh',
       }),
     ]);
+    const executorTurn = requests.filter(({ method }) => method === 'turn/start')[1]!.params;
+    expect(executorTurn).not.toHaveProperty('model');
+    expect(executorTurn).not.toHaveProperty('effort');
     runtime.stop(started.id);
     await runtime.restore(started, 'later');
     const writerRequests = requests.filter(
@@ -258,6 +260,8 @@ describe('CodexSessionRuntime', () => {
       ]);
       expect(requests[1]?.params).toEqual({ threadId: 'executor-thread' });
       expect(requests[2]?.params).toEqual(requests[0]?.params);
+      expect(requests[2]?.params).not.toHaveProperty('model');
+      expect(requests[2]?.params).not.toHaveProperty('effort');
       expect(session.activeTurnId).toBeNull();
     } finally {
       runtime.stopAll();
@@ -1957,6 +1961,7 @@ describe('CodexSessionRuntime', () => {
         gestaltOrgPlanAttentionDynamicTool,
         gestaltOrgPlanCheckpointDynamicTool,
         gestaltOrgPlanHealthDynamicTool,
+        gestaltTestRunnerDynamicTool,
         gestaltAutopilotWaitLeaseDynamicTool,
         gestaltAgentCapacityRecoveryDynamicTool,
         gestaltManagedPlaywrightDynamicTool,
@@ -2438,6 +2443,7 @@ describe('CodexSessionRuntime', () => {
           gestaltOrgPlanAttentionDynamicTool,
           gestaltOrgPlanCheckpointDynamicTool,
           gestaltOrgPlanHealthDynamicTool,
+          gestaltTestRunnerDynamicTool,
           gestaltAutopilotWaitLeaseDynamicTool,
           gestaltAgentCapacityRecoveryDynamicTool,
           gestaltManagedPlaywrightDynamicTool,

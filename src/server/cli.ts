@@ -37,6 +37,7 @@ Options:
   --disable-passkey-auth Disable passkey access control (unsafe on shared or network hosts)
   --data-dir <path>  Directory for persistent application data
   --icon <path>      SVG or PNG used as the installed PWA application icon
+  --disable-test-runner Disable host tests (default: runtime .gestalt/host-tests.json suites)
   --xerj <mode>     Source discovery: auto (default, index and watch), manual, off
   --skills <profile> Use a global skill profile for every session
   --skills list      List saved global skill profiles without starting the server
@@ -353,6 +354,7 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
     root: config.root,
     xerj: config.xerj,
     dataDir: config.dataDir,
+    testRunnerEnabled: config.testRunnerEnabled,
     relyingParty: config.relyingParty,
     passkeyAuthEnabled: config.passkeyAuthEnabled,
     staticDir: packagedClientDir(moduleUrl),

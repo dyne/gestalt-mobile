@@ -8,9 +8,12 @@ on:
   pull_request:
   push:
     branches: [main]
-  schedule:
-    - cron: '23 3 * * 1'
   workflow_dispatch:
+    inputs:
+      run_slow_tests:
+        description: Run optional browser E2E, visual evidence, real-auth and stress tests
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -72,7 +75,7 @@ jobs:
         run: npm run test:org-plan-integration -- .ci/agents-suspension
 
   browser-functional:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.run_slow_tests
     name: Browser functional (${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -120,7 +123,7 @@ jobs:
           retention-days: 3
 
   real-auth:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.run_slow_tests
     name: Real authentication
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -137,7 +140,7 @@ jobs:
           { name: real-auth-artifacts, path: test-results/auth-real-artifacts/, retention-days: 14 }
 
   browser-evidence:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.run_slow_tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -156,7 +159,7 @@ jobs:
           retention-days: 14
 
   authorization-stress:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.run_slow_tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

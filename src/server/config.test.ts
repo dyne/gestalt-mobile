@@ -11,6 +11,18 @@ import { describe, expect, it } from 'vitest';
 import { CliUsageError, normalizePublicOrigin, parseConfig } from './config.js';
 
 describe('parseConfig', () => {
+  it('enables workspace tests by default with an explicit opt-out', () => {
+    expect(parseConfig([]).testRunnerEnabled).toBe(true);
+    expect(parseConfig(['--disable-test-runner']).testRunnerEnabled).toBe(false);
+    expect(() => parseConfig(['--disable-test-runner', '--disable-test-runner'])).toThrow(
+      'Duplicate option',
+    );
+  });
+  it('rejects the removed private-configuration option', () => {
+    expect(() => parseConfig(['--test-runner-config', '/private/tests.json'])).toThrow(
+      'Unknown option',
+    );
+  });
   it('selects root-wide automatic, manual or disabled retrieval without permission changes', () => {
     for (const mode of ['auto', 'manual', 'off']) {
       expect(parseConfig(['--xerj', mode, '--cwd', 'universe'], '/caller')).toMatchObject({
@@ -25,6 +37,7 @@ describe('parseConfig', () => {
       host: '127.0.0.1',
       port: 3000,
       passkeyAuthEnabled: true,
+      testRunnerEnabled: true,
       relyingParty: {
         publicOrigin: 'http://localhost:3000',
         rpId: 'localhost',
@@ -59,6 +72,7 @@ describe('parseConfig', () => {
       host: '0.0.0.0',
       port: 4242,
       passkeyAuthEnabled: true,
+      testRunnerEnabled: true,
       relyingParty: {
         publicOrigin: 'https://gestalt.example:8443',
         rpId: 'gestalt.example',

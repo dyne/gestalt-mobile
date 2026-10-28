@@ -209,7 +209,7 @@ describe('SQLite relay persistence', () => {
 
   // More than 2,000 durable commits plus reopening can exceed the default 5s
   // on shared CI disks. Keep the burst and assertions intact with a scoped budget.
-  it('retains 48 hours across bursts, sessions, and database reopening', async () => {
+  it('retains 48 hours for closed sessions across bursts and database reopening', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-retention-'));
     directories.push(directory);
     const path = join(directory, 'relay.sqlite');
@@ -221,6 +221,7 @@ describe('SQLite relay persistence', () => {
           "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES (?,'w','/w','default','ready','active','t','t')",
         )
         .run(id);
+    database.exec("UPDATE relay_sessions SET state='stopped',desired_state='stopped' WHERE id='s'");
     const journal = new SqliteEventJournal(database);
     journal.append('other', 'old-other', {}, '2026-10-11T12:00:00.000Z');
     journal.append('s', 'expired', {}, '2026-10-12T11:59:59.999Z');
@@ -252,7 +253,7 @@ describe('SQLite relay persistence', () => {
     }
   }, 30_000);
 
-  it('orders events atomically and prunes the oldest entries', async () => {
+  it('orders events atomically and prunes the oldest entries of a closed session', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
     directories.push(directory);
     const database = openRelayDatabase(join(directory, 'relay.sqlite'));
@@ -262,6 +263,7 @@ describe('SQLite relay persistence', () => {
         "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES ('s','w','/w','default','ready','active','t','t')",
       )
       .run();
+    database.exec("UPDATE relay_sessions SET state='stopped',desired_state='stopped' WHERE id='s'");
     const journal = new SqliteEventJournal(database, 2);
 
     journal.append('s', 'one', {}, 't1');

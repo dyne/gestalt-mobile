@@ -98,6 +98,8 @@ export type AutopilotDependencies = Readonly<{
   ): Readonly<{ state: string; threadId: string | null; activeTurnId: string | null }> | null;
   activity(sessionId: string): AgentActivitySnapshot | null;
   pendingInteraction(sessionId: string): boolean;
+  pendingProcessResult?(sessionId: string): boolean;
+  processResultState?(sessionId: string, runId: string): 'running' | 'completed' | 'missing';
   attention?(sessionId: string): StructuredBlock | null;
   schedule(callback: () => void, delayMs: number): () => void;
   nextControlId(sessionId: string, generation: number): string;
@@ -476,6 +478,11 @@ export class AutopilotCoordinator {
       });
       if (state.supervision.waitLease && validated.health.wait.wakeCategories.length > 0) {
         this.parkedSubscriptions.set(sessionId, state.supervision.waitLease.id);
+        const runId = state.supervision.waitLease.runId;
+        if (runId && this.deps.processResultState?.(sessionId, runId) === 'completed') {
+          this.rootProcessCompleted(sessionId, runId);
+          return;
+        }
         if (state.supervision.waitLease.resumeAt)
           this.armWaitDeadline(
             sessionId,
@@ -541,9 +548,10 @@ export class AutopilotCoordinator {
     const protocol = state.supervision ?? startSupervisionProtocol(this.progressKey(sessionId));
     const nextProtocol = reportProbe(protocol, report);
     if (nextProtocol === protocol) return false;
-    if (nextProtocol.outcome === 'parked' && nextProtocol.waitLease)
+    if (nextProtocol.outcome === 'parked' && nextProtocol.waitLease) {
       this.parkedSubscriptions.set(sessionId, nextProtocol.waitLease.id);
-    else this.parkedSubscriptions.delete(sessionId);
+      this.activityEventKeys.set(sessionId, this.progressKey(sessionId, false));
+    } else this.parkedSubscriptions.delete(sessionId);
     const now = this.deps.now();
     this.persist({
       ...state,
@@ -567,6 +575,7 @@ export class AutopilotCoordinator {
     report: Readonly<{
       id: string;
       leaseId: string;
+      runId?: string;
       wakeConditions: readonly ObservableWakeCondition[];
       maxWaitMs: number;
     }>,
@@ -580,8 +589,27 @@ export class AutopilotCoordinator {
     )
       return false;
     const now = this.deps.now();
-    if (this.executorWakeAlreadySatisfied(sessionId, state, report.wakeConditions)) {
-      // The executor edge is already visible. Fence every pending automatic
+    const runState = report.runId
+      ? this.deps.processResultState?.(sessionId, report.runId)
+      : undefined;
+    if (
+      report.runId &&
+      (!runState ||
+        runState === 'missing' ||
+        !report.wakeConditions.some((condition) =>
+          ['processExited', 'processResultAvailable'].includes(condition),
+        ))
+    )
+      return false;
+    const processWakeSatisfied =
+      report.wakeConditions.some((condition) =>
+        ['processExited', 'processResultAvailable'].includes(condition),
+      ) && (report.runId ? runState === 'completed' : this.deps.pendingProcessResult?.(sessionId));
+    if (
+      processWakeSatisfied ||
+      this.executorWakeAlreadySatisfied(sessionId, state, report.wakeConditions)
+    ) {
+      // The requested edge is already visible. Fence every pending automatic
       // callback before returning control to the still-active root; otherwise
       // a scheduled executor resume could race same-turn supervision.
       const cancelled = this.cancelScheduledControl(state, now);
@@ -612,6 +640,7 @@ export class AutopilotCoordinator {
     this.completionTimers.get(sessionId)?.();
     this.completionTimers.delete(sessionId);
     this.parkedSubscriptions.set(sessionId, report.leaseId);
+    this.activityEventKeys.set(sessionId, this.progressKey(sessionId, false));
     this.persist(
       {
         ...state,
@@ -716,6 +745,9 @@ export class AutopilotCoordinator {
               },
             }),
             leaseId: wake.leaseId,
+            ...(state.supervision.waitLease?.runId
+              ? { runId: state.supervision.waitLease.runId }
+              : {}),
             reportId: state.supervision.lastReportId,
             wakeCondition: wake.condition,
             resumeAt: state.supervision.waitLease?.resumeAt ?? null,
@@ -772,7 +804,12 @@ export class AutopilotCoordinator {
     const progressKey = createHash('sha256')
       .update(`${this.progressKey(sessionId)}\0root-process\0${processId}`)
       .digest('hex');
-    return this.observableWake(sessionId, { leaseId: lease.id, condition, progressKey });
+    return this.observableWake(sessionId, {
+      leaseId: lease.id,
+      condition,
+      progressKey,
+      runId: processId,
+    });
   }
   enable(
     sessionId: string,
@@ -1777,7 +1814,9 @@ export class AutopilotCoordinator {
     // Reuse the canonical semantic projection: child order, timestamps, and
     // activity prose cannot manufacture an extra wake, while a child-only
     // lifecycle transition remains visible with an unchanged root.
-    const eventKey = this.progressKey(sessionId);
+    // The root finishing the turn that registered a lease is not a new work event.
+    // Keep child transitions observable without letting the waiter wake itself.
+    const eventKey = this.progressKey(sessionId, prior.supervision?.outcome !== 'parked');
     if (this.activityEventKeys.get(sessionId) === eventKey) return;
     this.activityEventKeys.set(sessionId, eventKey);
     if (this.semanticEvent(sessionId, 'agentActivityChanged')) return;
@@ -1970,6 +2009,7 @@ export class AutopilotCoordinator {
         payload: {
           ...this.wakeAttribution(next),
           leaseId: nextLease.id,
+          ...(nextLease.runId ? { runId: nextLease.runId } : {}),
           reportId: next.supervision?.lastReportId,
           resumeAt: nextLease.resumeAt ?? null,
           wakeConditions: nextLease.wakeConditions,
@@ -2311,6 +2351,7 @@ export class AutopilotCoordinator {
                   ...this.wakeAttribution(state),
                   wakeReason: 'deadline',
                   leaseId,
+                  ...(lease.runId ? { runId: lease.runId } : {}),
                   reportId: state.supervision.lastReportId,
                   resumeAt,
                   observedAt,
@@ -3890,15 +3931,16 @@ export class AutopilotCoordinator {
       policy: this.deps.policy,
     });
   }
-  private progressKey(sessionId: string): string {
+  private progressKey(sessionId: string, includeRootActivity = true): string {
     const retained = this.deps.plan(sessionId);
     const state = this.deps.store.find(sessionId);
-    return this.progressKeyFor(sessionId, state, retained);
+    return this.progressKeyFor(sessionId, state, retained, includeRootActivity);
   }
   private progressKeyFor(
     sessionId: string,
     state: AutopilotSession | null,
     retained: Readonly<{ plan: SupervisedPlan; identity: string }> | null,
+    includeRootActivity = true,
   ): string {
     const activity = this.deps.activity(sessionId);
     const interactions = this.deps.pendingInteraction(sessionId)
@@ -3940,7 +3982,7 @@ export class AutopilotCoordinator {
         })),
       })),
       agentActivity: [
-        ...(activity
+        ...(activity && includeRootActivity
           ? [
               {
                 agentId: 'root',

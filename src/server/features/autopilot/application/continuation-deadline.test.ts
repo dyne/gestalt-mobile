@@ -16,7 +16,11 @@ import { defaultAutopilotPolicy } from './policy.js';
 describe('continuation deadline across reconciliation', () => {
   afterEach(() => vi.useRealTimers());
 
-  function fixture() {
+  function fixture(
+    pendingProcessResult?: (sessionId: string) => boolean,
+    rootState: 'idle' | 'working' = 'idle',
+    processResultState?: (sessionId: string, runId: string) => 'running' | 'completed' | 'missing',
+  ) {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-18T05:59:19.000Z'));
     const database = new DatabaseSync(':memory:');
@@ -31,7 +35,7 @@ describe('continuation deadline across reconciliation', () => {
     const activity = {
       ...base,
       confidence: 'fresh' as 'fresh' | 'reconciling',
-      root: { ...base.root, state: 'idle' as const },
+      root: { ...base.root, state: rootState },
     };
     let activeTurnId: string | null = null;
     let pendingInteraction = false;
@@ -75,6 +79,8 @@ describe('continuation deadline across reconciliation', () => {
       session: () => ({ state: 'ready', threadId: 'root', activeTurnId }),
       activity: () => activity,
       pendingInteraction: () => pendingInteraction,
+      pendingProcessResult,
+      processResultState,
       reconcile,
       schedule: (callback, delay) => {
         const timer = setTimeout(callback, delay);
@@ -105,6 +111,123 @@ describe('continuation deadline across reconciliation', () => {
       },
     };
   }
+
+  it('persists a run-scoped lease and ignores unrelated or unscoped process wakeups', () => {
+    const runId = '00000000-0000-4000-8000-000000000001';
+    const f = fixture(
+      () => true,
+      'idle',
+      (_sessionId, id) => (id === runId ? 'running' : 'missing'),
+    );
+    try {
+      expect(
+        f.coordinator.registerProactiveWait('s', {
+          id: 'specific-run',
+          leaseId: 'specific-lease',
+          runId,
+          maxWaitMs: 60_000,
+          wakeConditions: ['processResultAvailable'],
+        }),
+      ).toBe(true);
+      expect(f.store.find('s')!.supervision?.waitLease?.runId).toBe(runId);
+      expect(f.coordinator.rootProcessCompleted('s', 'unrelated-run')).toBe(false);
+      expect(f.coordinator.semanticEvent('s', 'processResultAvailable')).toBe(false);
+      expect(f.coordinator.rootProcessCompleted('s', runId)).toBe(true);
+      expect(f.coordinator.rootProcessCompleted('s', runId)).toBe(false);
+      expect(f.events.filter((type) => type === 'autopilot.wait-woken')).toHaveLength(1);
+    } finally {
+      f.close();
+    }
+  });
+
+  it('recovers a completed run after restoring its durable wait', () => {
+    let result: 'running' | 'completed' = 'running';
+    const f = fixture(undefined, 'idle', () => result);
+    try {
+      expect(
+        f.coordinator.registerProactiveWait('s', {
+          id: 'restored-run',
+          leaseId: 'restored-wait',
+          runId: '00000000-0000-4000-8000-000000000001',
+          maxWaitMs: 60_000,
+          wakeConditions: ['processResultAvailable'],
+        }),
+      ).toBe(true);
+      f.coordinator.dispose('s');
+      result = 'completed';
+      f.coordinator.restore('s');
+      expect(f.events.filter((type) => type === 'autopilot.wait-woken')).toHaveLength(1);
+      expect(f.store.find('s')!.supervision?.waitLease).toBeNull();
+    } finally {
+      f.close();
+    }
+  });
+
+  it('does not park for completed, missing or foreign runs and retains the deadline fallback', async () => {
+    let result: 'completed' | 'running' | 'missing' = 'completed';
+    const f = fixture(undefined, 'idle', () => result);
+    try {
+      const report = {
+        id: 'bounded-run',
+        leaseId: 'bounded-wait',
+        runId: '00000000-0000-4000-8000-000000000001',
+        maxWaitMs: 60_000,
+        wakeConditions: ['processResultAvailable'] as const,
+      };
+      expect(f.coordinator.registerProactiveWait('s', report)).toBe('wakeAlreadySatisfied');
+      result = 'missing';
+      expect(f.coordinator.registerProactiveWait('s', report)).toBe(false);
+      result = 'running';
+      expect(f.coordinator.registerProactiveWait('s', report)).toBe(true);
+      await vi.advanceTimersByTimeAsync(64_000);
+      expect(f.events).toContain('autopilot.wait-expired');
+      expect(f.start).toHaveBeenCalledOnce();
+    } finally {
+      f.close();
+    }
+  });
+
+  it('keeps supervision in the current turn when a host result arrived before registration', async () => {
+    let unread = true;
+    const f = fixture(() => unread);
+    try {
+      const report = {
+        id: 'focused-running',
+        leaseId: 'focused-wait',
+        maxWaitMs: 600_000,
+        wakeConditions: ['processResultAvailable'] as const,
+      };
+      expect(f.coordinator.registerProactiveWait('s', report)).toBe('wakeAlreadySatisfied');
+      expect(f.store.find('s')!.supervision?.waitLease ?? null).toBeNull();
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(f.start).not.toHaveBeenCalled();
+      unread = false;
+      expect(f.coordinator.registerProactiveWait('s', report)).toBe(true);
+    } finally {
+      f.close();
+    }
+  });
+
+  it('does not wake an activity lease when only the registering root becomes idle', () => {
+    const f = fixture(undefined, 'working');
+    try {
+      f.activity.root.state = 'working';
+      expect(
+        f.coordinator.registerProactiveWait('s', {
+          id: 'executor-running',
+          leaseId: 'executor-wait',
+          maxWaitMs: 600_000,
+          wakeConditions: ['agentActivityChanged'],
+        }),
+      ).toBe(true);
+      f.activity.root.state = 'idle';
+      f.coordinator.activityChanged('s');
+      expect(f.events).not.toContain('autopilot.wait-woken');
+      expect(f.store.find('s')!.supervision?.waitLease?.id).toBe('executor-wait');
+    } finally {
+      f.close();
+    }
+  });
 
   it('expires an accepted wait and dispatches once despite reconciliation, retaining diagnostic boundaries', async () => {
     const f = fixture();

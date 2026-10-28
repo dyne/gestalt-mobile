@@ -67,6 +67,10 @@ Expand **Advanced settings** to change model thinking, the Org-plan executor mod
 and thinking, provider, sandbox, or approval policy, or to manage skill profiles.
 The executor starts with `gpt-5.6-terra` and high thinking; the supervisor uses medium thinking.
 Executor overrides preserve the installed role instructions and belong to each new session.
+These settings are launch defaults, not a mandatory L1 model. The Org supervisor's
+explicit runtime-supported model/effort choice wins; conflicting fixed roles use
+the default-agent override route with executor duties. Follow-ups without an L1
+policy preserve the existing child's settings instead of repinning defaults.
 **Save as defaults** stores the
 current session settings in `~/.gestalt/session-defaults.json` on the relay host.
 New browser visits load those settings; Advanced settings starts collapsed.
@@ -106,17 +110,21 @@ Version-1 plans separate requested model choices from assurance. Existing plans
 without `#+MODEL_POLICY_ASSURANCE` use disclosed **configured compatibility**;
 their policy metadata and file bytes need no migration. An explicit
 `#+MODEL_POLICY_ASSURANCE: configured` selects the same mode. Mobile validates
-allowed models/efforts and higher-effort necessity, checks the active runtime
+bounded model/effort identifiers and any optional detailed effort rationale, checks the active runtime
 catalog before versioned root dispatch, and directs the root to launch the exact
 L1 model/effort through supported overrides with inherited sandbox and approval
 policy. Automatic executor resumes use that L1 policy rather than session defaults.
+The supervisor may revise each L1 choice without a separate model/effort approval.
+After pausing an active writer and recording/resyncing the revised policy,
+Mobile validates support and applies it to the same child's next safe turn.
+Unavailable model/effort pairs fail explicitly; defaults never replace them silently.
 
 `#+MODEL_POLICY_ASSURANCE: runtime-attested` explicitly requires strict runtime
 receipts. The current adapter cannot supply runtime-issued settings revisions;
 strict plans fail with `RUNTIME_ATTESTATION_UNAVAILABLE` and remain strict until
 the user authorizes a change. Repeated approvals or attention resolution cannot
 provide that capability. Manual Off is independently respected. Legacy plans
-without model policy keep their existing behavior.
+without model policy preserve their executor's existing settings on follow-up.
 
 `gestalt_org_plan_health` reports `executionAdmission.allowed`, configured
 assurance and `executorLaunch`, which checks the requested L1 model/effort using
@@ -177,6 +185,14 @@ resume; changing an ambient profile does not silently change existing consent.
 browser tools. Kimi cannot activate it. See [Managed browser access](docs/managed-playwright.md)
 for installation, the distinct CLI profile format, controls, permissions,
 workspace state, supported runtime boundaries, and component compatibility.
+
+Advertised skills are available to consult; their instructions are loaded only
+when relevant, not all at session startup. Org Plan `:SKILLS:` may include exact
+`$gestalt:*` references alongside other available skills. Declared skills are
+required preparation, not an exclusive allowlist: executors may load additional
+relevant skills when challenges arise without revising the plan. Skill use does
+not expand scope or authority, and plan declarations do not enable unavailable
+conditional tools. Agents owns validation and the execution-time loading rules.
 
 `gestalt:xerj` is conditional retrieval infrastructure. For Codex, Mobile checks
 the manager's shared readiness contract and the owning thread's native MCP
@@ -583,10 +599,28 @@ in a separate job. New commits cancel superseded PR runs; main release runs are
 not cancelled.
 
 Playwright functional shards, real authentication, visual evidence, and
-authorization stress run weekly (Monday 03:23 UTC) or through **Actions → CI → Run
-workflow**. They do not gate ordinary PRs or releases. Browser regressions can
-therefore be detected later; run the relevant browser suite locally when changing
-browser behavior.
+authorization stress are manual only. They do not run on PRs, pushes, schedules,
+or a default manual CI invocation. To opt in, use **Actions → CI → Run workflow**
+and select **run_slow_tests**, or run:
+
+```sh
+gh workflow run ci.yml --ref YOUR_BRANCH -f run_slow_tests=true
+```
+
+To run browser tests locally with an existing Chrome installation:
+
+```sh
+npm ci
+npm run build:client
+PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/absolute/path/to/chrome npm run test:e2e
+```
+
+Use the lane commands below for functional, visual-evidence or real-auth tests.
+The optional GitHub browser jobs explicitly install a disposable test browser;
+ordinary application/session startup never does. Run the relevant browser suite
+manually when changing browser behavior. The actual CLI/Mobile managed-browser
+integration has separate installed-runtime prerequisites and remains opt-in;
+see [Managed browser access](docs/managed-playwright.md#manual-integration-tests).
 
 These choices follow successful CI run `37347775035`: browser jobs consumed
 483 of 652 total pre-release runner seconds. Removing them from ordinary runs
@@ -623,6 +657,15 @@ browser command while lane separation is introduced; no assertions are removed.
 
 Maintainers should follow the [npm release operations guide](docs/releasing.md)
 when configuring GitHub, rotating credentials, or recovering a partial release.
+
+## Host-owned test suites
+
+The host test runner is enabled by default. Root supervisors configure suites at
+runtime in the session workspace's `.gestalt/host-tests.json` and run them as the
+host user, outside the agent shell sandbox, without fingerprint approval or a
+restart. See [host test runner](docs/host-tests.md) for configuration, calls,
+evidence and the execution boundary. Use `--disable-test-runner` to turn it off.
+Serena's own sandbox checks remain in place.
 
 ## Copyright and license
 

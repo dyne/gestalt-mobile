@@ -133,6 +133,7 @@ describe('runCli', () => {
     expect(stdout.value()).toContain('Exact HTTPS browser origin for passkeys');
     expect(stdout.value()).toContain('--disable-passkey-auth');
     expect(stdout.value()).toContain('--icon <path>');
+    expect(stdout.value()).toContain('--disable-test-runner');
     expect(compose).not.toHaveBeenCalled();
     expect(probeCodexVersion).not.toHaveBeenCalled();
   });
@@ -219,6 +220,7 @@ describe('runCli', () => {
     expect(compose).toHaveBeenCalledWith(
       expect.objectContaining({
         root: resolve('/caller/workspace'),
+        testRunnerEnabled: true,
         staticDir: resolve(root, 'dist/client'),
         installedCodexVersion: 'codex-cli 1.2.3',
         componentVersions: [

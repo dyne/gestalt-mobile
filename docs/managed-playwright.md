@@ -222,3 +222,33 @@ Preparing the older package is an explicit isolated operator test step, not
 session startup. This proves that version transition and login persistence; it
 does not test online registry acquisition during the migration. Full Mobile
 checks and browser E2E remain separate host gates.
+
+## Manual integration tests
+
+The installed-runtime browser test is skipped by ordinary `npm test` and CI.
+Run it explicitly on Linux with Node 24, a compatible installed Codex runtime,
+the matching manager checkout, and an existing Chrome executable. Prepare two
+separate disposable manager homes explicitly; these commands acquire packages,
+so run them only when you intend to prepare the integration environment:
+
+```sh
+GESTALT_HOME=/absolute/test-home-082 /absolute/manager/public/gestalt playwright install 0.0.82
+GESTALT_HOME=/absolute/test-home-083 /absolute/manager/public/gestalt playwright install 0.0.83
+```
+
+Then, from the Mobile checkout:
+
+```sh
+RUN_MOBILE_PLAYWRIGHT=1 \
+GESTALT_MANAGER_BIN=/absolute/manager/public/gestalt \
+GESTALT_PLAYWRIGHT_REAL_HOME=/absolute/test-home-083 \
+GESTALT_PLAYWRIGHT_UPGRADE_FROM_HOME=/absolute/test-home-082 \
+GESTALT_PLAYWRIGHT_REAL_CHROME=/absolute/path/to/chrome \
+PLAYWRIGHT_EVIDENCE_DIR=/absolute/evidence-directory \
+npm test -- test/integration/playwright-mobile-runtime.test.ts
+```
+
+The fixture copies the prepared homes into disposable state, uses localhost
+model/page fixtures, and verifies real CLI-to-Mobile cookie persistence across
+the package update. It does not download or install Chrome. Browser UI E2E and
+optional GitHub workflow instructions are in the README's testing section.

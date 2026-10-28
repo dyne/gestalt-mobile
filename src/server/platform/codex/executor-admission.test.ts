@@ -42,6 +42,7 @@ const versioned: SupervisedPlan = {
 };
 async function fixture(catalog: unknown = {}) {
   let mandatory = false;
+  let selected: { model: string; reasoningEffort: string } | undefined;
   let flipOnMissingChild = false;
   const calls: { method: string; params: unknown }[] = [];
   const launch: ConstructorParameters<typeof CodexSessionRuntime>[0] = () => ({
@@ -64,7 +65,10 @@ async function fixture(catalog: unknown = {}) {
     },
     close: () => {},
   });
-  const guard = vi.fn(() => requireModelPolicyAdmission(mandatory ? versioned : null));
+  const guard = vi.fn(async () => {
+    requireModelPolicyAdmission(mandatory ? versioned : null);
+    return selected ? { ...selected, assertCurrent: () => {} } : undefined;
+  });
   const args: ConstructorParameters<typeof CodexSessionRuntime> = [launch];
   args[14] = guard; // Optional host-only admission port; no model-owned arguments.
   const runtime = new CodexSessionRuntime(...args);
@@ -87,6 +91,9 @@ async function fixture(catalog: unknown = {}) {
     session,
     calls,
     guard,
+    select: (value: { model: string; reasoningEffort: string }) => {
+      selected = value;
+    },
     setMandatory: () => {
       mandatory = true;
     },
@@ -97,6 +104,30 @@ async function fixture(catalog: unknown = {}) {
 }
 
 describe('executor admission at the owned runtime dispatch boundary', () => {
+  it('applies successive supervisor L1 choices to the same child instead of configured defaults', async () => {
+    const f = await fixture();
+    try {
+      const session = {
+        ...f.session,
+        modelSettings: {
+          executorModel: 'gpt-6.1-sol',
+          executorReasoningEffort: 'medium' as const,
+        },
+      };
+      f.select({ model: 'gpt-6.1-terra', reasoningEffort: 'high' });
+      await f.runtime.startExecutorTurn(session, 'child', 'Synthetic selected work', 'first');
+      f.select({ model: 'gpt-6-sol', reasoningEffort: 'low' });
+      await f.runtime.startExecutorTurn(session, 'child', 'Synthetic revised work', 'second');
+      expect(
+        f.calls.filter((call) => call.method === 'turn/start').map((call) => call.params),
+      ).toEqual([
+        expect.objectContaining({ threadId: 'child', model: 'gpt-6.1-terra', effort: 'high' }),
+        expect.objectContaining({ threadId: 'child', model: 'gpt-6-sol', effort: 'low' }),
+      ]);
+    } finally {
+      f.runtime.stopAll();
+    }
+  });
   it.each([
     [{}, 'EXECUTOR_CATALOG_UNAVAILABLE'],
     [

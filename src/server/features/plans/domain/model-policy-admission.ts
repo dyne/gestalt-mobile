@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { SupervisedPlan } from './supervised-plan.js';
+import { validPlanModel, validPlanEffort, type SupervisedPlan } from './supervised-plan.js';
 
 export type ModelPolicyStatus = 'legacy' | 'required' | 'unavailable';
 export type ModelPolicyAdmission =
@@ -54,29 +54,26 @@ export function assessModelPolicyAdmission(
   if (version !== 1) return blocked('POLICY_VERSION_UNSUPPORTED');
   if (!plan?.steps.length || plan.steps.some((step) => step.modelPolicy?.version !== 1))
     return blocked('POLICY_FIELDS_INVALID');
-  if (
-    plan.steps.some(
-      (step) => !['gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol'].includes(step.modelPolicy!.model),
-    )
-  )
+  if (plan.steps.some((step) => !validPlanModel(step.modelPolicy!.model)))
     return blocked('MODEL_PROHIBITED');
   if (
     plan.steps.some((step) => {
       const policy = step.modelPolicy!;
       const necessity = policy.necessity;
       return (
-        !['medium', 'high', 'xhigh'].includes(policy.reasoningEffort) ||
+        !validPlanEffort(policy.reasoningEffort) ||
         (policy.reasoningEffort === 'medium'
           ? necessity !== null
-          : !necessity ||
-            !['unresolved-correctness', 'specific-reasoning'].includes(necessity.kind) ||
-            ![
-              necessity.whyMediumInadequate,
-              necessity.evidence,
-              necessity.affectedScope,
-              necessity.returnToMedium,
-              ...(policy.reasoningEffort === 'xhigh' ? [necessity.scopeReassessment] : []),
-            ].every((value) => typeof value === 'string' && value.trim()))
+          : necessity !== null &&
+            (!necessity ||
+              !['unresolved-correctness', 'specific-reasoning'].includes(necessity.kind) ||
+              ![
+                necessity.whyMediumInadequate,
+                necessity.evidence,
+                necessity.affectedScope,
+                necessity.returnToMedium,
+                ...(policy.reasoningEffort === 'xhigh' ? [necessity.scopeReassessment] : []),
+              ].every((value) => typeof value === 'string' && value.trim())))
       );
     })
   )
@@ -91,7 +88,7 @@ export function assessModelPolicyAdmission(
     assurance: 'configured',
     runtimeEnforcement: false,
     action:
-      'Compatibility mode: validate exact L1 launch settings and controller-owned executor identity. Observed mismatches block continuation. Missing runtime settings remain unknown; no runtime attestation is claimed.',
+      'Compatibility mode: validate the supervisor-selected L1 settings against the runtime catalog and preserve controller-owned executor identity. Apply changed settings at the next safe turn, never repin them to session defaults. Missing observations remain unknown; no runtime attestation is claimed.',
   };
 }
 
