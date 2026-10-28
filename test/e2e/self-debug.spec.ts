@@ -7,6 +7,7 @@
 import { test, expect } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { chatSnapshot } from './chat-snapshot-fixture.js';
+import { screenshotPath } from './screenshot-path.js';
 
 for (const viewport of [
   { width: 1280, height: 900 },
@@ -119,7 +120,7 @@ for (const viewport of [
       await confirmation.evaluate((element) => element.scrollWidth <= element.clientWidth),
     ).toBe(true);
     await page.screenshot({
-      path: `output/playwright/self-debug-confirmation-${viewport.width}.png`,
+      path: screenshotPath(`self-debug-confirmation-${viewport.width}.png`),
     });
     await confirmation.getByRole('button', { name: 'Cancel' }).click();
     expect(creates).toBe(0);
@@ -142,7 +143,7 @@ for (const viewport of [
     expect(await preview.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
       true,
     );
-    await page.screenshot({ path: `output/playwright/self-debug-trace-${viewport.width}.png` });
+    await page.screenshot({ path: screenshotPath(`self-debug-trace-${viewport.width}.png`) });
     await preview.getByRole('button', { name: 'Close file preview' }).click();
     await expect(
       page.getByRole('button', { name: 'Redacted diagnostic trace (JSON)' }),

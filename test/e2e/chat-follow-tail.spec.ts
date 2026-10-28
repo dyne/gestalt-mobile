@@ -6,6 +6,7 @@
 import { expect, test } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { chatSnapshot } from './chat-snapshot-fixture.js';
+import { screenshotPath } from './screenshot-path.js';
 
 async function waitForScrollToSettle(page: import('@playwright/test').Page): Promise<void> {
   await page.evaluate(async () => {
@@ -535,7 +536,7 @@ for (const viewport of [
     await expect(page.getByText('message 23')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Send prompt' })).toBeVisible();
     await page.screenshot({
-      path: `output/playwright/chat-follow-tail-initial-${viewport.name}.png`,
+      path: screenshotPath(`chat-follow-tail-initial-${viewport.name}.png`),
       fullPage: false,
     });
   });

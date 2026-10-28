@@ -239,6 +239,8 @@ function makeStep(heading: ParsedHeading): PlanStep | null {
   const description = descriptionFor(heading);
   const measurement = measurementFor(heading);
   if (!description || measurement === null) return null;
+  const managed = heading.descriptions.get('Managed MCP');
+  if (managed !== undefined && (heading.level !== 1 || managed !== 'playwright')) return null;
   if (heading.level === 1) {
     const reviewStatus = heading.properties.get('REVIEW_STATUS');
     const skills = heading.properties.get('SKILLS');
@@ -252,6 +254,7 @@ function makeStep(heading: ParsedHeading): PlanStep | null {
       priority: heading.priority,
       reviewStatus: reviewStatus as PlanReviewStatus,
       skills: skills.split(/\s+/).filter(Boolean),
+      ...(managed === 'playwright' ? { managedMcp: ['playwright'] as const } : {}),
       description,
       ...(measurement ? { measurement } : {}),
       children: [],
@@ -454,6 +457,7 @@ function freezePlan(plan: SupervisedPlan): SupervisedPlan {
     Object.freeze({
       ...step,
       ...(step.skills ? { skills: Object.freeze([...step.skills]) } : {}),
+      ...(step.managedMcp ? { managedMcp: Object.freeze(['playwright'] as const) } : {}),
       description: Object.freeze({ ...step.description }),
       children: Object.freeze(step.children.map(freezeStep)),
     });

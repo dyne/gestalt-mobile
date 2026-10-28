@@ -5,6 +5,10 @@
  */
 
 import { DomainError } from './errors.js';
+import {
+  profileCapabilitiesSchema,
+  type ProfileCapabilities,
+} from '../../../../shared/contracts/profile-capabilities.js';
 import type { RelaySessionEvent } from './events.js';
 import type { LlmProvider } from '../../../../shared/contracts/llm-provider.js';
 import type { SessionModelSettings } from '../../../../shared/contracts/session-model-settings.js';
@@ -58,6 +62,7 @@ export type PendingInteraction = {
  * A missing value is reserved for rows created before session-owned selections.
  */
 export type EffectiveSkillSelection = {
+  capabilities?: ProfileCapabilities;
   selectedProfileName?: string;
   /** Legacy persisted field; Serena availability is now automatic. */
   serenaSelected?: boolean;
@@ -120,6 +125,9 @@ export function createEffectiveSkillSelection(
     (warning): warning is string => typeof warning === 'string' && warning.length > 0,
   );
   return {
+    ...(input.capabilities === undefined
+      ? {}
+      : { capabilities: profileCapabilitiesSchema.parse(input.capabilities) }),
     ...(input.selectedProfileName === undefined
       ? {}
       : { selectedProfileName: normalizeSkillProfileName(input.selectedProfileName) }),
@@ -185,7 +193,12 @@ export class RelaySession {
       ...(input.model === undefined ? {} : { model: input.model }),
       ...(input.modelSettings === undefined ? {} : { modelSettings: { ...input.modelSettings } }),
       ...(input.branch === undefined ? {} : { branch: input.branch }),
-      effectiveSkillSelection: createEffectiveSkillSelection(input.effectiveSkillSelection),
+      effectiveSkillSelection: createEffectiveSkillSelection({
+        ...input.effectiveSkillSelection,
+        ...(input.provider === 'kimi' && input.effectiveSkillSelection.capabilities !== undefined
+          ? { capabilities: { playwright: { enabled: false } } }
+          : {}),
+      }),
       executionPolicy: createSessionExecutionPolicy(input),
       threadId: null,
       state: 'starting',
@@ -355,7 +368,13 @@ function copy(snapshot: RelaySessionSnapshot): RelaySessionSnapshot {
     ...(snapshot.effectiveSkillSelection === undefined
       ? {}
       : {
-          effectiveSkillSelection: createEffectiveSkillSelection(snapshot.effectiveSkillSelection),
+          effectiveSkillSelection: createEffectiveSkillSelection({
+            ...snapshot.effectiveSkillSelection,
+            ...(snapshot.provider === 'kimi' &&
+            snapshot.effectiveSkillSelection.capabilities !== undefined
+              ? { capabilities: { playwright: { enabled: false } } }
+              : {}),
+          }),
         }),
     pendingInteractions: snapshot.pendingInteractions.map((item) => ({ ...item })),
   };

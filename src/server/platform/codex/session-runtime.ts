@@ -33,6 +33,7 @@ import { gestaltOrgPlanHealthDynamicTool } from '../../../shared/contracts/org-p
 import { gestaltTestRunnerDynamicTool } from '../../../shared/contracts/host-tests.js';
 import { gestaltAutopilotWaitLeaseDynamicTool } from '../../../shared/contracts/autopilot-wait-lease.js';
 import { gestaltAgentCapacityRecoveryDynamicTool } from '../../../shared/contracts/agent-capacity-recovery.js';
+import { gestaltManagedPlaywrightDynamicTool } from '../../../shared/contracts/managed-playwright.js';
 import { countDiffLines } from '../../../shared/contracts/file-change.js';
 import { threadPlanName } from './thread-plan-name.js';
 import type { SupervisedPlan } from '../../features/plans/domain/supervised-plan.js';
@@ -287,6 +288,10 @@ export class CodexSessionRuntime {
         deadline: number,
       ): Promise<CodexRetrievalState>;
       verify(rpc: AppServer['rpc'], threadId: string, state: CodexRetrievalState): Promise<boolean>;
+      needsResume?(session: RelaySessionSnapshot): boolean | Promise<boolean>;
+      release?(sessionId: string): void;
+      observe?(sessionId: string, notification: { method: string; params: unknown }): void;
+      bound?(state: CodexRetrievalState, threadId: string): void;
     },
     private readonly requireExecutorAdmission?: (
       sessionId: string,
@@ -342,6 +347,7 @@ export class CodexSessionRuntime {
         resource.modelConfig,
       );
       resource.threadId = startedThreadId;
+      if (resource.retrieval) this.retrieval?.bound?.(resource.retrieval, startedThreadId);
       await this.verifyRetrieval(resource, session, true);
       this.sessions.set(session.id, resource);
       await this.writePendingThreadName(session.id);
@@ -376,6 +382,7 @@ export class CodexSessionRuntime {
       }
     }
     this.stop(sessionId);
+    this.retrieval?.release?.(sessionId);
   }
 
   /** Replaces only this session's app-server while retaining its durable root thread. */
@@ -391,6 +398,7 @@ export class CodexSessionRuntime {
     const resources = [...this.sessions.values()];
     for (const resource of resources) resource.beginExplicitShutdown();
     for (const resource of resources) resource.dispose();
+    for (const resource of resources) this.retrieval?.release?.(resource.sessionId);
   }
 
   /** Keeps a detached session's supervised-plan status observable without launching Codex. */
@@ -454,12 +462,38 @@ export class CodexSessionRuntime {
     clientUserMessageId: string | undefined,
     now: string,
   ): Promise<RelaySessionSnapshot> {
+    const resumeRequested = this.retrieval?.needsResume?.(session);
+    if (resumeRequested === true || (resumeRequested && (await resumeRequested))) {
+      // The same root resumes only at an idle boundary. Never recycle a writer
+      // with outstanding child work or held host requests to attach a browser.
+      const current = this.sessions.get(session.id);
+      const topology = await this.readExecutorTopology(session);
+      if (
+        current &&
+        !session.activeTurnId &&
+        current.pendingRequests.size === 0 &&
+        topology.kind === 'observed' &&
+        !topology.rootActive &&
+        topology.children.every(
+          (child) =>
+            child.qualified !== false &&
+            ['idle', 'notLoaded', 'systemError'].includes(child.status ?? ''),
+        )
+      ) {
+        session = await this.recycle(session, now);
+      }
+    }
     const resource = this.sessions.get(session.id);
     if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
     const result = decodeTurnStart(
       await resource.process.rpc.request('turn/start', {
         threadId: session.threadId,
-        input: [{ type: 'text', text, text_elements: [] }],
+        input: [
+          ...(resource.retrieval?.turnInstructions
+            ? [{ type: 'text', text: resource.retrieval.turnInstructions, text_elements: [] }]
+            : []),
+          { type: 'text', text, text_elements: [] },
+        ],
         ...(clientUserMessageId ? { clientUserMessageId } : {}),
         ...(session.model ? { model: session.model } : {}),
         ...(session.modelSettings?.reasoningEffort
@@ -1233,6 +1267,7 @@ export class CodexSessionRuntime {
             gestaltTestRunnerDynamicTool,
             gestaltAutopilotWaitLeaseDynamicTool,
             gestaltAgentCapacityRecoveryDynamicTool,
+            gestaltManagedPlaywrightDynamicTool,
           ],
         });
         result = {
@@ -1252,6 +1287,7 @@ export class CodexSessionRuntime {
         result = rebindMissingRollout(session, error, replacementThreadId, now);
       }
       resource.threadId = result.session.threadId!;
+      if (resource.retrieval) this.retrieval?.bound?.(resource.retrieval, resource.threadId);
       await this.verifyRetrieval(resource, session, result.replacementCreated);
       if (result.replacementCreated && resource.threadId !== result.session.threadId)
         result = rebindMissingRollout(session, missingRollout, resource.threadId!, now);
@@ -1361,6 +1397,7 @@ export class CodexSessionRuntime {
         gestaltTestRunnerDynamicTool,
         gestaltAutopilotWaitLeaseDynamicTool,
         gestaltAgentCapacityRecoveryDynamicTool,
+        gestaltManagedPlaywrightDynamicTool,
       ],
       ...(session.model ? { model: session.model } : {}),
       ...this.permissionParams(session),
@@ -1435,6 +1472,7 @@ export class CodexSessionRuntime {
       }
       const notificationUnsubscribe = process.rpc.onNotification((notification) => {
         if (!resource.active) return;
+        this.retrieval?.observe?.(session.id, notification);
         // Internal evidence may only be constructed by this resource's tracker.
         if (notification.method === 'gestalt/mcpStartup') return;
         this.publishMcpStartup(resource, notification);
@@ -1724,6 +1762,7 @@ export class CodexSessionRuntime {
         resource.skillsConfig,
         resource.modelConfig,
       );
+      this.retrieval.bound?.(state, resource.threadId);
       return;
     }
     await resource.process.rpc.request('thread/resume', {

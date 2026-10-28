@@ -170,10 +170,21 @@ configuration or skill files. Exact skill paths remain authoritative, while
 paths inside Codex's versioned plugin cache are rebound to the currently
 discovered plugin version when their marketplace, plugin, and skill-relative
 path still match. Fixed Gestalt workflow skills are session infrastructure: Mobile
-always enables and advertises them, including skills
+always enables and advertises its workflow skills, including skills
 added after a profile was saved. The editor labels them **Always advertised**
 and does not offer a disable control. Refresh discovery and start a new session
 after upgrading Gestalt Agents; running sessions retain their startup catalog.
+
+Browser access is a separate, explicit profile choice. The profile editor's
+**Browser access (Playwright)** control permits the host to activate a managed
+browser when the root supervisor or current Org milestone requests it; enabling
+the control leaves an idle session idle. Existing version-1 profiles remain off.
+New saved sessions retain their validated capability snapshot, including on
+resume; changing an ambient profile does not silently change existing consent.
+`gestalt:playwright` is conditional and appears only with verified connected
+browser tools. Kimi cannot activate it. See [Managed browser access](docs/managed-playwright.md)
+for installation, the distinct CLI profile format, controls, permissions,
+workspace state, supported runtime boundaries, and component compatibility.
 
 Advertised skills are available to consult; their instructions are loaded only
 when relevant, not all at session startup. Org Plan `:SKILLS:` may include exact
@@ -588,10 +599,28 @@ in a separate job. New commits cancel superseded PR runs; main release runs are
 not cancelled.
 
 Playwright functional shards, real authentication, visual evidence, and
-authorization stress run weekly (Monday 03:23 UTC) or through **Actions → CI → Run
-workflow**. They do not gate ordinary PRs or releases. Browser regressions can
-therefore be detected later; run the relevant browser suite locally when changing
-browser behavior.
+authorization stress are manual only. They do not run on PRs, pushes, schedules,
+or a default manual CI invocation. To opt in, use **Actions → CI → Run workflow**
+and select **run_slow_tests**, or run:
+
+```sh
+gh workflow run ci.yml --ref YOUR_BRANCH -f run_slow_tests=true
+```
+
+To run browser tests locally with an existing Chrome installation:
+
+```sh
+npm ci
+npm run build:client
+PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/absolute/path/to/chrome npm run test:e2e
+```
+
+Use the lane commands below for functional, visual-evidence or real-auth tests.
+The optional GitHub browser jobs explicitly install a disposable test browser;
+ordinary application/session startup never does. Run the relevant browser suite
+manually when changing browser behavior. The actual CLI/Mobile managed-browser
+integration has separate installed-runtime prerequisites and remains opt-in;
+see [Managed browser access](docs/managed-playwright.md#manual-integration-tests).
 
 These choices follow successful CI run `37347775035`: browser jobs consumed
 483 of 652 total pre-release runner seconds. Removing them from ordinary runs

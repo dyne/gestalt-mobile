@@ -61,6 +61,7 @@ export function registerListAvailableSkills(
       const skills = applySkillSelectionSnapshot(discovered.skills, project?.skills);
       return {
         source: project ? 'project' : 'native',
+        ...(project?.capabilities ? { capabilities: project.capabilities } : {}),
         errors: discovered.errors.map(({ message }) => ({ message })),
         skills: skills
           .filter((skill) => !isAlwaysAdvertisedSkill(skill) && skill.name !== 'gestalt:xerj')

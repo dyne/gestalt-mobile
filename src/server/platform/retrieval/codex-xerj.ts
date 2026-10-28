@@ -20,6 +20,8 @@ export type CodexRetrievalState = {
   skillsConfig: readonly { path: string; enabled: boolean }[];
   ready: boolean;
   diagnostic?: string;
+  /** Verified optional capability guidance inserted only when starting a root turn. */
+  turnInstructions?: string;
   evidence?: ReadinessEvidence;
   readiness?: RetrievalReadiness;
   repositories?: RepositoryReadiness;

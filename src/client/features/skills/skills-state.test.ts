@@ -43,6 +43,79 @@ function client(overrides: Partial<SkillsClient> = {}): SkillsClient {
 }
 
 describe('SkillsState', () => {
+  it('defaults browser access off and retains explicit choices through save, duplicate, reload and delete', async () => {
+    const api = client();
+    const state = new SkillsState(api);
+    await state.load('w', 'default');
+    expect(state.playwrightEnabled).toBe(false);
+    expect(state.savePayload().version).toBe(1);
+    state.setPlaywrightEnabled(true);
+    expect(state.dirty).toBe(true);
+    state.saveAsName = 'browser';
+    await state.save();
+    expect(state.savePayload()).toMatchObject({
+      version: 2,
+      capabilities: { playwright: { enabled: true } },
+    });
+    expect(state.dirty).toBe(false);
+    state.saveAsName = 'copy';
+    await state.save();
+    state.selectDefaultProfile();
+    expect(state.playwrightEnabled).toBe(false);
+    state.selectProfile('copy');
+    expect(state.playwrightEnabled).toBe(true);
+    state.setPlaywrightEnabled(false);
+    await state.save();
+    state.selectProfile('browser');
+    expect(state.playwrightEnabled).toBe(true);
+    state.selectProfile('copy');
+    expect(state.playwrightEnabled).toBe(false);
+    expect(state.savePayload()).toMatchObject({
+      version: 2,
+      capabilities: { playwright: { enabled: false } },
+    });
+    await state.deleteSelectedProfile();
+    expect(state.playwrightEnabled).toBe(false);
+    expect(state.profiles.some((profile) => profile.name === 'browser')).toBe(true);
+  });
+
+  it('loads workspace consent, preserves browser edits during refresh, and resets the baseline', async () => {
+    const state = new SkillsState(
+      client({
+        listAvailableSkills: vi.fn(async () => ({
+          ...available,
+          source: 'project' as const,
+          capabilities: { playwright: { enabled: true } },
+        })),
+      }),
+    );
+    await state.load('w', 'default');
+    expect(state.playwrightEnabled).toBe(true);
+    state.setPlaywrightEnabled(false);
+    await state.refresh();
+    expect(state.playwrightEnabled).toBe(false);
+    state.reset();
+    expect(state.playwrightEnabled).toBe(true);
+  });
+
+  it('reports failed saves to the shared error callback and preserves browser edits', async () => {
+    const onerror = vi.fn();
+    const state = new SkillsState(
+      client({
+        replaceSkillProfile: vi.fn(async () => {
+          throw new Error('Disk unavailable. Try again.');
+        }),
+      }),
+      onerror,
+    );
+    state.setPlaywrightEnabled(true);
+    state.saveAsName = 'browser';
+    await state.save();
+    expect(onerror).toHaveBeenCalledWith('Disk unavailable. Try again.');
+    expect(state.playwrightEnabled).toBe(true);
+    expect(state.status.kind).toBe('save-failed');
+  });
+
   it('discovers skills when the profile manager is opened', async () => {
     const listAvailableSkills = vi.fn(async () => available);
     const state = new SkillsState(client({ listAvailableSkills }));

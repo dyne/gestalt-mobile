@@ -15,6 +15,7 @@ import type { LlmProvider } from '../../../shared/contracts/llm-provider.js';
 import type { DebugConfirmation, SelfDebugSession } from '../../../shared/contracts/self-debug.js';
 import type { AgentActivitySnapshot } from '../agent-activity/contracts.js';
 import type { AutopilotSnapshot } from '../autopilot/contracts.js';
+import type { ProfileCapabilities } from '../../../shared/contracts/profile-capabilities.js';
 
 export type WorkspacePlanEntry = Readonly<{
   planName: string;
@@ -65,6 +66,7 @@ export type RelaySession = {
   createdAt?: string;
   updatedAt?: string;
   effectiveSkillSelection?: {
+    capabilities?: ProfileCapabilities;
     selectedProfileName?: string;
     skills: Array<{ name: string; path: string; enabled: boolean }>;
     warnings?: string[];
@@ -187,13 +189,15 @@ export type RelayAvailableSkill = {
 };
 
 export type RelaySkillList = {
+  capabilities?: ProfileCapabilities;
   source: 'native' | 'project';
   errors: Array<{ message: string }>;
   skills: RelayAvailableSkill[];
 };
 
 export type RelaySkillProfile = {
-  version: 1;
+  version: 1 | 2;
+  capabilities?: ProfileCapabilities;
   name: string;
   path: string;
   skills: Array<{ name: string; path: string; enabled: boolean }>;
@@ -547,7 +551,7 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       get<RelaySkillProfileList>('/api/skill-profiles', signal),
     replaceSkillProfile: (
       name: string,
-      profile: Pick<RelaySkillProfile, 'version' | 'name' | 'skills'>,
+      profile: Pick<RelaySkillProfile, 'version' | 'name' | 'skills' | 'capabilities'>,
     ) => put<RelaySkillProfile>(`/api/skill-profiles/${encodeURIComponent(name)}`, profile),
     deleteSkillProfile: (name: string) => remove(`/api/skill-profiles/${encodeURIComponent(name)}`),
     respondInteraction: (sessionId: string, requestId: string, value: unknown, key?: string) =>

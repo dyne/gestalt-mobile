@@ -44,9 +44,11 @@ describe('GitHub verification workflow', () => {
     expect(workflow).toContain('node-version: 24');
   });
 
-  it('retains expensive suites only on scheduled or manual runs outside the release gate', () => {
-    expect(configuration.on).toHaveProperty('schedule');
-    expect(configuration.on).toHaveProperty('workflow_dispatch');
+  it('requires explicit manual opt-in for expensive suites outside the release gate', () => {
+    expect(configuration.on).not.toHaveProperty('schedule');
+    expect(configuration.on.workflow_dispatch).toMatchObject({
+      inputs: { run_slow_tests: { type: 'boolean', default: false } },
+    });
     for (const id of [
       'browser-functional',
       'real-auth',
@@ -54,7 +56,7 @@ describe('GitHub verification workflow', () => {
       'authorization-stress',
     ]) {
       expect(configuration.jobs[id]!.if).toBe(
-        "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'",
+        "github.event_name == 'workflow_dispatch' && inputs.run_slow_tests",
       );
       expect(configuration.jobs.release!.needs).not.toContain(id);
     }

@@ -118,6 +118,9 @@ import { CodexXerj } from './platform/retrieval/codex-xerj.js';
 import { CodexSerena } from './platform/codex/codex-serena.js';
 import { ManagedSerena } from './platform/codex/managed-serena.js';
 import { CodexCapabilities } from './platform/codex/codex-capabilities.js';
+import { CodexPlaywright, type PlaywrightAuthority } from './platform/codex/codex-playwright.js';
+import { ManagedPlaywright } from './platform/codex/managed-playwright.js';
+import { isManagedPlaywrightCall } from '../shared/contracts/managed-playwright.js';
 import type { RetrievalCapabilityPort } from './features/skills/application/ports.js';
 import { compileSkillOverride, type SkillProfile } from './features/skills/model/skill-profile.js';
 import { SupervisedPlanRegistry } from './features/plans/application/supervised-plan-registry.js';
@@ -708,6 +711,23 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const xerj = new CodexXerj(retrievalCapability);
   const serenaInstallation = new ManagedSerena();
   const capabilities = new CodexCapabilities(xerj, new CodexSerena(serenaInstallation));
+  const playwright = new CodexPlaywright(new ManagedPlaywright());
+  const playwrightAuthority = (session: RelaySessionSnapshot): PlaywrightAuthority => {
+    const plan = supervisedPlans.findCurrent(session.id);
+    const active = plan?.steps[currentExecutableL1Index(plan)];
+    const control = autopilotStore.find(session.id);
+    return {
+      session,
+      planIdentity: supervisedPlans.identity(session.id),
+      activePlanId: active?.id ?? null,
+      declared: active?.state === 'WIP' && active.managedMcp?.includes('playwright') === true,
+      fenced:
+        control?.stopReason === 'manualDisabled' ||
+        control?.state === 'safetyPaused' ||
+        control?.state === 'attentionRequired' ||
+        blockingInteractions(session.id).length > 0,
+    };
+  };
   const skillCatalog = (provider: LlmProvider, profile: string) =>
     provider === 'kimi'
       ? kimiSkillCatalog
@@ -1286,6 +1306,21 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           }
           const session = withPendingInteractions(sessions.find(sessionId));
           if (!session) return false;
+          if (isManagedPlaywrightCall(request)) {
+            const result = await playwright.control(
+              playwrightAuthority(session),
+              (request.params as { arguments?: unknown }).arguments,
+              origin.kind === 'root' &&
+                origin.physicalThreadId === session.threadId &&
+                origin.physicalTurnId === session.activeTurnId,
+            );
+            return (
+              runtime?.resolveServerRequest(sessionId, String(request.id), {
+                success: true,
+                contentItems: [{ type: 'inputText', text: JSON.stringify(result) }],
+              }) === true
+            );
+          }
           const toolCall = request.params as { tool?: unknown; arguments?: unknown } | null;
           if (
             request.method === 'item/tool/call' &&
@@ -1716,7 +1751,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 session.effectiveSkillSelection?.skills ?? options.explicitSkillProfile?.skills,
               project: project?.skills,
             });
-            return capabilities.prepare({
+            const state = await capabilities.prepare({
               cwd: session.workspacePath,
               approvalPolicy: session.executionPolicy?.approvalPolicy ?? 'on-request',
               rpc,
@@ -1726,8 +1761,25 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               skillsConfig: selected.skillsConfig,
               start: true,
             });
+            return playwright.prepare(state, playwrightAuthority(session), {
+              rpc,
+              skills: catalog.skills,
+              deadline: Date.now() + 5_000,
+              current: () => playwrightAuthority(sessions.find(session.id) ?? session),
+            });
           },
-          verify: (rpc, threadId, state) => capabilities.verify(rpc, threadId, state),
+          verify: async (rpc, threadId, state) => {
+            const base = playwright.base(state);
+            const [retrievalReady, browserReady] = await Promise.all([
+              capabilities.verify(rpc, threadId, base),
+              playwright.verify(rpc, threadId, state),
+            ]);
+            return retrievalReady && browserReady;
+          },
+          needsResume: (session) => playwright.needsResume(playwrightAuthority(session)),
+          release: (sessionId) => playwright.release(sessionId),
+          observe: (sessionId, notification) => playwright.observe(sessionId, notification),
+          bound: (state, threadId) => playwright.bound(state, threadId),
         },
         async (sessionId, threadId) => {
           requireOrgExecutionAdmission(sessionId);

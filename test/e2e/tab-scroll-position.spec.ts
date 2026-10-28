@@ -7,6 +7,7 @@
 import { expect, test } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { chatSnapshot } from './chat-snapshot-fixture.js';
+import { screenshotPath } from './screenshot-path.js';
 
 test.beforeEach(async ({ page }) => mockAuthenticatedStatus(page));
 
@@ -161,7 +162,7 @@ for (const detached of [false, true]) {
           })),
       }));
       expect(overflow.width, JSON.stringify(overflow)).toBeLessThanOrEqual(390);
-      await page.screenshot({ path: 'output/playwright/chat-top-detached-zoom.png' });
+      await page.screenshot({ path: screenshotPath('chat-top-detached-zoom.png') });
     }
     if (!detached) {
       await page.evaluate(() => window.scrollTo({ top: 1200 }));

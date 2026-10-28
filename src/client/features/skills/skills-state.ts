@@ -21,7 +21,7 @@ export type SkillsClient = {
   listSkillProfiles(signal?: AbortSignal): Promise<RelaySkillProfileList>;
   replaceSkillProfile(
     name: string,
-    profile: Pick<RelaySkillProfile, 'version' | 'name' | 'skills'>,
+    profile: Pick<RelaySkillProfile, 'version' | 'name' | 'skills' | 'capabilities'>,
   ): Promise<RelaySkillProfile>;
   deleteSkillProfile(name: string): Promise<void>;
 };
@@ -48,6 +48,12 @@ export class SkillsState {
   missingSkills: MissingProfileSkill[] = [];
   profiles: RelaySkillProfileList['profiles'] = [];
   status: SkillsStatus = { kind: 'idle' };
+  playwrightEnabled = false;
+  private explicitCapabilities = false;
+  private browserBaseline = false;
+  private capabilitiesBaseline = false;
+  private defaultPlaywrightEnabled = false;
+  private defaultExplicitCapabilities = false;
   private baseline = new Map<string, boolean>();
   private missingBaseline = new Map<string, { name: string; path: string; enabled: boolean }>();
   private saving = false;
@@ -56,7 +62,10 @@ export class SkillsState {
   private generation = 0;
   private disposed = false;
 
-  constructor(private readonly client: SkillsClient) {}
+  constructor(
+    private readonly client: SkillsClient,
+    private readonly onerror: (message: string) => void = () => undefined,
+  ) {}
 
   get enabledCount(): number {
     return this.skills.filter((skill) => skill.enabled).length;
@@ -64,6 +73,8 @@ export class SkillsState {
 
   get dirty(): boolean {
     return (
+      this.playwrightEnabled !== this.browserBaseline ||
+      this.explicitCapabilities !== this.capabilitiesBaseline ||
       this.skills.some((skill) => this.baseline.get(skill.path) !== skill.enabled) ||
       this.missingSkills.some(
         (skill) => this.missingBaseline.get(skill.path)?.enabled !== skill.enabled,
@@ -117,6 +128,7 @@ export class SkillsState {
     } catch (error) {
       if (!this.current(generation, request) || request.signal.aborted) return;
       this.status = { kind: 'error', message: errorMessage(error) };
+      this.onerror(this.status.message);
     }
   }
 
@@ -143,6 +155,7 @@ export class SkillsState {
     } catch (error) {
       if (!this.current(generation, request) || request.signal.aborted) return;
       this.status = { kind: 'error', message: errorMessage(error) };
+      this.onerror(this.status.message);
     }
   }
 
@@ -156,6 +169,10 @@ export class SkillsState {
     }
     this.selectedProfileName = selected.name;
     this.saveAsName = selected.name;
+    this.playwrightEnabled = selected.capabilities?.playwright.enabled ?? false;
+    this.explicitCapabilities = selected.capabilities !== undefined;
+    this.browserBaseline = this.playwrightEnabled;
+    this.capabilitiesBaseline = this.explicitCapabilities;
     const enabled = new Map(selected.skills.map((skill) => [skill.path, skill.enabled]));
     const availablePaths = new Set(this.skills.map((skill) => skill.path));
     const missing = selected.skills.filter((skill) => !availablePaths.has(skill.path));
@@ -176,6 +193,8 @@ export class SkillsState {
   selectDefaultProfile(): void {
     this.selectedProfileName = '';
     this.saveAsName = '';
+    this.playwrightEnabled = this.defaultPlaywrightEnabled;
+    this.explicitCapabilities = this.defaultExplicitCapabilities;
     this.missingSkills = [];
     this.skills = this.skills.map((skill) => ({ ...skill, enabled: skill.effectiveEnabled }));
     this.captureBaseline();
@@ -188,6 +207,11 @@ export class SkillsState {
     );
   }
 
+  setPlaywrightEnabled(enabled: boolean): void {
+    this.playwrightEnabled = enabled;
+    this.explicitCapabilities = true;
+  }
+
   removeMissingSkill(path: string): void {
     this.missingSkills = this.missingSkills.filter((skill) => skill.path !== path);
     this.status = this.missingSkills.length
@@ -198,6 +222,8 @@ export class SkillsState {
   }
 
   reset(): void {
+    this.playwrightEnabled = this.browserBaseline;
+    this.explicitCapabilities = this.capabilitiesBaseline;
     this.skills = this.skills.map((skill) => ({
       ...skill,
       enabled: this.baseline.get(skill.path) ?? false,
@@ -214,6 +240,7 @@ export class SkillsState {
     if (this.saving || this.deleting) return;
     if (!name) {
       this.status = { kind: 'save-failed', message: 'Enter a profile name before saving.' };
+      this.onerror(this.status.message);
       return;
     }
     this.saving = true;
@@ -231,6 +258,7 @@ export class SkillsState {
       this.status = { kind: 'saved' };
     } catch (error) {
       this.status = { kind: 'save-failed', message: errorMessage(error) };
+      this.onerror(this.status.message);
     } finally {
       this.saving = false;
     }
@@ -241,6 +269,7 @@ export class SkillsState {
     if (this.saving || this.deleting) return;
     if (!name) {
       this.status = { kind: 'delete-failed', message: 'Select a saved profile before deleting.' };
+      this.onerror(this.status.message);
       return;
     }
     this.deleting = true;
@@ -252,11 +281,14 @@ export class SkillsState {
       );
       this.selectedProfileName = '';
       this.saveAsName = '';
+      this.playwrightEnabled = this.defaultPlaywrightEnabled;
+      this.explicitCapabilities = this.defaultExplicitCapabilities;
       this.missingSkills = [];
       this.captureBaseline();
       this.status = { kind: 'deleted' };
     } catch (error) {
       this.status = { kind: 'delete-failed', message: errorMessage(error) };
+      this.onerror(this.status.message);
     } finally {
       this.deleting = false;
     }
@@ -282,9 +314,12 @@ export class SkillsState {
 
   savePayload(
     name = this.saveAsName.trim(),
-  ): Pick<RelaySkillProfile, 'version' | 'name' | 'skills'> {
+  ): Pick<RelaySkillProfile, 'version' | 'name' | 'skills' | 'capabilities'> {
     return {
-      version: 1,
+      version: this.explicitCapabilities ? 2 : 1,
+      ...(this.explicitCapabilities
+        ? { capabilities: { playwright: { enabled: this.playwrightEnabled } } }
+        : {}),
       name,
       skills: this.skills
         .map(({ name: skillName, path, enabled }) => ({ name: skillName, path, enabled }))
@@ -301,6 +336,18 @@ export class SkillsState {
     );
     const missingByPath = new Map(this.missingSkills.map((skill) => [skill.path, skill.enabled]));
     this.source = available.source;
+    this.defaultPlaywrightEnabled = available.capabilities?.playwright.enabled ?? false;
+    this.defaultExplicitCapabilities = available.capabilities !== undefined;
+    if (
+      !this.selectedProfileName &&
+      this.playwrightEnabled === this.browserBaseline &&
+      this.explicitCapabilities === this.capabilitiesBaseline
+    ) {
+      this.playwrightEnabled = this.defaultPlaywrightEnabled;
+      this.explicitCapabilities = this.defaultExplicitCapabilities;
+      this.browserBaseline = this.playwrightEnabled;
+      this.capabilitiesBaseline = this.explicitCapabilities;
+    }
     const optionalSkills = available.skills.filter(
       (skill) => !skill.alwaysAdvertised && !isFixedGestaltSkill(skill.name),
     );
@@ -320,6 +367,8 @@ export class SkillsState {
   }
 
   private captureBaseline(): void {
+    this.browserBaseline = this.playwrightEnabled;
+    this.capabilitiesBaseline = this.explicitCapabilities;
     this.baseline = new Map(this.skills.map((skill) => [skill.path, skill.enabled]));
     this.missingBaseline = new Map(this.missingSkills.map((skill) => [skill.path, { ...skill }]));
   }
