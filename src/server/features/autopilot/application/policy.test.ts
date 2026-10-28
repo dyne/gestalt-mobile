@@ -503,7 +503,7 @@ describe('autopilot policy', () => {
     ).toMatchObject({ kind: 'observe' });
   });
   it('keeps the only continuation prompt versioned and deterministic', () => {
-    expect(AUTOPILOT_PROMPT_VERSION).toBe('v13');
+    expect(AUTOPILOT_PROMPT_VERSION).toBe('v14');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
       'Refer to every L1 as L<a> and each nested L2 as L<a>.<b>',
     );
@@ -555,13 +555,14 @@ describe('autopilot policy', () => {
       taskName: 'l7_g2',
     });
     expect(prompt).toContain('Launch task_name l7_g2 for canonical L7');
-    expect(prompt).toContain('agent_type org-plan-executor and reasoning_effort high');
-    expect(prompt).toContain('gpt-5.6-terra by default');
+    expect(prompt).toContain('The supervisor chooses the exact runtime-supported model');
+    expect(prompt).toContain('agent_type default, fork_turns none');
+    expect(prompt).toContain('a fallback only when no L1 choice is supplied');
     expect(prompt).toContain('This exact replacement generation 2 is durably authorized by Mobile');
     expect(prompt).toContain('do not infer another generation from this prompt or the roster');
     expect(prompt).toContain('the durable l7 slot may remain reserved');
     expect(prompt).toContain(
-      "Do not reuse that task_name or attempt to change an existing agent's model in place",
+      'Do not reuse that task_name or treat a model change as replacement authorization',
     );
     expect(prompt).not.toContain('agent_type worker');
     expect(prompt).toContain('Transfer sole L7 ownership');
@@ -574,7 +575,7 @@ describe('autopilot policy', () => {
       taskName: 'l7',
     });
     expect(prompt).toContain('Launch task_name l7 for canonical L7');
-    expect(prompt).toContain('agent_type org-plan-executor and reasoning_effort high');
+    expect(prompt).toContain('The supervisor chooses the exact runtime-supported model');
     expect(prompt).not.toContain('replacement generation');
   });
   type ActivityChange = Partial<

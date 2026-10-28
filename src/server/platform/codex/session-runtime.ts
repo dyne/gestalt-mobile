@@ -484,12 +484,10 @@ export class CodexSessionRuntime {
       threadId: childThreadId,
       input: [{ type: 'text', text, text_elements: [] }],
       clientUserMessageId,
-      ...((policy?.model ?? session.modelSettings?.executorModel)
-        ? { model: policy?.model ?? session.modelSettings?.executorModel }
-        : {}),
-      ...((policy?.reasoningEffort ?? session.modelSettings?.executorReasoningEffort)
-        ? { effort: policy?.reasoningEffort ?? session.modelSettings?.executorReasoningEffort }
-        : {}),
+      // Defaults apply at launch. Without an explicit L1 policy, preserve the
+      // existing child's choices rather than repinning it on every follow-up.
+      ...(policy?.model ? { model: policy.model } : {}),
+      ...(policy?.reasoningEffort ? { effort: policy.reasoningEffort } : {}),
     };
     let response: unknown;
     try {

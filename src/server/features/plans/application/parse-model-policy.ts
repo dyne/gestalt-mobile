@@ -5,8 +5,8 @@
  */
 
 import type { PlanModelId, PlanModelPolicy } from '../domain/supervised-plan.js';
+import { validPlanModel, validPlanEffort } from '../domain/supervised-plan.js';
 
-const models: readonly string[] = ['gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol'];
 const required = [
   'MODEL',
   'REASONING_EFFORT',
@@ -46,18 +46,18 @@ export function parseModelPolicy(
     invalid();
   const model = properties.get('MODEL')!;
   const reasoningEffort = properties.get('REASONING_EFFORT')!;
-  if (!models.includes(model) || !['medium', 'high', 'xhigh'].includes(reasoningEffort)) invalid();
+  if (!validPlanModel(model) || !validPlanEffort(reasoningEffort)) invalid();
   const rawFallbacks = properties.get('MODEL_FALLBACKS')!;
   const allowedFallbacks = rawFallbacks === 'none' ? [] : rawFallbacks.split(' ');
   if (
-    allowedFallbacks.some((id) => !models.includes(id) || id === model) ||
+    allowedFallbacks.some((id) => !validPlanModel(id) || id === model) ||
     new Set(allowedFallbacks).size !== allowedFallbacks.length
   )
     invalid();
   let necessity: PlanModelPolicy['necessity'] = null;
   if (reasoningEffort === 'medium') {
     if (exception.some((key) => properties.has(key))) invalid();
-  } else {
+  } else if (exception.some((key) => properties.has(key))) {
     if (
       exception.slice(0, 5).some((key) => !properties.get(key)?.trim()) ||
       !['unresolved-correctness', 'specific-reasoning'].includes(

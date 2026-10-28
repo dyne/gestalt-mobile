@@ -67,6 +67,10 @@ Expand **Advanced settings** to change model thinking, the Org-plan executor mod
 and thinking, provider, sandbox, or approval policy, or to manage skill profiles.
 The executor starts with `gpt-5.6-terra` and high thinking; the supervisor uses medium thinking.
 Executor overrides preserve the installed role instructions and belong to each new session.
+These settings are launch defaults, not a mandatory L1 model. The Org supervisor's
+explicit runtime-supported model/effort choice wins; conflicting fixed roles use
+the default-agent override route with executor duties. Follow-ups without an L1
+policy preserve the existing child's settings instead of repinning defaults.
 **Save as defaults** stores the
 current session settings in `~/.gestalt/session-defaults.json` on the relay host.
 New browser visits load those settings; Advanced settings starts collapsed.
@@ -106,17 +110,21 @@ Version-1 plans separate requested model choices from assurance. Existing plans
 without `#+MODEL_POLICY_ASSURANCE` use disclosed **configured compatibility**;
 their policy metadata and file bytes need no migration. An explicit
 `#+MODEL_POLICY_ASSURANCE: configured` selects the same mode. Mobile validates
-allowed models/efforts and higher-effort necessity, checks the active runtime
+bounded model/effort identifiers and any optional detailed effort rationale, checks the active runtime
 catalog before versioned root dispatch, and directs the root to launch the exact
 L1 model/effort through supported overrides with inherited sandbox and approval
 policy. Automatic executor resumes use that L1 policy rather than session defaults.
+The supervisor may revise each L1 choice without a separate model/effort approval.
+After pausing an active writer and recording/resyncing the revised policy,
+Mobile validates support and applies it to the same child's next safe turn.
+Unavailable model/effort pairs fail explicitly; defaults never replace them silently.
 
 `#+MODEL_POLICY_ASSURANCE: runtime-attested` explicitly requires strict runtime
 receipts. The current adapter cannot supply runtime-issued settings revisions;
 strict plans fail with `RUNTIME_ATTESTATION_UNAVAILABLE` and remain strict until
 the user authorizes a change. Repeated approvals or attention resolution cannot
 provide that capability. Manual Off is independently respected. Legacy plans
-without model policy keep their existing behavior.
+without model policy preserve their executor's existing settings on follow-up.
 
 `gestalt_org_plan_health` reports `executionAdmission.allowed`, configured
 assurance and `executorLaunch`, which checks the requested L1 model/effort using

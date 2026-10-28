@@ -1754,10 +1754,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           assertCurrent();
           const report = await executorModelEvidence.read(sessionId);
           assertCurrent();
+          const settingsChange =
+            report && ['MODEL_MISMATCH', 'EFFORT_MISMATCH'].includes(report.code);
           if (
             !report ||
             report.child.threadId !== threadId ||
-            report.configuration === 'mismatch' ||
+            (report.configuration === 'mismatch' && !settingsChange) ||
             [
               'CONTROLLER_BINDING_INVALID',
               'CONTEXT_CHANGED',
@@ -1766,6 +1768,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             ].includes(report.code)
           )
             throw new Error(`EXECUTOR_POLICY_BLOCKED:${report?.code ?? 'CHILD_BINDING_UNKNOWN'}`);
+          // The supervisor's current L1 choice is applied at this safe turn
+          // boundary, including a deliberate change from the child's old model.
+          await runtime!.validateExecutorPolicy(sessionId, report.requested);
+          assertCurrent();
           return { ...report.requested, assertCurrent };
         },
       )
