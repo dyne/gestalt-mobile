@@ -60,6 +60,8 @@ export type HostTestResult = {
   startedAt: string;
   processExitedAt: string | null;
   observedAt: string;
+  /** Persisted only after a terminal result has been returned to its owner. */
+  resultReadAt?: string;
   exitCode: number | null;
   signal: string | null;
   counts: { passed: number; failed: number; skipped: number; total: number } | null;

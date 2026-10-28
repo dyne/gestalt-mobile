@@ -91,6 +91,39 @@ async function fixture(source = "console.log('# tests 1\\n# pass 1\\n# fail 0\\n
 }
 
 describe('host-owned tests', () => {
+  it('retains an unread completion across restart until its owner reads the result', async () => {
+    const f = await fixture();
+    const run = (await f.start()) as HostTestResult;
+    await vi.waitFor(() => expect(f.completed).toHaveBeenCalledOnce());
+    expect(f.runner.hasUnreadResult(f.owner.sessionId)).toBe(true);
+    expect(f.runner.hasUnreadResult('another-session')).toBe(false);
+    await f.runner.close();
+    const restarted = new LocalHostTestRunner(f.evidence);
+    await restarted.initialize();
+    cleanups.push(() => restarted.close());
+    expect(restarted.hasUnreadResult(f.owner.sessionId)).toBe(true);
+    await restarted.request(
+      { ...f.owner, sessionId: 'another-session' },
+      {
+        operation: 'status',
+        runId: run.runId,
+      },
+    );
+    expect(restarted.hasUnreadResult(f.owner.sessionId)).toBe(true);
+    await Promise.all(
+      [1, 2].map(() =>
+        restarted.request(f.owner, {
+          operation: 'status',
+          runId: run.runId,
+        }),
+      ),
+    );
+    expect(restarted.hasUnreadResult(f.owner.sessionId)).toBe(false);
+    const recovered = new LocalHostTestRunner(f.evidence);
+    await recovered.initialize();
+    cleanups.push(() => recovered.close());
+    expect(recovered.hasUnreadResult(f.owner.sessionId)).toBe(false);
+  });
   it('preserves active-run ownership and cancellation while runtime suites change', async () => {
     const f = await fixture('setInterval(()=>{},1000)');
     const run = (await f.start()) as HostTestResult;

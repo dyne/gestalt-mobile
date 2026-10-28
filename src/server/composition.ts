@@ -448,6 +448,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     },
   );
   const autopilot = new AutopilotCoordinator({
+    pendingProcessResult: (sessionId) => hostTests?.hasUnreadResult(sessionId) ?? false,
     modelPolicyStatus: (sessionId) => supervisedPlans.modelPolicyStatus(sessionId),
     store: autopilotStore,
     now: () => new Date().toISOString(),
