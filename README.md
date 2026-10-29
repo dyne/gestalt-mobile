@@ -560,6 +560,24 @@ durable history, deletes only the exact smoke-created Codex threads through the
 app-server afterwards, and always removes its temporary state. It reports
 `SKIP` when the isolated profile is unavailable.
 
+## Transient model capacity failures
+
+When a Codex root turn ends with `serverOverloaded` or `rateLimitExceeded`,
+Mobile waits one minute before attempting to continue the same task with
+`Continue.`. Recovery is bounded to two attempts per failure episode and requires
+a settled turn, a live writer, reconciled idle agents and no pending interaction.
+
+Autopilot retains its plan and authority checks. Ordinary sessions can recover
+with Autopilot off; recovery never enables it. A new user message, interruption,
+session stop/release, explicit Autopilot toggle or changed session cancels the
+pending continuation. Relay shutdown discards pending ordinary-session retries.
+Account usage limits, session budgets, context exhaustion and authorization or
+policy failures require intervention and are not automatically retried.
+
+Traces include `session.provider-retry-*` events for ordinary-session recovery,
+and `autopilot.provider-*` events for supervised recovery. These retain structured
+codes and turn identifiers without provider error prose or task text.
+
 ## Control-plane traces
 
 When an existing Chat is selected, the header menu offers **DEBUG**. Its confirmation shows the source session's live identifiers and installed component versions. Confirming captures a redacted JSON trace immediately. Debug creation does not start, steer, resume, or replace the source runtime.

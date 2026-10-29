@@ -461,6 +461,7 @@ export class CodexSessionRuntime {
     text: string,
     clientUserMessageId: string | undefined,
     now: string,
+    mayStart?: () => boolean,
   ): Promise<RelaySessionSnapshot> {
     const resumeRequested = this.retrieval?.needsResume?.(session);
     if (resumeRequested === true || (resumeRequested && (await resumeRequested))) {
@@ -485,6 +486,7 @@ export class CodexSessionRuntime {
     }
     const resource = this.sessions.get(session.id);
     if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
+    if (mayStart && !mayStart()) throw new Error('CODEX_TURN_START_CANCELLED');
     const result = decodeTurnStart(
       await resource.process.rpc.request('turn/start', {
         threadId: session.threadId,

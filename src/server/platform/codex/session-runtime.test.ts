@@ -2991,6 +2991,10 @@ describe('CodexSessionRuntime', () => {
       'after',
     );
 
+    await expect(
+      runtime.startTurn(ready, 'Continue.', 'recovery', 'later', () => false),
+    ).rejects.toThrow('CODEX_TURN_START_CANCELLED');
+    expect(turnStartParams).toBeUndefined();
     await runtime.startTurn(ready, 'hello', 'operation-1', 'later');
     expect(turnStartParams).toEqual({
       threadId: 'thread-1',

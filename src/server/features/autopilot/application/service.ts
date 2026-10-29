@@ -7,7 +7,12 @@
 import type { AgentActivitySnapshot } from '../../agent-activity/model.js';
 import { parseOrgPlanAgentIdentity } from '../../../../shared/org-plan-position.js';
 import { assessModelPolicyAdmission } from '../../plans/domain/model-policy-admission.js';
-import type { ProviderFailure } from '../../../../shared/contracts/provider-failure.js';
+import {
+  isTransientProviderFailure,
+  providerRetryDelayMs,
+  providerRetryLimit,
+  type ProviderFailure,
+} from '../../../../shared/contracts/provider-failure.js';
 import { requirePlanFingerprint } from '../domain/plan-fingerprint.js';
 import { AutopilotStateError } from '../domain/persisted-state-error.js';
 import {
@@ -1202,7 +1207,7 @@ export class AutopilotCoordinator {
       retry &&
       !retry.pending &&
       retry.turnId === origin?.turnId &&
-      failure.code === 'serverOverloaded'
+      isTransientProviderFailure(failure)
     )
       return false;
     if (retry && retry.turnId === origin?.turnId && state.providerFailure?.code === failure.code) {
@@ -1222,11 +1227,11 @@ export class AutopilotCoordinator {
     const attempt = (retry?.attempt ?? 0) + 1;
     const recoverable =
       enabled &&
-      failure.code === 'serverOverloaded' &&
+      isTransientProviderFailure(failure) &&
       origin?.actor === 'root' &&
       Boolean(origin.turnId) &&
       origin.turnId === this.deps.session(sessionId)?.activeTurnId &&
-      attempt <= 2;
+      attempt <= providerRetryLimit;
     const event: AutopilotAuditEvent = {
       sessionId,
       type: 'autopilot.provider-failed',
@@ -1261,7 +1266,7 @@ export class AutopilotCoordinator {
       requestedEnabled: false,
       generation: state.generation + 1,
       nextEvaluationAt: recoverable
-        ? new Date(Date.parse(now) + 30_000 * attempt).toISOString()
+        ? new Date(Date.parse(now) + providerRetryDelayMs).toISOString()
         : null,
       ...(cancelled ? { lastControlId: null } : {}),
       stopReason: failure.code === 'usageLimitExceeded' ? 'usageLimitExceeded' : 'providerError',
@@ -1271,7 +1276,7 @@ export class AutopilotCoordinator {
         ? {
             turnId: origin!.turnId!,
             attempt,
-            notBefore: new Date(Date.parse(now) + 30_000 * attempt).toISOString(),
+            notBefore: new Date(Date.parse(now) + providerRetryDelayMs).toISOString(),
             settled: origin!.settled,
             pending: true,
             resumeRoot: false,
@@ -1289,7 +1294,7 @@ export class AutopilotCoordinator {
         this.deps.schedule(() => {
           this.providerTimers.delete(sessionId);
           this.enqueue(sessionId, () => this.retryProvider(sessionId, next.generation));
-        }, 30_000 * attempt),
+        }, providerRetryDelayMs),
       );
     return true;
   }
