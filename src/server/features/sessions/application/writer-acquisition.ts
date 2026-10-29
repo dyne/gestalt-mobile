@@ -9,6 +9,7 @@ import type { RelaySessionSnapshot } from '../model/relay-session.js';
 /** Neutral failures exposed by the writer-acquisition port, never raw Codex errors. */
 export type WriterAcquisitionFailureKind =
   | 'writerBusy'
+  | 'supervisorReplaced'
   | 'rolloutMissing'
   | 'workspaceUnavailable'
   | 'runtimeDependencyFailed'
@@ -34,6 +35,14 @@ export function writerAcquisitionProblem(kind: WriterAcquisitionFailureKind): {
   detail: string;
 } {
   switch (kind) {
+    case 'supervisorReplaced':
+      return {
+        status: 409,
+        code: 'SESSION_SUPERVISOR_REPLACED',
+        retryable: false,
+        detail:
+          'Another session took over this plan. Continue there, or direct a new session to take over.',
+      };
     case 'writerBusy':
       return {
         status: 409,

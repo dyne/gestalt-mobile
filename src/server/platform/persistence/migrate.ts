@@ -36,6 +36,12 @@ function migrateWorkspaceGitDefaults(database: DatabaseSync): void {
 export function migrate(database: DatabaseSync): void {
   database.exec(schema);
   database.exec(
+    'CREATE TABLE IF NOT EXISTS org_plan_retired_supervisors (plan_identity TEXT NOT NULL, session_id TEXT NOT NULL, stopped INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(plan_identity, session_id))',
+  );
+  database.exec(
+    'CREATE TABLE IF NOT EXISTS org_plan_takeovers (plan_identity TEXT PRIMARY KEY, session_id TEXT NOT NULL, epoch INTEGER NOT NULL, phase TEXT NOT NULL)',
+  );
+  database.exec(
     'CREATE TABLE IF NOT EXISTS tool_efficiency (session_id TEXT PRIMARY KEY REFERENCES relay_sessions(id) ON DELETE CASCADE, state_json TEXT NOT NULL)',
   );
   database.exec(`CREATE TABLE IF NOT EXISTS chat_transport_diagnostics (

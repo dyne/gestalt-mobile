@@ -91,6 +91,7 @@ export type ExecutorBindingReconciliation = Readonly<{
 }>;
 
 export type AutopilotDependencies = Readonly<{
+  supervisorOwnership?(sessionId: string): 'owned' | 'replaced' | 'transferring';
   modelPolicyStatus?(
     sessionId: string,
   ): import('../../plans/domain/model-policy-admission.js').ModelPolicyStatus;
@@ -819,6 +820,11 @@ export class AutopilotCoordinator {
   enable(
     sessionId: string,
   ): AutopilotSnapshot | { code: string; reason?: string; action?: string } {
+    if (
+      this.deps.supervisorOwnership?.(sessionId) &&
+      this.deps.supervisorOwnership(sessionId) !== 'owned'
+    )
+      return { code: 'AUTOPILOT_SESSION_UNAVAILABLE' };
     const session = this.deps.session(sessionId);
     if (!session || !session.threadId || !['ready', 'turnActive'].includes(session.state))
       return { code: 'AUTOPILOT_SESSION_UNAVAILABLE' };
@@ -1729,6 +1735,11 @@ export class AutopilotCoordinator {
    * while a new identity can receive its own explicit supervision request.
    */
   supervisionStarted(sessionId: string): AutopilotSnapshot | { code: string } {
+    if (
+      this.deps.supervisorOwnership?.(sessionId) &&
+      this.deps.supervisorOwnership(sessionId) !== 'owned'
+    )
+      return { code: 'AUTOPILOT_SESSION_UNAVAILABLE' };
     const currentPlan = this.deps.plan(sessionId);
     const admission = this.modelPolicyAdmission(sessionId);
     if (!admission.allowed) return admission;
@@ -3915,6 +3926,10 @@ export class AutopilotCoordinator {
     return 'unknown';
   }
   private decision(sessionId: string, state: AutopilotSession) {
+    const ownership = this.deps.supervisorOwnership?.(sessionId);
+    if (ownership === 'replaced')
+      return { kind: 'disable' as const, reason: 'sessionUnavailable' as const };
+    if (ownership === 'transferring') return { kind: 'observe' as const };
     if (state.supervision?.outcome === 'parked') return { kind: 'observe' as const };
     const plan = this.deps.plan(sessionId);
     const now = this.deps.now();
@@ -4015,7 +4030,8 @@ export class AutopilotCoordinator {
       if (
         activity?.confidence === 'fresh' &&
         Date.parse(this.deps.now()) - Date.parse(activity.root.observedAt) <=
-          this.deps.policy.staleAfterMs
+          this.deps.policy.staleAfterMs &&
+        this.decision(sessionId, current).kind !== 'reconcile'
       ) {
         if (current.stopReason === 'reconcileFailed')
           this.persist({ ...current, stopReason: null, updatedAt: this.deps.now() });
@@ -4273,7 +4289,7 @@ function operationErrorKind(error: unknown): string {
   return 'UNKNOWN';
 }
 
-function fingerprint(plan: SupervisedPlan): string {
+export function fingerprint(plan: SupervisedPlan): string {
   return requirePlanFingerprint(
     JSON.stringify(
       plan.steps.map((step) => [

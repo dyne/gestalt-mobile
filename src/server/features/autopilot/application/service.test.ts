@@ -2537,7 +2537,7 @@ describe('AutopilotCoordinator', () => {
       failureCode: 'START_UNAVAILABLE',
     });
   });
-  it.each(['confidence', 'timestamp'] as const)(
+  it.each(['confidence', 'timestamp', 'disconnected'] as const)(
     'arms one bounded watchdog when compatible reconciliation leaves %s stale',
     async (staleBy) => {
       let state: AutopilotSession | null = null;
@@ -2566,8 +2566,8 @@ describe('AutopilotCoordinator', () => {
                 confidence: 'fresh',
                 root: {
                   ...createAgentActivitySnapshot('s', now).root,
-                  state: 'idle',
-                  observedAt: '2026-08-20T11:00:00.000Z',
+                  state: staleBy === 'disconnected' ? 'disconnected' : 'idle',
+                  observedAt: staleBy === 'disconnected' ? now : '2026-08-20T11:00:00.000Z',
                   lastActivityAt: '2026-08-20T11:00:00.000Z',
                 },
               },

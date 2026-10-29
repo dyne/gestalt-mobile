@@ -8,6 +8,7 @@
     "checkpoint-tool",
     "l2-report-boundary",
     "agent-capacity-recovery",
+    "user-directed-supervisor-takeover",
     "controller-status",
     "canonical-agent-identity",
     "session-verdict",

@@ -207,11 +207,10 @@ export function autopilotSnapshot(
     Number.isFinite(evaluationAt) &&
     evaluationAt > Date.parse(facts.observedAt);
   const rootWorking = facts.activeTurn;
-  // Runtime observations are current at observedAt.  A slow or old durable
-  // transition must not turn an actually active root/timer/reconciliation or
-  // installed wait lease into a false idle signal.
-  const liveContinuation =
-    parkedWait || scheduled || rootWorking || facts.executorActive || facts.reconciling;
+  // A reconciliation is an attempt to restore evidence, not a continuation.
+  // Actual work, an armed control, or an owned wait remain live evidence even
+  // when the durable transition is old.
+  const liveContinuation = parkedWait || scheduled || rootWorking || facts.executorActive;
   const healthy =
     state.requestedEnabled &&
     !state.checkpoints?.checkpointHandoffFailed &&
@@ -233,7 +232,7 @@ export function autopilotSnapshot(
               ? 'waitingForAgentEvent'
               : healthy && scheduled
                 ? 'continuationScheduled'
-                : healthy && (supervision === 'probeRequired' || facts.reconciling)
+                : facts.reconciling || (healthy && supervision === 'probeRequired')
                   ? 'checkingState'
                   : healthy && rootWorking
                     ? 'rootWorking'

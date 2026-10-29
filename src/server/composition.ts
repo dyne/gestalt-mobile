@@ -80,6 +80,10 @@ import {
   type RelaySessionSnapshot,
 } from './features/sessions/model/relay-session.js';
 import { AgentActivityRegistry } from './features/agent-activity/registry.js';
+import { SupervisionTakeover } from './features/autopilot/application/takeover-supervision.js';
+import { SqliteSupervisionTakeoverStore } from './platform/persistence/sqlite-supervision-takeover-store.js';
+import { isOrgPlanTakeoverCall } from '../shared/contracts/org-plan-takeover.js';
+import { WriterAcquisitionError } from './features/sessions/application/writer-acquisition.js';
 import { toAgentActivityDto } from './features/agent-activity/activity-dto.js';
 import {
   decodeAgentActivityFacts,
@@ -279,6 +283,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const interactions = new SqlitePendingInteractionStore(database);
   const idempotency = new SqliteIdempotencyStore(database);
   const autopilotStore = new SqliteAutopilotStore(database);
+  const takeoverStore = new SqliteSupervisionTakeoverStore(database, autopilotStore);
   const attentionResolutionOperations = new Map<
     string,
     Promise<
@@ -306,6 +311,20 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   >();
   const checkpointHandoffRecoveries = new Set<string>();
   const supervisedPlans = new SupervisedPlanRegistry();
+  const supervisorOwnership = (sessionId: string): 'owned' | 'replaced' | 'transferring' => {
+    const identity =
+      supervisedPlans.identity(sessionId) ?? autopilotStore.find(sessionId)?.planIdentity;
+    const owner = identity ? takeoverStore.owner(identity) : null;
+    return !owner
+      ? 'owned'
+      : owner.sessionId !== sessionId
+        ? identity && takeoverStore.retired(identity, sessionId)
+          ? 'replaced'
+          : 'transferring'
+        : owner.phase === 'stopping'
+          ? 'transferring'
+          : 'owned';
+  };
   const requireOrgExecutionAdmission = (sessionId: string) =>
     requireModelPolicyAdmission(
       supervisedPlans.find(sessionId),
@@ -390,6 +409,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       notifyAutopilotActivity(snapshot.sessionId);
     },
     {
+      rootThreadId: (sessionId) => sessions.find(sessionId)?.threadId ?? null,
       // Evidence arms one bounded reconciliation; healthy sessions are never polled.
       schedule:
         options.activitySchedule ??
@@ -461,6 +481,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     },
   );
   const autopilot = new AutopilotCoordinator({
+    supervisorOwnership,
     pendingProcessResult: (sessionId) => hostTests?.hasUnreadResult(sessionId) ?? false,
     processResultState: (sessionId, runId) => hostTests?.resultState(sessionId, runId) ?? 'missing',
     modelPolicyStatus: (sessionId) => supervisedPlans.modelPolicyStatus(sessionId),
@@ -504,6 +525,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       `autopilot-${generation}-${createHash('sha256').update(`${sessionId}:${randomUUID()}`).digest('hex').slice(0, 16)}`,
     turnStarter: {
       start: async (sessionId, controlId, generation, launchIdentity) => {
+        if (supervisorOwnership(sessionId) !== 'owned')
+          throw new Error('AUTOPILOT_START_UNAVAILABLE');
         const current = () => {
           const state = autopilotStore.find(sessionId);
           return Boolean(
@@ -584,6 +607,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     },
     executorController: {
       resume: async (sessionId, threadId, generation, trigger) => {
+        if (supervisorOwnership(sessionId) !== 'owned')
+          throw new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE');
         const session = sessions.find(sessionId);
         if (!session || !runtime || blockingInteractions(sessionId).length)
           throw new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE');
@@ -1027,6 +1052,69 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   };
   let closing = false;
   let runtime: CodexSessionRuntime | null = null;
+  const takeover = new SupervisionTakeover({
+    store: takeoverStore,
+    now: () => new Date().toISOString(),
+    context: (id) => {
+      const session = sessions.find(id);
+      const plan = supervisedPlans.findCurrent(id);
+      const identity = supervisedPlans.identity(id);
+      if (!session || !plan || !identity) return null;
+      return {
+        session,
+        plan,
+        identity,
+        state: autopilotStore.find(id),
+        admission: autopilot.snapshot(id).executionAdmission?.allowed !== false,
+        held: blockingInteractions(id).length > 0,
+        localExecutor: activity
+          .snapshot(id, new Date().toISOString())
+          .subagents.some(
+            (child) =>
+              Boolean(child.canonicalPosition) ||
+              ['working', 'awaitingAgent'].includes(child.state) ||
+              child.ownedProcesses?.some((process) =>
+                ['running', 'detached-active'].includes(process.state),
+              ),
+          ),
+      };
+    },
+    predecessors: (context) =>
+      sessions.list().flatMap((session) => {
+        if (
+          session.id === context.session.id ||
+          session.workspacePath !== context.session.workspacePath ||
+          session.provider !== 'codex'
+        )
+          return [];
+        const state = autopilotStore.find(session.id);
+        return state && state.planIdentity === context.identity ? [{ session, state }] : [];
+      }),
+    fence: (id) => autopilot.cancel(id, 'sessionEnded'),
+    stop: async ({ session, state }) => {
+      if (!runtime || (hostTests?.supervisionSummary(session.id).running ?? 0) > 0) return false;
+      if (
+        !(await runtime.quiesceForTakeover(
+          session,
+          state.executor?.ownedProcesses ?? [],
+          state.executor,
+        ))
+      )
+        return false;
+      const latest = sessions.find(session.id);
+      if (!latest || latest.threadId !== session.threadId) return false;
+      dismissPendingInteractions(session.id, new Date().toISOString());
+      const released = RelaySession.rehydrate(latest).release(new Date().toISOString()).snapshot;
+      sessions.save(released);
+      activity.disconnected(session.id, released.updatedAt);
+      events.publish(journal.append(session.id, 'session.updated', released, released.updatedAt));
+      return true;
+    },
+    changed: (id) => {
+      autopilot.planStatusChanged(id);
+      autopilot.restore(id);
+    },
+  });
   const providerRecovery = new SessionProviderRecovery({
     find: (id) => sessions.find(id),
     authority: (id) => {
@@ -1584,6 +1672,33 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                   }),
                 ) === true
               );
+          }
+          if (!rawInteraction && isOrgPlanTakeoverCall(request)) {
+            const result =
+              origin.kind === 'root' &&
+              origin.physicalTurnId === session.activeTurnId &&
+              session.threadId
+                ? await takeover.takeOver(sessionId, session.threadId, session.activeTurnId!)
+                : { accepted: false as const, code: 'CURRENT_ROOT_REQUIRED' };
+            const response =
+              result.accepted && 'identity' in result
+                ? {
+                    ...result,
+                    instruction: result.boundaryFinalRequired
+                      ? 'The previous root has a persisted checkpoint awaiting its mandatory report. Emit that boundary final now and end this root turn without launching an executor. The following root turn will receive the authorized executor identity through the normal checkpoint continuation.'
+                      : 'Mobile already stopped and retired the previous supervisors. This takeover is authorized by the user instruction. Do not follow up or interrupt old-root agent IDs. Consult this root’s native roster: resume the returned task name if present, otherwise launch it exactly once. ' +
+                        autopilotExecutorLaunchPrompt(
+                          result.identity,
+                          supervisedPlans.find(sessionId),
+                        ),
+                  }
+                : result;
+            return (
+              runtime?.resolveServerRequest(sessionId, String(request.id), {
+                success: true,
+                contentItems: [{ type: 'inputText', text: JSON.stringify(response) }],
+              }) === true
+            );
           }
           if (!rawInteraction && isAgentCapacityRecoveryCall(request)) {
             const rootOwned =
@@ -2375,6 +2490,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         ensureWriter:
           runtime || kimiRuntime
             ? async (session) => {
+                if (supervisorOwnership(session.id) === 'replaced')
+                  throw new WriterAcquisitionError('supervisorReplaced');
                 dismissPendingInteractions(session.id, new Date().toISOString());
                 const owner = ownerRuntime(session);
                 if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
