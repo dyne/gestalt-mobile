@@ -13,6 +13,7 @@ import type { RepositoryReadiness } from './repository-readiness.js';
 
 export const xerjServerName = 'gestalt-xerj';
 export const xerjTools = ['xerj_search', 'xerj_map', 'xerj_code_search'];
+const connectionTimeoutMs = 5_000;
 type Rpc = { request(method: string, params: unknown): Promise<unknown> };
 
 export type CodexRetrievalState = {
@@ -33,6 +34,8 @@ export type CodexRetrievalState = {
     readiness?: RetrievalReadiness;
   }[];
   deadline: number;
+  /** Connection observation gets its own allowance after native thread startup. */
+  verificationTimeoutMs?: number;
   fallback(): void;
 };
 
@@ -126,6 +129,10 @@ export class CodexXerj {
       }
       const guidance = await beforeDeadline(readFile(skill.path, 'utf8'), input.deadline);
       if (guidance.length > 16_384) return state;
+      // Backend preparation must not leave the native MCP handshake with only
+      // a few milliseconds. These are separate, individually bounded phases.
+      state.deadline = Date.now() + connectionTimeoutMs;
+      state.verificationTimeoutMs = connectionTimeoutMs;
       state.skillsConfig = state.skillsConfig.map((entry) => ({
         ...entry,
         enabled: entry.path === skill.path ? true : entry.enabled,
@@ -143,7 +150,7 @@ export class CodexXerj {
             enabled: true,
             required: false,
             startup_readiness: 'connection',
-            startup_timeout_ms: Math.max(1, input.deadline - Date.now()),
+            startup_timeout_ms: connectionTimeoutMs,
             enabled_tools: xerjTools,
             default_tools_approval_mode: 'approve',
           },
@@ -161,15 +168,19 @@ export class CodexXerj {
 
   async verify(rpc: Rpc, threadId: string, state: CodexRetrievalState): Promise<boolean> {
     if (!state.ready) return false;
+    // thread/start can consume the handshake allowance before this method runs.
+    const deadline = state.verificationTimeoutMs
+      ? Date.now() + state.verificationTimeoutMs
+      : state.deadline;
     try {
-      while (Date.now() < state.deadline) {
+      while (Date.now() < deadline) {
         const result = (await beforeDeadline(
           rpc.request('mcpServerStatus/list', {
             threadId,
             serverName: xerjServerName,
             detail: 'full',
           }),
-          state.deadline,
+          deadline,
         )) as {
           data?: Array<{
             name?: string;
@@ -191,7 +202,7 @@ export class CodexXerj {
           state.evidence?.connection('unavailable');
           return false;
         }
-        await beforeDeadline(new Promise((resolve) => setTimeout(resolve, 25)), state.deadline);
+        await beforeDeadline(new Promise((resolve) => setTimeout(resolve, 25)), deadline);
       }
       state.evidence?.connection('unavailable');
       return false;

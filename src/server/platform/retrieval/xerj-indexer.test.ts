@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { mkdtemp, readFile, writeFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, symlink, stat, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -133,6 +133,38 @@ describe('host-owned XERJ indexing', () => {
       }),
     );
     expect(indexer.status().message).not.toContain('private-path');
+    expect(indexer.status().diagnostic?.code).toBe('ambiguous-assignment');
+  });
+
+  it('retains the latest redacted warning on disk and in status after recovery', async () => {
+    const f = await fixture(
+      `for (let i=0;i<20;i++) console.error(JSON.stringify({event:'warning',message:'bulk timed out private-path token=secret-value '+i,output:'private-output'})); console.error(JSON.stringify({event:'done',ok:true,files:6,records:12})); setInterval(() => {},1000);`,
+    );
+    const indexer = f.create();
+    indexer.start();
+    await vi.waitFor(() => expect(indexer.status().state).toBe('watching'));
+    const diagnostic = indexer.status().diagnostic!;
+    expect(diagnostic).toMatchObject({
+      code: 'timeout',
+      id: expect.any(String),
+      occurredAt: expect.any(String),
+      messageDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(f.report).toHaveBeenLastCalledWith(expect.stringContaining(diagnostic.id));
+    await indexer.close();
+    const path = join(
+      f.root,
+      '.home',
+      'xerj-data',
+      'autoindex',
+      indexer.status().namespace!,
+      '.gestalt-index-diagnostic.json',
+    );
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(diagnostic);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    expect(
+      JSON.stringify([indexer.status(), f.report.mock.calls, await readFile(path, 'utf8')]),
+    ).not.toMatch(/secret-value|private-path|private-output/);
   });
 
   it('does nothing when disabled and starts only retrieval in manual mode', async () => {
@@ -147,6 +179,29 @@ describe('host-owned XERJ indexing', () => {
     expect(manual.status().readiness?.coverage.state).toBe('unknown');
     await expect(readFile(join(f.root, '.xerjignore'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(f.args()).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('keeps the warning available when its diagnostic cannot be persisted', async () => {
+    const f = await fixture(
+      `process.on('SIGUSR2', () => console.error(JSON.stringify({event:'warning',message:'connection refused token=private-value'}))); console.error(JSON.stringify({event:'done',ok:true,files:6,records:12})); setInterval(() => {},1000);`,
+    );
+    const indexer = f.create();
+    indexer.start();
+    await vi.waitFor(() => expect(indexer.status().state).toBe('watching'));
+    const directory = join(f.root, '.home', 'xerj-data', 'autoindex', indexer.status().namespace!);
+    await mkdir(join(directory, '.gestalt-index-diagnostic.json'), { recursive: true });
+    process.kill((await f.args()).pid, 'SIGUSR2');
+    await vi.waitFor(() =>
+      expect(f.report).toHaveBeenCalledWith(
+        'XERJ could not save its redacted indexing diagnostic.',
+      ),
+    );
+    expect(indexer.status()).toMatchObject({
+      state: 'error',
+      diagnostic: { code: 'connection' },
+    });
+    expect(JSON.stringify(f.report.mock.calls)).not.toContain('private-value');
+    await indexer.close();
   });
 
   it('indexes the canonical root once, reports native counts, reuses identity and reaps its owned child', async () => {
