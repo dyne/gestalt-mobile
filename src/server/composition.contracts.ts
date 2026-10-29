@@ -1831,6 +1831,130 @@ describe('production composition', () => {
       );
       await app.close();
     });
+    it.each(['autopilot', 'ordinary', 'manual-send', 'stopped'])(
+      'production provider recovery uses minimal continuation and respects %s ownership',
+      async (mode) => {
+        const timers: Array<{ callback: () => void; delay: number; cancelled: boolean }> = [];
+        const fixture = await createProductionAutopilotFixture({
+          autopilotSchedule: (callback, delay) => {
+            const timer = { callback, delay, cancelled: false };
+            timers.push(timer);
+            return () => {
+              timer.cancelled = true;
+            };
+          },
+        });
+        onTestFinished(() => fixture.app.close());
+        const initial = timers.find((timer) => !timer.cancelled)!;
+        initial.cancelled = true;
+        initial.callback();
+        const starts = () =>
+          fixture.handles
+            .flatMap((handle) => handle.requests)
+            .filter((request) => request.method === 'turn/start');
+        await vi.waitFor(() => expect(starts()).toHaveLength(1));
+        const session = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+        const handle = fixture.handles.find((candidate) => candidate.calls.includes('turn/start'))!;
+        if (mode !== 'autopilot')
+          await fixture.app.inject({
+            method: 'PUT',
+            url: `/api/sessions/${fixture.sessionId}/autopilot`,
+            payload: { enabled: false },
+          });
+        handle.notify!({
+          method: 'error',
+          params: {
+            threadId: session.threadId,
+            turnId: session.activeTurnId,
+            error: { codexErrorInfo: 'serverOverloaded', message: 'private capacity detail' },
+            willRetry: false,
+          },
+        });
+        handle.notify!({
+          method: 'turn/completed',
+          params: {
+            threadId: session.threadId,
+            turn: {
+              id: session.activeTurnId,
+              status: 'failed',
+            },
+          },
+        });
+        const retry = timers.find((timer) => !timer.cancelled && timer.delay === 60_000)!;
+        expect(retry).toBeDefined();
+        expect(starts()).toHaveLength(1);
+        if (mode === 'manual-send') {
+          expect(
+            (
+              await fixture.app.inject({
+                method: 'POST',
+                url: `/api/sessions/${fixture.sessionId}/turns`,
+                payload: { text: 'new instruction' },
+              })
+            ).statusCode,
+          ).toBe(202);
+          retry.callback();
+          expect(starts()).toHaveLength(2);
+          expect(starts().at(-1)!.params).toMatchObject({
+            input: [{ type: 'text', text: 'new instruction' }],
+          });
+        } else if (mode === 'stopped') {
+          expect(
+            (
+              await fixture.app.inject({
+                method: 'POST',
+                url: `/api/sessions/${fixture.sessionId}/stop`,
+              })
+            ).statusCode,
+          ).toBe(202);
+          retry.callback();
+          expect(starts()).toHaveLength(1);
+        } else {
+          vi.useFakeTimers({ toFake: ['Date'] });
+          onTestFinished(() => {
+            vi.useRealTimers();
+          });
+          vi.setSystemTime(Date.now() + 60_000);
+          retry.cancelled = true;
+          retry.callback();
+          if (mode === 'autopilot') {
+            await vi.waitFor(() => expect(timers.some((timer) => !timer.cancelled)).toBe(true));
+            const continuation = timers.find((timer) => !timer.cancelled)!;
+            vi.setSystemTime(Date.now() + continuation.delay);
+            continuation.cancelled = true;
+            continuation.callback();
+          }
+          await vi.waitFor(async () => {
+            const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'), {
+              readOnly: true,
+            });
+            const rows = database
+              .prepare(
+                "SELECT type,payload_json FROM session_events WHERE session_id=? AND type LIKE 'session.provider-retry-%'",
+              )
+              .all(fixture.sessionId);
+            database.close();
+            expect(starts(), JSON.stringify(rows)).toHaveLength(2);
+          });
+          expect(starts().at(-1)!.params).toMatchObject({
+            input: [{ type: 'text', text: 'Continue.' }],
+          });
+          expect(
+            (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().autopilot
+              .enabled,
+          ).toBe(mode === 'autopilot');
+          const trace = exportControlPlaneTrace(
+            join(fixture.dataDir, 'relay.sqlite'),
+            fixture.sessionId,
+          );
+          if (mode === 'ordinary')
+            expect(
+              trace.events.some((event) => event.type === 'session.provider-retry-started'),
+            ).toBe(true);
+          expect(JSON.stringify(trace)).not.toContain('private capacity detail');
+        }
+      },
+    );
     it('production correlates overload recovery with a settled root turn and cancels it on Off', async () => {
       const timers: Array<{ callback: () => void; delay: number; cancelled: boolean }> = [];
       const fixture = await createProductionAutopilotFixture({
@@ -1877,7 +2001,7 @@ describe('production composition', () => {
         pending: true,
         settled: true,
       });
-      const retry = timers.find((timer) => timer.delay === 30_000 && !timer.cancelled)!;
+      const retry = timers.find((timer) => timer.delay === 60_000 && !timer.cancelled)!;
       expect(retry).toBeDefined();
       await fixture.app.inject({
         method: 'PUT',

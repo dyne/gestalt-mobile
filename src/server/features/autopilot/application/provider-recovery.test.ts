@@ -147,26 +147,29 @@ describe('bounded provider overload recovery', () => {
     expect(f.coordinator.snapshot('s').state).toBe('completed');
     expect(f.events.filter((e) => e.type === 'autopilot.provider-failed')).toHaveLength(2);
   });
-  it('waits for settled root evidence, then resumes the root once without replacing it', async () => {
-    const f = fixture();
-    f.fail(false);
-    f.fail(true);
-    expect(f.store.find('s')?.providerRetry).toMatchObject({
-      attempt: 1,
-      settled: true,
-      pending: true,
-    });
-    expect(f.events.filter((e) => e.type === 'autopilot.provider-failed')).toHaveLength(1);
-    f.idle();
-    f.fire(30_000);
-    await vi.waitFor(() => expect(f.store.find('s')?.requestedEnabled).toBe(true));
-    expect(f.store.find('s')?.providerRetry?.resumeRoot).toBe(true);
-    expect(f.starts).not.toHaveBeenCalled();
-    const next = f.timers.find((t) => !t.cancelled);
-    expect(next).toBeDefined();
-    f.fire(next!.delay);
-    await vi.waitFor(() => expect(f.starts).toHaveBeenCalledOnce());
-  });
+  it.each(['serverOverloaded', 'rateLimitExceeded'])(
+    'waits a minute for settled %s root evidence, then resumes once without replacing it',
+    async (code) => {
+      const f = fixture();
+      f.fail(false, 'turn-1', 'root', code);
+      f.fail(true, 'turn-1', 'root', code);
+      expect(f.store.find('s')?.providerRetry).toMatchObject({
+        attempt: 1,
+        settled: true,
+        pending: true,
+      });
+      expect(f.events.filter((e) => e.type === 'autopilot.provider-failed')).toHaveLength(1);
+      f.idle();
+      f.fire(60_000);
+      await vi.waitFor(() => expect(f.store.find('s')?.requestedEnabled).toBe(true));
+      expect(f.store.find('s')?.providerRetry?.resumeRoot).toBe(true);
+      expect(f.starts).not.toHaveBeenCalled();
+      const next = f.timers.find((t) => !t.cancelled);
+      expect(next).toBeDefined();
+      f.fire(next!.delay);
+      await vi.waitFor(() => expect(f.starts).toHaveBeenCalledOnce());
+    },
+  );
   it.each(['active', 'unconfirmed', 'approval', 'stale', 'replaced', 'incompatible'])(
     'does not retry with %s evidence',
     async (mode) => {
@@ -177,7 +180,7 @@ describe('bounded provider overload recovery', () => {
       if (mode === 'stale') f.activity.confidence = 'stale';
       if (mode === 'replaced') f.retained.identity = 'new-plan';
       if (mode === 'incompatible') f.gate.compatible = false;
-      f.fire(30_000);
+      f.fire(60_000);
       await vi.waitFor(() => expect(f.store.find('s')?.providerRetry?.pending).toBe(false));
       expect(f.coordinator.snapshot('s')).toMatchObject({ state: 'safetyPaused', enabled: false });
       expect(f.starts).not.toHaveBeenCalled();
@@ -202,7 +205,7 @@ describe('bounded provider overload recovery', () => {
   it.each(['disable', 'manualSend', 'restart'])('cancels pending retry on %s', async (action) => {
     const f = fixture();
     f.fail();
-    const timer = f.timers.find((t) => t.delay === 30_000)!;
+    const timer = f.timers.find((t) => t.delay === 60_000)!;
     if (action === 'disable') f.coordinator.disable('s');
     else if (action === 'manualSend') f.coordinator.manualSend('s');
     else {
@@ -223,7 +226,7 @@ describe('bounded provider overload recovery', () => {
       f.session.state = 'turnActive';
       f.fail();
       f.idle();
-      f.fire(30_000 * attempt);
+      f.fire(60_000);
       await vi.waitFor(() => expect(f.store.find('s')?.requestedEnabled).toBe(true));
       expect(f.store.find('s')?.providerRetry?.attempt).toBe(attempt);
     }

@@ -31,7 +31,8 @@ export type ControlPlaneTrace = Readonly<{
   }>;
 }>;
 
-const relevant = /^(?:org-plan\.|autopilot\.|agent\.activity\.|session\.status\.)/;
+const relevant =
+  /^(?:org-plan\.|autopilot\.|agent\.activity\.|session\.status\.|session\.provider-retry-)/;
 const statusTypes = ['autopilot.updated', 'agent.activity.updated', 'session.status.updated'];
 
 // Export structural telemetry only. Event types alone do not imply payload safety.
@@ -172,7 +173,7 @@ export function exportControlPlaneTrace(
     const statusEventLimit = 100;
     const transitionEventLimit = 4900;
     const relevantWhere =
-      "(type LIKE 'org-plan.%' OR type LIKE 'autopilot.%' OR type LIKE 'agent.activity.%' OR type LIKE 'session.status.%')";
+      "(type LIKE 'org-plan.%' OR type LIKE 'autopilot.%' OR type LIKE 'agent.activity.%' OR type LIKE 'session.status.%' OR type LIKE 'session.provider-retry-%')";
     const statusWhere = `type IN (${statusTypes.map(() => '?').join(',')})`;
     const counts = database
       .prepare(

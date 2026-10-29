@@ -7,6 +7,15 @@
 /** Only structured diagnostics are durable; provider prose may contain request content. */
 export type ProviderFailure = Readonly<{ code: string; httpStatusCode?: number }>;
 
+export const providerRetryDelayMs = 60_000;
+export const providerRetryLimit = 2;
+export const providerContinuationPrompt = 'Continue.';
+
+/** Capacity errors can clear quickly; account, context and policy limits require intervention. */
+export function isTransientProviderFailure(failure: ProviderFailure): boolean {
+  return failure.code === 'serverOverloaded' || failure.code === 'rateLimitExceeded';
+}
+
 const descriptions: Record<string, string> = {
   contextWindowExceeded:
     'The conversation exceeds the model context window. Compact it or start a new session.',

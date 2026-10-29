@@ -38,6 +38,8 @@ import { createRecentThreadLister } from './platform/codex/recent-thread-lister.
 import { CodexSessionRuntime, type AppServer } from './platform/codex/session-runtime.js';
 import { normalizeCodexNotification } from './platform/codex/normalizer.js';
 import { decodeCodexFailure } from './platform/codex/codex-failure.js';
+import { providerContinuationPrompt } from '../shared/contracts/provider-failure.js';
+import { SessionProviderRecovery } from './features/sessions/application/provider-recovery.js';
 import { parseMcpStartupStatus } from '../shared/contracts/mcp-startup-failure.js';
 import { KimiSessionRuntime } from './platform/kimi/kimi-session-runtime.js';
 import { KimiWebServerManager } from './platform/kimi/kimi-web-server-manager.js';
@@ -544,10 +546,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           blockingInteractions(sessionId).length
         )
           throw new Error('AUTOPILOT_START_UNAVAILABLE');
-        const continuationPrompt = launchIdentity
-          ? autopilotExecutorLaunchPrompt(launchIdentity, supervisedPlans.find(sessionId))
-          : AUTOPILOT_CONTINUATION_PROMPT;
         const recovery = autopilotStore.find(sessionId);
+        const continuationPrompt = recovery?.providerRetry?.resumeRoot
+          ? providerContinuationPrompt
+          : launchIdentity
+            ? autopilotExecutorLaunchPrompt(launchIdentity, supervisedPlans.find(sessionId))
+            : AUTOPILOT_CONTINUATION_PROMPT;
         const executorRecovery =
           recovery?.supervision?.outcome === 'probeRequired' &&
           recovery.executor?.commands?.some(
@@ -1023,6 +1027,64 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   };
   let closing = false;
   let runtime: CodexSessionRuntime | null = null;
+  const providerRecovery = new SessionProviderRecovery({
+    find: (id) => sessions.find(id),
+    authority: (id) => {
+      const state = autopilotStore.find(id);
+      if (
+        closing ||
+        !runtime?.ownsWriter(id) ||
+        blockingInteractions(id).length ||
+        (state && (state.requestedEnabled || state.state !== 'disabled'))
+      )
+        return null;
+      // Idle observations can advance Autopilot's generation even while Off.
+      // An explicit toggle/send clears this failure identity instead.
+      return state?.providerFailureTurnId ?? 'no-failure';
+    },
+    reconcile: async (id) => {
+      await activity.refresh(id);
+      const snapshot = activity.snapshot(id, new Date().toISOString());
+      return (
+        snapshot.confidence === 'fresh' &&
+        snapshot.root.state === 'idle' &&
+        snapshot.subagents.every(
+          (agent) =>
+            agent.state === 'idle' &&
+            !agent.ownedProcesses?.some((process) =>
+              ['running', 'detached-active'].includes(process.state),
+            ),
+        )
+      );
+    },
+    schedule:
+      options.autopilotSchedule ??
+      ((callback, delay) => {
+        const timer = setTimeout(callback, delay);
+        return () => clearTimeout(timer);
+      }),
+    start: async (session, current) => {
+      if (!runtime || !current()) throw new Error('PROVIDER_RETRY_CANCELLED');
+      const started = await runtime.startTurn(
+        session,
+        providerContinuationPrompt,
+        `provider-retry-${randomUUID()}`,
+        new Date().toISOString(),
+        current,
+      );
+      saveSession(started);
+      activity.observe({
+        sessionId: started.id,
+        occurredAt: started.updatedAt,
+        kind: 'turnStarted',
+        threadId: started.threadId!,
+        turnId: started.activeTurnId!,
+      });
+    },
+    publish: (id, type, payload) => {
+      events.publish(journal.append(id, type, payload, new Date().toISOString()));
+    },
+  });
   let kimiRuntime: KimiSessionRuntime | null = null;
   const executorPolicyContext = (sessionId: string) => {
     const session = sessions.find(sessionId);
@@ -1214,7 +1276,20 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           );
           // Pause before activity/completion can schedule another automatic turn.
           // Unknown threads must not stop an unrelated session on the shared server.
-          const providerFailure = decodeCodexFailure(notification);
+          // Codex may emit the terminal error separately and omit it from the
+          // completion. Carry forward only evidence for this exact active root.
+          const settledFailure =
+            resolvedOrigin.kind === 'root' &&
+            completionTurnId === currentSession?.activeTurnId &&
+            (notification.params as { turn?: { status?: unknown } } | null)?.turn?.status ===
+              'failed'
+              ? autopilotStore.find(sessionId)
+              : null;
+          const providerFailure =
+            decodeCodexFailure(notification) ??
+            (settledFailure?.providerFailureTurnId === completionTurnId
+              ? settledFailure?.providerFailure
+              : undefined);
           if (resolvedOrigin.kind !== 'unknown' && providerFailure)
             autopilot.providerFailed(sessionId, providerFailure, {
               actor: resolvedOrigin.kind === 'root' ? 'root' : 'child',
@@ -1222,7 +1297,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 completionTurnId ??
                 (typeof (notification.params as { turnId?: unknown })?.turnId === 'string'
                   ? (notification.params as { turnId: string }).turnId
-                  : undefined),
+                  : resolvedOrigin.physicalTurnId),
               settled: notification.method === 'turn/completed',
             });
           const rootCommandId =
@@ -1266,7 +1341,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           // these facts project the idle root; its first evaluation can therefore
           // still see the pre-completion activity snapshot. This second evaluation
           // is idempotently fenced by the durable control row.
-          if (completedSession) autopilot.evaluate(sessionId);
+          if (completedSession) {
+            if (providerFailure && completionTurnId)
+              providerRecovery.failed(completedSession, completionTurnId, providerFailure);
+            else providerRecovery.cancel(sessionId);
+            autopilot.evaluate(sessionId);
+          }
           // Lifecycle notifications are fast transition evidence, while
           // thread/list is the bounded topology authority. Reconcile after the
           // mutation so canonical identity and every retained child reach both
@@ -2025,6 +2105,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     // An exited child has released our writer.  Do not repeatedly resume a
     // durable thread: another Codex client may acquire it between callbacks.
     recoverExitedSession = (sessionId) => {
+      providerRecovery.cancel(sessionId);
       supervisor.cancel(sessionId);
       const session = sessions.find(sessionId);
       if (session) {
@@ -2279,6 +2360,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         startTurn:
           runtime || kimiRuntime
             ? async (session, text, clientUserMessageId) => {
+                providerRecovery.cancel(session.id);
                 autopilot.manualSend(session.id);
                 const owner = ownerRuntime(session);
                 if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
@@ -2305,6 +2387,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         releaseWriter:
           runtime || kimiRuntime
             ? (id) => {
+                providerRecovery.cancel(id);
                 dismissPendingInteractions(id, new Date().toISOString());
                 const session = sessions.find(id);
                 const owner = session ? ownerRuntime(session) : null;
@@ -2344,6 +2427,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         interruptTurn:
           runtime || kimiRuntime
             ? (session, turnId) => {
+                providerRecovery.cancel(session.id);
                 const owner = ownerRuntime(session);
                 return owner ? owner.interruptTurn(session, turnId) : Promise.resolve();
               }
@@ -2351,6 +2435,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         queueTurnInput:
           runtime || kimiRuntime
             ? (session, turnId, text, clientUserMessageId) => {
+                providerRecovery.cancel(session.id);
                 autopilot.manualSend(session.id);
                 const owner = ownerRuntime(session);
                 if (!owner) return Promise.resolve();
@@ -2402,10 +2487,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 })
             : undefined,
         release: (session) => {
+          providerRecovery.cancel(session.id);
           autopilot.cancel(session.id, 'sessionEnded');
           return RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot;
         },
         remove: (id) => {
+          providerRecovery.cancel(id);
           autopilot.cancel(id, 'sessionEnded');
           activity.dispose(id);
           sessions.remove(id);
@@ -2414,6 +2501,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         close:
           runtime || kimiRuntime
             ? async (id) => {
+                providerRecovery.cancel(id);
                 autopilot.cancel(id, 'sessionEnded');
                 await hostTests?.cancelSession(id);
                 planMeasurementRefresh?.stop(id);
@@ -2427,6 +2515,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         replyInteraction:
           runtime || kimiRuntime
             ? async (sessionId, requestId, value) => {
+                providerRecovery.cancel(sessionId);
                 const session = sessions.find(sessionId);
                 const owner = session ? ownerRuntime(session) : null;
                 if (await owner?.resolveServerRequest(sessionId, requestId, value))
@@ -2844,6 +2933,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   });
   app.addHook('onClose', async () => {
     closing = true;
+    providerRecovery.dispose();
     await hostTests?.close();
     await xerjIndexer.close();
     for (const [sessionId, timer] of capacityRecoveryTimers) {
