@@ -6,7 +6,22 @@
 
 import type { RetrievalReadiness } from './retrieval-readiness.js';
 
+export type XerjIndexDiagnostic = {
+  id: string;
+  occurredAt: string;
+  code:
+    | 'ambiguous-assignment'
+    | 'timeout'
+    | 'authentication'
+    | 'connection'
+    | 'capacity'
+    | 'unknown-warning';
+  messageDigest: string | null;
+};
+
 export type XerjStatus = {
+  /** Latest warning, retained even after indexing recovers. Never contains provider prose. */
+  diagnostic?: XerjIndexDiagnostic;
   readiness?: RetrievalReadiness;
   mode: 'auto' | 'manual' | 'off';
   state:

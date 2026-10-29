@@ -248,8 +248,10 @@ permissions are never broadened to repair them. Kimi behavior is unchanged.
 Managed launch provides `GESTALT_MANAGER_BIN`. Direct Mobile launch discovers
 `gestalt` on `PATH`, or accepts an absolute executable path through that same
 environment variable. Without a manager or installed xerj, chat starts normally.
-`XERJ_READY_TIMEOUT_MS` bounds optional readiness, including discovery and the
-actual connection, with a five-second default. Startup never installs xerj,
+`XERJ_READY_TIMEOUT_MS` bounds optional backend preparation with a five-second
+default. XERJ's native MCP handshake gets a separate five-second allowance;
+connection verification gets another bounded five seconds after thread startup.
+Slow preparation cannot consume the handshake budget. Startup never installs xerj,
 downloads models or indexes repositories. Install explicitly with
 `gestalt xerj install`; inspect readiness with `gestalt xerj status`.
 

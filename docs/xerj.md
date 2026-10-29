@@ -42,6 +42,20 @@ locks are released by the OS when their processes exit.
 
 ## Indexing and scope
 
+Indexing warnings include a diagnostic ID and safe category. `/api/xerj` retains
+the latest warning in `diagnostic`, including after indexing recovers. Mobile also
+atomically saves it in
+`$CODEX_HOME/xerj-data/autoindex/<namespace>/.gestalt-index-diagnostic.json`
+with mode `0600`. The file holds only the latest occurrence ID, UTC timestamp,
+category, and SHA-256 digest of at most 16 KiB of warning text. It never contains
+native prose, filenames, credentials, or arbitrary provider fields. Categories
+distinguish timeouts, authentication, connection, capacity, ambiguous assignment,
+and unknown warnings; they are diagnostic hints, not proven causes. An unknown
+warning's original text cannot be reconstructed from its digest. Bursts coalesce
+to the latest record, and a persistence failure leaves the in-memory diagnostic
+available. The journal and native status command remain the source for indexing
+progress; a retained warning does not by itself prove that the index is stale.
+
 XERJ's native watcher performs the initial pass and handles changes and deleted
 files within indexed repositories. Initial indexing includes all repositories
 below the root. New directories are watched, but rc.87 can refuse newly added files or

@@ -91,11 +91,49 @@ describe('native runtime retrieval', () => {
       coverage: { state: 'unknown' },
     });
     state.deadline = Date.now() + 10;
+    state.verificationTimeoutMs = 10;
     expect(await f.adapter.verify({ request: () => new Promise(() => {}) }, 'thread', state)).toBe(
       false,
     );
     expect(state.readiness?.connection.state).toBe('unavailable');
     expect(state.readiness?.coverage.state).toBe('unknown');
+  });
+  it('allows a full handshake and connection check after slow preparation and native thread startup', async () => {
+    const f = await setup();
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const deadline = now + 5_000;
+      f.capability.check.mockImplementationOnce(async () => {
+        // Reproduce the incident: preparation leaves only 315 ms.
+        now += 4_685;
+        return {
+          status: 'ready',
+          endpoint: 'http://127.0.0.1:19200',
+          manager: '/private manager/gestalt',
+        };
+      });
+      const state = await f.adapter.prepare({
+        cwd: f.root,
+        deadline,
+        rpc: f.rpc,
+        skills: f.skills,
+        skillsConfig: [],
+        config: {},
+        start: true,
+      });
+      expect(state.ready).toBe(true);
+      expect(f.capability.check).toHaveBeenCalledWith(expect.objectContaining({ deadline }));
+      expect(state.config).toMatchObject({
+        mcp_servers: { [xerjServerName]: { startup_timeout_ms: 5_000 } },
+      });
+      // Native thread startup may finish after preparation's observation deadline.
+      now += 6_000;
+      expect(await f.adapter.verify(f.rpc, 'thread', state)).toBe(true);
+      expect(state.readiness?.connection.state).toBe('ready');
+    } finally {
+      clock.mockRestore();
+    }
   });
   it('preserves the active workspace permission boundary when enabling global retrieval', async () => {
     const f = await setup();

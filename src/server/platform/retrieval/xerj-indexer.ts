@@ -15,10 +15,11 @@ import {
   xerjContentArguments,
   xerjIndexConfig,
 } from './xerj-index-config.js';
-import type { XerjStatus } from '../../../shared/contracts/xerj-status.js';
+import type { XerjIndexDiagnostic, XerjStatus } from '../../../shared/contracts/xerj-status.js';
 import type { RetrievalCapabilityPort } from '../../features/skills/application/ports.js';
 import { xerjDeadline } from './managed-xerj.js';
 import { ReadinessEvidence } from './readiness-evidence.js';
+import { saveXerjIndexDiagnostic, xerjIndexDiagnostic } from './xerj-index-diagnostic.js';
 
 // Native gitignore syntax, editable by the host operator. Hidden directories and
 // symlinks are already skipped by XERJ. Never replace an existing root policy.
@@ -72,6 +73,9 @@ export class XerjIndexer {
   private closed = false;
   private saveConfiguration?: () => Promise<void>;
   private configurationSaved?: Promise<void>;
+  private diagnosticDirectory?: string;
+  private pendingDiagnostic?: XerjIndexDiagnostic;
+  private diagnosticSaved?: Promise<void>;
 
   constructor(
     root: string,
@@ -139,6 +143,7 @@ export class XerjIndexer {
       namespace,
     );
     const config = xerjIndexConfig(root, namespace, ready.endpoint);
+    this.diagnosticDirectory = directory;
     const compatibility = await checkXerjIndexConfig(directory, config);
     if (this.closed) return;
     if (compatibility === 'incompatible') {
@@ -268,17 +273,21 @@ export class XerjIndexer {
           },
         );
       } else if (event.event === 'warning') {
-        if (
-          typeof event.message === 'string' &&
-          event.message.includes('refusing ambiguous assignment')
-        ) {
+        const diagnostic = xerjIndexDiagnostic(event.message);
+        this.value = { ...this.value, diagnostic };
+        this.pendingDiagnostic = diagnostic;
+        this.diagnosticSaved ??= this.saveDiagnostics();
+        const reference = ` Diagnostic: ${diagnostic.id} (${diagnostic.code}).`;
+        if (diagnostic.code === 'ambiguous-assignment') {
           this.fail(
-            'XERJ incremental dataset assignment failed; the index is stale. See the XERJ recovery guide for this upstream limitation.',
+            'XERJ incremental dataset assignment failed; the index is stale. See the XERJ recovery guide for this upstream limitation.' +
+              reference,
           );
           return;
         }
         this.fail(
-          'XERJ reported an indexing warning. Inspect the index with gestalt xerj autoindex status; source changes trigger another pass.',
+          'XERJ reported an indexing warning. Inspect the index with gestalt xerj autoindex status; source changes trigger another pass.' +
+            reference,
         );
       }
     } catch {
@@ -286,10 +295,28 @@ export class XerjIndexer {
     }
   }
 
+  private async saveDiagnostics(): Promise<void> {
+    try {
+      // Coalesce bursts to the latest warning instead of queuing unbounded writes.
+      while (this.pendingDiagnostic && this.diagnosticDirectory) {
+        const diagnostic = this.pendingDiagnostic;
+        this.pendingDiagnostic = undefined;
+        try {
+          await saveXerjIndexDiagnostic(this.diagnosticDirectory, diagnostic);
+        } catch {
+          this.report('XERJ could not save its redacted indexing diagnostic.');
+        }
+      }
+    } finally {
+      this.diagnosticSaved = undefined;
+    }
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     await this.task;
     await this.configurationSaved;
+    await this.diagnosticSaved;
     const child = this.child;
     if (child && child.exitCode === null && child.signalCode === null) {
       await new Promise<void>((resolve) => {
