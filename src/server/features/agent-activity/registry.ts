@@ -28,6 +28,8 @@ export class AgentActivityRegistry {
       now?: () => string;
       schedule?: (callback: () => void, delayMs: number) => () => void;
       staleAfterMs?: number;
+      /** Durable session ownership supersedes provisional thread/started notifications. */
+      rootThreadId?: (sessionId: string) => string | null;
       retryDelaysMs?: readonly number[];
       maxReconcileAttempts?: number;
       diagnostic?: (
@@ -49,12 +51,17 @@ export class AgentActivityRegistry {
   }
   observe(fact: AgentActivityFact): AgentActivitySnapshot {
     if (this.#disposed.has(fact.sessionId)) return this.snapshot(fact.sessionId, fact.occurredAt);
-    const current = this.snapshot(fact.sessionId, fact.occurredAt);
+    const snapshot = this.snapshot(fact.sessionId, fact.occurredAt);
+    const rootThreadId = this.options.rootThreadId?.(fact.sessionId);
+    const current =
+      rootThreadId && rootThreadId !== snapshot.rootThreadId
+        ? Object.freeze({ ...snapshot, rootThreadId })
+        : snapshot;
     const next = withActivityConfidence(
       projectAgentActivity(current, fact),
       fact.kind === 'collaboration' && !fact.childId ? 'stale' : 'fresh',
     );
-    if (next !== current) {
+    if (next !== snapshot) {
       this.#snapshots.set(fact.sessionId, next);
       this.publish(next, fact.occurredAt);
     }

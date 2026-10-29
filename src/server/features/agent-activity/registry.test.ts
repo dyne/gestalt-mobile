@@ -7,6 +7,28 @@ import { describe, expect, it, vi } from 'vitest';
 import { AgentActivityRegistry } from './registry.js';
 const at = '2026-01-01T00:00:00.000Z';
 describe('agent activity registry', () => {
+  it('uses the durable root binding after startup replaces a provisional thread', () => {
+    let threadId: string | null = null;
+    const registry = new AgentActivityRegistry(() => {}, { rootThreadId: () => threadId });
+    registry.observe({ sessionId: 's', occurredAt: at, kind: 'threadStarted', threadId: 'probe' });
+    registry.observe({ sessionId: 's', occurredAt: at, kind: 'processExited' });
+    threadId = 'root';
+    registry.observe({ sessionId: 's', occurredAt: at, kind: 'turnCompleted', threadId: 'root' });
+    expect(registry.snapshot('s', at)).toMatchObject({
+      rootThreadId: 'root',
+      root: { state: 'idle', reason: 'turnCompleted' },
+    });
+    registry.observe({
+      sessionId: 's',
+      occurredAt: at,
+      kind: 'threadStatus',
+      threadId: 'probe',
+      status: 'notLoaded',
+    });
+    expect(registry.snapshot('s', at).root.state).toBe('idle');
+    registry.observe({ sessionId: 's', occurredAt: at, kind: 'turnStarted', threadId: 'root' });
+    expect(registry.snapshot('s', at).root.state).toBe('working');
+  });
   it('publishes only semantic changes and disposes session state', () => {
     const published: string[] = [];
     const registry = new AgentActivityRegistry((snapshot) => published.push(snapshot.root.state));

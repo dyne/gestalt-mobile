@@ -33,6 +33,7 @@ import { gestaltOrgPlanHealthDynamicTool } from '../../../shared/contracts/org-p
 import { gestaltTestRunnerDynamicTool } from '../../../shared/contracts/host-tests.js';
 import { gestaltAutopilotWaitLeaseDynamicTool } from '../../../shared/contracts/autopilot-wait-lease.js';
 import { gestaltAgentCapacityRecoveryDynamicTool } from '../../../shared/contracts/agent-capacity-recovery.js';
+import { gestaltOrgPlanTakeoverDynamicTool } from '../../../shared/contracts/org-plan-takeover.js';
 import { gestaltManagedPlaywrightDynamicTool } from '../../../shared/contracts/managed-playwright.js';
 import { countDiffLines } from '../../../shared/contracts/file-change.js';
 import { threadPlanName } from './thread-plan-name.js';
@@ -662,6 +663,161 @@ export class CodexSessionRuntime {
     return true;
   }
 
+  /** Stops the previous root's actor tree without transferring its native collaboration namespace. */
+  async quiesceForTakeover(
+    session: RelaySessionSnapshot,
+    recordedProcesses: readonly { ownerThreadId: string; processId: string; state: string }[] = [],
+    executor?: { threadId: string; taskPath: string },
+  ): Promise<boolean> {
+    let expired = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.quiesceTakeoverActors(session, recordedProcesses, executor, () => !expired),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => {
+            expired = true;
+            this.stop(session.id);
+            resolve(false);
+          }, 30_000);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private async quiesceTakeoverActors(
+    session: RelaySessionSnapshot,
+    recordedProcesses: readonly { ownerThreadId: string; processId: string; state: string }[],
+    executor: { threadId: string; taskPath: string } | undefined,
+    allowed: () => boolean,
+  ): Promise<boolean> {
+    const writer = await this.ensureWriter(session, new Date().toISOString());
+    if (!allowed()) {
+      await this.release(session.id);
+      return false;
+    }
+    if (writer.replacementCreated || writer.session.threadId !== session.threadId) return false;
+    const resource = this.sessions.get(session.id);
+    const topology = await this.readExecutorTopology(writer.session);
+    if (!resource || !allowed() || topology.kind !== 'observed') return false;
+    const current = () =>
+      allowed() &&
+      this.sessions.get(session.id) === resource &&
+      resource.active &&
+      resource.threadId === session.threadId;
+    const threads = [
+      {
+        id: topology.rootThreadId,
+        status: topology.rootActive ? 'active' : 'idle',
+        taskPath: '/root',
+        qualified: true,
+      },
+      ...topology.children,
+      ...(executor
+        ? [
+            {
+              id: executor.threadId,
+              taskPath: executor.taskPath,
+              status: 'unknown',
+              qualified: true,
+            },
+          ]
+        : []),
+    ];
+    const seen = new Set<string>();
+    for (let index = 0; index < threads.length; index++) {
+      if (!current()) return false;
+      const thread = { ...threads[index]! };
+      if (seen.has(thread.id)) continue;
+      if (seen.size >= 64) return false;
+      seen.add(thread.id);
+      if (index > 0)
+        threads.push(
+          ...(await this.listDirectChildrenFromProcess(
+            resource.process,
+            thread.id,
+            () =>
+              this.sessions.get(session.id) === resource &&
+              resource.active &&
+              resource.threadId === session.threadId,
+          )),
+        );
+      if (thread.qualified === false) return false;
+      if (thread.status === 'unknown') {
+        const metadata = await resource.process.rpc.request('thread/read', {
+          threadId: thread.id,
+          includeTurns: false,
+        });
+        const observed = asRecord(asRecord(metadata)?.thread);
+        const status = String(asRecord(observed?.status)?.type);
+        if (
+          observed?.id !== thread.id ||
+          observed.parentThreadId !== topology.rootThreadId ||
+          !['active', 'idle', 'notLoaded'].includes(status)
+        )
+          return false;
+        thread.status = status;
+      }
+      const processes = await this.inspectChildProcesses(writer.session, thread);
+      if (!current()) return false;
+      if (
+        thread.status === 'notLoaded' &&
+        recordedProcesses.some(
+          (p) => p.ownerThreadId === thread.id && ['running', 'detached-active'].includes(p.state),
+        )
+      )
+        return false;
+      if (thread.status !== 'notLoaded') await this.interruptExecutor(writer.session, thread.id);
+      for (const process of processes) {
+        if (!current()) return false;
+        if (
+          ['running', 'detached-active'].includes(process.state) &&
+          !(await this.terminateChildProcess(
+            writer.session,
+            thread.id,
+            process.processId,
+            `takeover:${thread.id}:${process.itemId}`,
+            process,
+          ))
+        )
+          return false;
+      }
+    }
+    if (
+      recordedProcesses.some(
+        (process) =>
+          ['running', 'detached-active'].includes(process.state) &&
+          !seen.has(process.ownerThreadId),
+      )
+    )
+      return false;
+    for (const threadId of seen) {
+      if (!current()) return false;
+      const result = await resource.process.rpc.request('thread/read', {
+        threadId,
+        includeTurns: false,
+      });
+      const thread = asRecord(asRecord(result)?.thread);
+      if (
+        thread?.id !== threadId ||
+        !['idle', 'notLoaded'].includes(String(asRecord(thread.status)?.type))
+      )
+        return false;
+      const processes = await this.inspectChildProcesses(writer.session, {
+        id: threadId,
+        status: String(asRecord(thread.status)?.type),
+        qualified: true,
+      });
+      if (processes.some((p) => ['running', 'detached-active'].includes(p.state))) return false;
+    }
+    if (!current()) return false;
+    resource.beginExplicitShutdown();
+    resource.dispose();
+    return true;
+  }
+
   async queueTurnInput(
     session: RelaySessionSnapshot,
     turnId: string,
@@ -1269,6 +1425,7 @@ export class CodexSessionRuntime {
             gestaltTestRunnerDynamicTool,
             gestaltAutopilotWaitLeaseDynamicTool,
             gestaltAgentCapacityRecoveryDynamicTool,
+            gestaltOrgPlanTakeoverDynamicTool,
             gestaltManagedPlaywrightDynamicTool,
           ],
         });
@@ -1399,6 +1556,7 @@ export class CodexSessionRuntime {
         gestaltTestRunnerDynamicTool,
         gestaltAutopilotWaitLeaseDynamicTool,
         gestaltAgentCapacityRecoveryDynamicTool,
+        gestaltOrgPlanTakeoverDynamicTool,
         gestaltManagedPlaywrightDynamicTool,
       ],
       ...(session.model ? { model: session.model } : {}),

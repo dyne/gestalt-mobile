@@ -8,6 +8,33 @@ import { describe, expect, it } from 'vitest';
 import { autopilotSnapshot, disabledAutopilot } from './autopilot-session.js';
 
 describe('autopilotSnapshot controller health', () => {
+  it('does not treat reconciliation alone as a live continuation', () => {
+    const snapshot = autopilotSnapshot(
+      {
+        ...disabledAutopilot('s', '2026-09-13T12:00:00.000Z'),
+        state: 'monitoring',
+        requestedEnabled: true,
+        stopReason: null,
+      },
+      3,
+      {
+        activeTurn: false,
+        executorActive: false,
+        control: 'none',
+        timerArmed: false,
+        reconciling: true,
+        planMatches: true,
+        parkedSubscriptionActive: false,
+        transitionFresh: true,
+        observedAt: '2026-09-13T12:00:01.000Z',
+      },
+    );
+    expect(snapshot.health).toMatchObject({
+      healthy: false,
+      phase: 'checkingState',
+      degradationReason: 'missingContinuation',
+    });
+  });
   it('does not call enabled intent healthy without a continuation', () => {
     const snapshot = autopilotSnapshot(
       {

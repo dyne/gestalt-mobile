@@ -147,6 +147,18 @@ and terminal whole-branch review remain required. See
 [update and rollback guidance](docs/org-plan-policy-compatibility.md) and
 [prelaunch catalog recovery](docs/org-plan-prelaunch-catalog.md).
 
+## Continuing a plan in a new session
+
+An explicit instruction to a new session to take over an unfinished Org Plan
+authorizes `gestalt_org_plan_takeover({version:1,reason:"userDirectedTakeover"})`.
+No additional approval is required. Mobile reserves plan ownership, fences old
+supervisors, verifies their actor trees and background writers stopped, and
+returns the exact executor identity to launch under the new root. It preserves
+the plan, checkpoint history and verification gates. Old-root agent IDs are not
+reused through native follow-up calls. Repeated calls do not launch another
+executor; a failed stop returns a specific recovery code and grants no launch.
+Manual Off racing the takeover and unrelated pending interactions remain gates.
+
 ## Skill profiles
 
 Global profiles live in `~/.gestalt/skill-profiles/<name>.yml` and use version 1 YAML:
