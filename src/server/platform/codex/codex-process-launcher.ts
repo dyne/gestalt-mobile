@@ -29,10 +29,34 @@ export function launchCodexAppServer(input: {
   });
   const rpc = new JsonRpcClient(child.stdout, child.stdin);
   child.once('error', (error) => rpc.fail(error));
+  child.stdin.on('error', (error) => rpc.fail(error));
+  // App-server diagnostics are not protocol output. Drain them without retaining
+  // potentially sensitive contents or letting a full stderr pipe block shutdown.
+  child.stderr.resume();
+  let closing = false;
+  let shutdownTimer: ReturnType<typeof setTimeout> | undefined;
+  child.once('exit', () => {
+    clearTimeout(shutdownTimer);
+    child.stdin.destroy();
+  });
+  // close follows stdout drainage; exit alone can precede a final RPC response.
+  child.once('close', () => rpc.fail(new Error('CODEX_APP_SERVER_EXITED')));
   return {
     child,
     rpc,
-    close: () => child.kill('SIGTERM'),
+    close: () => {
+      if (closing) return;
+      closing = true;
+      rpc.fail(new Error('CODEX_APP_SERVER_CLOSED'));
+      // EOF also releases older managed proxies blocked in a filesystem read.
+      child.stdin.end();
+      if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
+      child.kill('SIGTERM');
+      shutdownTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      }, 3_000);
+      shutdownTimer.unref();
+    },
     onExit: (listener) => {
       child.once('exit', listener);
       return () => child.off('exit', listener);
