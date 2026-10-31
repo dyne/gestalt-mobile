@@ -57,6 +57,76 @@ async function fixture(
 }
 
 describe('host-owned XERJ indexing', () => {
+  it.each([
+    [
+      'watch: pass 12 FAILED after 0.4s: private-path changed during snapshot',
+      'watch-pass-failed',
+      'watcher is still running',
+    ],
+    [
+      'watch: pass 12 FAILED after 0.4s: autoindex execution configuration changed since the committed generation; rebuild with a new --state-dir and a new --prefix',
+      'rebuild-required',
+      'source changes alone cannot repair it',
+    ],
+  ])(
+    'reports %s as an index failure while retaining the backend connection',
+    async (message, code, guidance) => {
+      const f = await fixture(
+        `console.error(JSON.stringify({event:'done',ok:true,files:6,records:12})); console.error(JSON.stringify({event:'progress',phase:'scan',pct:0})); console.error(JSON.stringify({event:'warning',message:${JSON.stringify(message)}})); setInterval(() => {},1000);`,
+      );
+      const indexer = f.create();
+      indexer.start();
+      await vi.waitFor(() => expect(indexer.status().diagnostic?.code).toBe(code));
+      expect(indexer.status()).toMatchObject({
+        state: 'error',
+        files: 6,
+        records: 12,
+        message: expect.stringContaining(guidance),
+        readiness: { connection: { state: 'ready' }, coverage: { state: 'stale' } },
+      });
+      expect(indexer.status().phase).toBeUndefined();
+      expect(indexer.status().percent).toBeUndefined();
+      expect(JSON.stringify(indexer.status())).not.toContain('private-path');
+      await vi.waitFor(async () => {
+        const path = join(
+          f.root,
+          '.home',
+          'xerj-data',
+          'autoindex',
+          indexer.status().namespace!,
+          '.gestalt-index-diagnostic.json',
+        );
+        expect(JSON.parse(await readFile(path, 'utf8')).code).toBe(code);
+      });
+    },
+  );
+
+  it('treats native watch overflow as an automatic rescan and recovers on completion', async () => {
+    const overflow =
+      'watch: the platform reported dropped events (watch queue overflow); re-hashing the whole tree for this pass';
+    const f = await fixture(
+      `console.error(JSON.stringify({event:'done',ok:true,files:6,records:12})); console.error(JSON.stringify({event:'warning',message:${JSON.stringify(overflow)}})); setInterval(() => { if (require('node:fs').existsSync(process.env.ARGS_FILE+'.finish')) console.error(JSON.stringify({event:'done',ok:true,files:7,records:14})); },50);`,
+    );
+    const indexer = f.create();
+    indexer.start();
+    await vi.waitFor(() => expect(indexer.status().diagnostic?.code).toBe('watch-rescan'));
+    expect(indexer.status()).toMatchObject({
+      state: 'indexing',
+      readiness: { connection: { state: 'ready' }, coverage: { state: 'stale' } },
+    });
+    expect(f.report).not.toHaveBeenCalled();
+    await writeFile(join(f.root, 'args.json.finish'), '');
+    await vi.waitFor(() =>
+      expect(indexer.status()).toMatchObject({
+        state: 'watching',
+        files: 7,
+        records: 14,
+        readiness: { coverage: { state: 'ready' } },
+      }),
+    );
+    expect(indexer.status().message).toBeUndefined();
+  });
+
   it.each([0, 12, undefined])(
     'derives coverage only from completed index counters: %s records',
     async (records) => {

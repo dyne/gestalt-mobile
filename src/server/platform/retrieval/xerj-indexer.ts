@@ -101,7 +101,7 @@ export class XerjIndexer {
 
   private fail(message: string): void {
     this.evidence.coverage(this.value.lastUpdate ? 'stale' : 'unavailable');
-    this.value = { ...this.value, state: 'error', message };
+    this.value = { ...this.value, state: 'error', phase: undefined, percent: undefined, message };
     this.report(message);
   }
 
@@ -278,6 +278,33 @@ export class XerjIndexer {
         this.pendingDiagnostic = diagnostic;
         this.diagnosticSaved ??= this.saveDiagnostics();
         const reference = ` Diagnostic: ${diagnostic.id} (${diagnostic.code}).`;
+        if (diagnostic.code === 'watch-rescan') {
+          // Native XERJ already schedules a full pass after dropped watch events.
+          // This invalidates coverage, but is not a failed pass or lost connection.
+          this.evidence.coverage(this.value.lastUpdate ? 'stale' : 'unknown');
+          this.value = {
+            ...this.value,
+            state: 'indexing',
+            phase: undefined,
+            percent: undefined,
+            message: 'XERJ is rescanning the workspace after filesystem events were dropped.',
+          };
+          return;
+        }
+        if (diagnostic.code === 'rebuild-required') {
+          this.fail(
+            'XERJ cannot update the saved index with the current indexing configuration. A new index generation is required; source changes alone cannot repair it. See the XERJ recovery guide.' +
+              reference,
+          );
+          return;
+        }
+        if (diagnostic.code === 'watch-pass-failed') {
+          this.fail(
+            'XERJ index update failed. The watcher is still running and will retry after a source change; existing index coverage is unverified until an update succeeds.' +
+              reference,
+          );
+          return;
+        }
         if (diagnostic.code === 'ambiguous-assignment') {
           this.fail(
             'XERJ incremental dataset assignment failed; the index is stale. See the XERJ recovery guide for this upstream limitation.' +
@@ -286,7 +313,7 @@ export class XerjIndexer {
           return;
         }
         this.fail(
-          'XERJ reported an indexing warning. Inspect the index with gestalt xerj autoindex status; source changes trigger another pass.' +
+          'XERJ reported an unclassified indexing warning. Inspect the index with gestalt xerj autoindex status.' +
             reference,
         );
       }

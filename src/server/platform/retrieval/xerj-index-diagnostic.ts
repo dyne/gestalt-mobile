@@ -22,7 +22,14 @@ export function xerjIndexDiagnostic(message: unknown): XerjIndexDiagnostic {
           ? 'connection'
           : /\b(out of memory|no space left|disk full)\b/i.test(text)
             ? 'capacity'
-            : 'unknown-warning';
+            : text.includes('rebuild with a new --state-dir and a new --prefix')
+              ? 'rebuild-required'
+              : /^watch: pass \d+ FAILED after [\d.]+s:/.test(text)
+                ? 'watch-pass-failed'
+                : text ===
+                    'watch: the platform reported dropped events (watch queue overflow); re-hashing the whole tree for this pass'
+                  ? 'watch-rescan'
+                  : 'unknown-warning';
   return {
     id: randomUUID(),
     occurredAt: new Date().toISOString(),

@@ -10,6 +10,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/sve
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AppHeader from './AppHeader.svelte';
+import { unknownReadiness } from '../../shared/contracts/retrieval-readiness.js';
 
 beforeEach(() => {
   HTMLDialogElement.prototype.showModal = function showModal() {
@@ -24,6 +25,27 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('AppHeader', () => {
+  it('keeps backend connection, failed indexer and stale coverage separate', async () => {
+    const readiness = unknownReadiness();
+    readiness.connection.state = 'ready';
+    readiness.coverage.state = 'stale';
+    const props = { theme: 'dyne-org' as const, onthemechange: () => {} };
+    const { rerender } = render(AppHeader, {
+      ...props,
+      xerj: { root: '/workspace', mode: 'auto', state: 'error', readiness },
+    });
+    const status = screen.getByRole('region', { name: 'Workspace discovery', hidden: true });
+    const value = (label: string) =>
+      within(status).getByText(label).nextElementSibling?.textContent;
+    expect(value('XERJ service')).toBe('Ready');
+    expect(value('Indexer')).toBe('error');
+    expect(value('Index coverage')).toBe('Stale');
+    await rerender({
+      ...props,
+      xerj: { root: '/workspace', mode: 'auto', state: 'error' },
+    });
+    expect(value('XERJ service')).toBe('Unverified');
+  });
   it('confirms upgrade, prevents duplicate requests, and allows retry after failure', async () => {
     let fail!: (error: Error) => void;
     const onupgrade = vi.fn(

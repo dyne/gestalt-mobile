@@ -117,6 +117,10 @@ for (const viewport of [
       await expect(region.getByText('Repository index')).toBeVisible();
       const discovery = page.getByRole('region', { name: 'Workspace discovery' });
       await expect(discovery).toContainText('The workspace index contains no records.');
+      await expect(discovery.getByText('XERJ service').locator('..')).toContainText('Ready');
+      await expect(discovery.getByText('Indexer', { exact: true }).locator('..')).toContainText(
+        'watching',
+      );
       await expect(page.locator('#configuration-panel')).not.toContainText('/private/');
       response = observed('unavailable');
       await region.getByRole('button', { name: 'Refresh tool readiness' }).click();
