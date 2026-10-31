@@ -26,6 +26,44 @@ import { FilesystemWorkspaceFiles } from './filesystem-workspace-files.js';
 const directory = (value: string) => parseRelativeDirectory(value)!;
 
 describe('FilesystemWorkspaceFiles', () => {
+  it('rejects folder creation through symlinks and preserves existing targets', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-files-'));
+    const outside = await mkdtemp(join(tmpdir(), 'gestalt-files-outside-'));
+    await symlink(outside, join(root, 'link'));
+    const files = new FilesystemWorkspaceFiles();
+    expect(await files.createDirectory(root, { directory: 'link', name: 'escape' })).toEqual({
+      kind: 'invalid-destination',
+    });
+    expect(await files.createDirectory(root, { directory: '', name: 'link' })).toEqual({
+      kind: 'conflict',
+      replaceAllowed: false,
+    });
+    expect(await files.createDirectory(root, { directory: '', name: '.git' })).toEqual({
+      kind: 'invalid-destination',
+    });
+    expect(await readdir(outside)).toEqual([]);
+  });
+
+  it('does not create a folder when its destination parent is replaced by a symlink', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-files-'));
+    const outside = await mkdtemp(join(tmpdir(), 'gestalt-files-outside-'));
+    await mkdir(join(root, 'destination'));
+    const files = new FilesystemWorkspaceFiles(
+      { lstat, readdir: (path, options) => readdir(path, options), realpath, stat },
+      {
+        afterParentCheck: async () => {
+          await rename(join(root, 'destination'), join(root, 'original'));
+          await symlink(outside, join(root, 'destination'));
+        },
+      },
+    );
+    expect(await files.createDirectory(root, { directory: 'destination', name: 'escape' })).toEqual(
+      { kind: 'invalid-destination' },
+    );
+    expect(await readdir(outside)).toEqual([]);
+    expect(await readdir(join(root, 'original'))).toEqual([]);
+  });
+
   it('returns bounded deterministic pages and leaves symlinks disabled', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-files-'));
     await mkdir(join(root, 'nested'));

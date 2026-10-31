@@ -9,6 +9,7 @@ import { mockAuthenticatedStatus } from './auth-fixture.js';
 
 async function openBrowser(page: Page): Promise<void> {
   await mockAuthenticatedStatus(page);
+  await page.route('**/api/skill-profiles', (route) => route.fulfill({ json: { profiles: [] } }));
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -56,6 +57,107 @@ async function openBrowser(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Browse files' }).click();
   await expect(page.getByRole('dialog', { name: 'Files in ~/repo' })).toBeVisible();
 }
+
+for (const [directory, width] of [
+  ['', 390],
+  ['nested', 1280],
+] as const) {
+  test(`creates a new folder in ${directory || 'root'} at ${width}px and refreshes its parent`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await openBrowser(page);
+    const created: Array<{ directory: string; name: string }> = [];
+    const keys: string[] = [];
+    await page.route(/\/api\/workspaces\/repo\/files(?:\?.*)?$/, (route) => {
+      const parent = new URL(route.request().url()).searchParams.get('directory') ?? '';
+      return route.fulfill({
+        json: {
+          directory: parent,
+          entries: [
+            ...(parent === '' ? [{ name: 'nested', path: 'nested', kind: 'directory' }] : []),
+            ...created
+              .filter((entry) => entry.directory === parent)
+              .map(({ name }) => ({
+                name,
+                path: parent ? `${parent}/${name}` : name,
+                kind: 'directory',
+              })),
+          ],
+        },
+      });
+    });
+    await page.route('**/api/workspaces/repo/files/directories', async (route) => {
+      expect(route.request().method()).toBe('POST');
+      const input = route.request().postDataJSON() as { directory: string; name: string };
+      created.push(input);
+      keys.push((await route.request().headerValue('idempotency-key'))!);
+      await route.fulfill({
+        status: 201,
+        json: {
+          path: input.directory ? `${input.directory}/${input.name}` : input.name,
+          entryKind: 'directory',
+        },
+      });
+    });
+    if (directory) await page.getByRole('treeitem', { name: /nested/ }).click();
+    await page.getByRole('button', { name: 'New folder', exact: true }).click();
+    const input = page.getByRole('textbox', { name: 'Folder name' });
+    await expect(input).toBeFocused();
+    await expect(page.getByRole('button', { name: 'Create folder', exact: true })).toBeDisabled();
+    await input.fill('Project notes 文');
+    await page.screenshot({ path: testInfo.outputPath('new-folder.png') });
+    await input.press('Enter');
+    await expect.poll(() => created).toEqual([{ directory, name: 'Project notes 文' }]);
+    await expect(
+      page.getByRole('tree', { name: 'Files' }).getByRole('treeitem', { selected: true }),
+    ).toContainText('Project notes 文');
+    await expect(page.getByText('Created folder Project notes 文.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'New folder', exact: true })).toBeFocused();
+    expect(keys[0]).toBeTruthy();
+  });
+}
+
+test('cancels folder creation without a request and restores focus', async ({ page }) => {
+  await openBrowser(page);
+  let creates = 0;
+  await page.route('**/api/workspaces/repo/files/directories', (route) => {
+    creates += 1;
+    return route.fulfill({ status: 503 });
+  });
+  const button = page.getByRole('button', { name: 'New folder', exact: true });
+  await button.click();
+  await page.getByRole('textbox', { name: 'Folder name' }).fill('Do not create');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Files in ~/repo' })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Folder name' })).toHaveCount(0);
+  await expect(button).toBeFocused();
+  await button.click();
+  await page
+    .getByRole('form', { name: 'New folder' })
+    .getByRole('button', { name: 'Cancel', exact: true })
+    .click();
+  await expect(button).toBeFocused();
+  expect(creates).toBe(0);
+});
+
+test('folder name collisions notify the user and preserve the name for correction', async ({
+  page,
+}) => {
+  await openBrowser(page);
+  await page.route('**/api/workspaces/repo/files/directories', (route) =>
+    route.fulfill({ status: 409, json: { code: 'FILE_CONFLICT', replaceAllowed: false } }),
+  );
+  await page.getByRole('button', { name: 'New folder', exact: true }).click();
+  const input = page.getByRole('textbox', { name: 'Folder name' });
+  await input.fill('nested');
+  await page.getByRole('button', { name: 'Create folder', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText(
+    'An item with that name already exists. Choose a different folder name.',
+  );
+  await expect(input).toHaveValue('nested');
+  await expect(input).toBeFocused();
+});
 
 test('uploads each chosen file sequentially and restores focus after closing', async ({ page }) => {
   const uploads: string[] = [];

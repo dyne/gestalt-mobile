@@ -15,6 +15,7 @@ import { registerCopyEntry } from './copy-entry/endpoint.js';
 import { registerMoveEntry } from './move-entry/endpoint.js';
 import { registerUploadFile } from './upload-file/endpoint.js';
 import { registerDeleteEntry } from './delete-entry/endpoint.js';
+import { registerCreateDirectory } from './create-directory/endpoint.js';
 
 export function registerFileRoutes(
   app: FastifyInstance,
@@ -39,4 +40,5 @@ export function registerFileRoutes(
   registerMoveEntry(app, deps.workspaceFileRoutes);
   registerUploadFile(app, deps.workspaceFileRoutes);
   registerDeleteEntry(app, deps.workspaceFileRoutes);
+  registerCreateDirectory(app, deps.workspaceFileRoutes);
 }

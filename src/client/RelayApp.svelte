@@ -2207,6 +2207,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           moveEntry={relay.moveWorkspaceEntry}
           deleteEntry={relay.deleteWorkspaceEntry}
           uploadFile={relay.uploadWorkspaceFile}
+          createDirectory={relay.createWorkspaceDirectory}
           onclose={() => void closeFileBrowser()}
           onerror={(error) => reportRelayError(error, 'WORKSPACE_FILES_READ_FAILED')}
           onsuccess={(message) => toastQueue.enqueue({ kind: 'success', message })}

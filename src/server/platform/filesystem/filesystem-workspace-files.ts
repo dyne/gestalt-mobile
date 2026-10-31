@@ -27,6 +27,7 @@ import type {
   DeleteInput,
   FileMutationResult,
   UploadInput,
+  CreateDirectoryInput,
 } from '../../features/files/application/ports.js';
 import type {
   ListWorkspaceDirectory,
@@ -43,7 +44,9 @@ type Filesystem = Readonly<{
 }>;
 type Cursor = Readonly<{ d: string; i: number; m: number; a: string; s: string }>;
 type MutationHooks = Readonly<{
-  afterParentCheck?: (operation: 'upload' | 'copy' | 'move' | 'delete') => Promise<void>;
+  afterParentCheck?: (
+    operation: 'upload' | 'copy' | 'move' | 'delete' | 'create-directory',
+  ) => Promise<void>;
   beforePublish?: (operation: 'upload' | 'copy' | 'move') => Promise<void>;
 }>;
 type AnchoredDirectory = Readonly<{ path: string; close: () => Promise<void> }>;
@@ -287,6 +290,36 @@ export class FilesystemWorkspaceFiles implements WorkspaceFileSource {
       };
     } catch {
       return { kind: 'unreadable' };
+    } finally {
+      await parent.close();
+    }
+  }
+
+  async createDirectory(
+    rootPath: string,
+    input: CreateDirectoryInput,
+  ): Promise<FileMutationResult> {
+    if (!validName(input.name) || !input.name.trim()) return { kind: 'invalid-destination' };
+    const root = await this.canonicalDirectory(rootPath);
+    if (!root) return { kind: 'unreadable' };
+    const parent = await anchoredDirectory(root, input.directory);
+    if (!parent) return { kind: 'invalid-destination' };
+    try {
+      await this.mutationHooks.afterParentCheck?.('create-directory');
+      if (!(await stableAnchor(root, input.directory, parent.path)))
+        return { kind: 'invalid-destination' };
+      await mkdir(join(parent.path, input.name));
+      return {
+        kind: 'available',
+        source: '',
+        path: input.directory ? `${input.directory}/${input.name}` : input.name,
+        entryKind: 'directory',
+        conflict: 'reject',
+      };
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'EEXIST'
+        ? { kind: 'conflict', replaceAllowed: false }
+        : { kind: 'unreadable' };
     } finally {
       await parent.close();
     }
