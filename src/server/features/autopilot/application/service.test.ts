@@ -5010,7 +5010,7 @@ ${index === 10 ? '** SUSPENDED [#A] L11.1\n:PROPERTIES:\n:ID: l11-1\n:END:\n- Wh
       },
     );
 
-    it('rearms scheduled executor commands once after SQLite restart but never replays issued ambiguity', async () => {
+    it('rearms scheduled executor commands after SQLite restart and sends issued ambiguity to root', async () => {
       const directory = await mkdtemp(join(tmpdir(), 'gestalt-executor-command-restart-'));
       const path = join(directory, 'relay.sqlite');
       const executorPlan = {
@@ -5167,7 +5167,9 @@ ${index === 10 ? '** SUSPENDED [#A] L11.1\n:PROPERTIES:\n:ID: l11-1\n:END:\n- Wh
         coordinator(ambiguous).restore('s');
         await Promise.resolve();
         await Promise.resolve();
-        expect(timers.filter((timer) => !timer.cancelled)).toHaveLength(0);
+        // Recovery diagnoses the uncertain issue at root; it never replays the
+        // executor command, whose external acceptance is still unknown.
+        expect(timers.filter((timer) => !timer.cancelled)).toHaveLength(1);
         expect(resume).toHaveBeenCalledTimes(1);
         expect(
           new SqliteAutopilotStore(ambiguous).find('s')?.executor?.commands?.[0],

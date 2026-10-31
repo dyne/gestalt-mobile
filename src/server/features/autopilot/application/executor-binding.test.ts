@@ -6,7 +6,7 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, vi } from 'vitest';
-import { AutopilotCoordinator } from './service.js';
+import { AutopilotCoordinator, fingerprint } from './service.js';
 import { defaultAutopilotPolicy } from './policy.js';
 import { disabledAutopilot } from '../domain/autopilot-session.js';
 import { executorAssignment, type ExecutorLifecycle } from '../domain/supervised-lifecycle.js';
@@ -194,6 +194,42 @@ function fixture(pending = false, enabled = true) {
 }
 
 describe('canonical executor handoff observations', () => {
+  it('does not journal unchanged command-bearing bindings after SQLite hydration', () => {
+    const f = fixture();
+    try {
+      expect(f.coordinator.reconcileExecutorBinding('s').status).toBe('ready');
+      const before = f.store.find('s')!;
+      f.store.save({
+        ...before,
+        executor: {
+          ...before.executor!,
+          commands: [
+            {
+              commandId: 'retained-command',
+              status: 'issued',
+              planIdentity: 'plan',
+              planFingerprint: fingerprint(f.getPlan()),
+              canonicalPosition: 'L2',
+              canonicalTaskName: 'l2',
+              taskPath: '/root/l2',
+              threadId: 'child-2',
+              generation: 2,
+              trigger: 'partial',
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+        },
+      });
+      const events = f.events.length;
+      for (let i = 0; i < 5; i++)
+        expect(f.coordinator.reconcileExecutorBinding('s').code).toBe('BINDING_MATCH');
+      expect(f.events.length).toBe(events);
+      expect(f.store.find('s')?.executor?.commands?.[0]?.status).toBe('issued');
+    } finally {
+      f.close();
+    }
+  });
   it.each([false, true])(
     'adopts the existing new executor while root is active (attention=%s)',
     async (pending) => {

@@ -21,6 +21,7 @@ import {
 } from '../domain/executor-commands.js';
 import { deriveSessionStatus } from '../../sessions/session-status.js';
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import {
   currentExecutableL1Index,
   type SupervisedPlan,
@@ -360,7 +361,7 @@ export class AutopilotCoordinator {
       };
     const bindingState = (value: ExecutorLifecycle | undefined) =>
       value
-        ? JSON.stringify({
+        ? {
             ...value,
             lastActivityAt: undefined,
             resumeFailures: value.resumeFailures || undefined,
@@ -371,9 +372,11 @@ export class AutopilotCoordinator {
               cpuPercent: undefined,
               rssBytes: undefined,
             })),
-          })
+          }
         : null;
-    const changed = bindingState(state.executor) !== bindingState(executor);
+    // SQLite hydration reconstructs property order (notably assignment and
+    // commands). Object insertion order is not a change in executor ownership.
+    const changed = !isDeepStrictEqual(bindingState(state.executor), bindingState(executor));
     if (changed)
       this.persist({ ...state, executor, updatedAt: this.deps.now() }, undefined, [
         {
@@ -2190,7 +2193,10 @@ export class AutopilotCoordinator {
     // Once that bounded loop requests diagnosis, preserve the probe state for
     // the root instead of counting the root control as another blind retry.
     const protocol = this.executorDiagnosisRequired(current)
-      ? current.supervision!
+      ? {
+          ...(current.supervision ?? startSupervisionProtocol(this.progressKey(sessionId))),
+          outcome: 'probeRequired' as const,
+        }
       : recordAutomaticContinuation(
           current.supervision ?? startSupervisionProtocol(this.progressKey(sessionId)),
           this.progressKey(sessionId),
@@ -3104,7 +3110,7 @@ export class AutopilotCoordinator {
 
   private persistExecutor(sessionId: string, executor: ExecutorLifecycle): boolean {
     const current = this.deps.store.find(sessionId);
-    if (!current || JSON.stringify(current.executor) === JSON.stringify(executor)) return false;
+    if (!current || isDeepStrictEqual(current.executor, executor)) return false;
     this.persist({ ...current, executor, updatedAt: this.deps.now() });
     return true;
   }
@@ -3712,7 +3718,30 @@ export class AutopilotCoordinator {
     );
   }
   private executorDiagnosisRequired(state: AutopilotSession): boolean {
-    return state.supervision?.outcome === 'probeRequired';
+    if (state.supervision?.outcome === 'probeRequired') return true;
+    const retained = this.deps.plan(state.sessionId);
+    const executor = state.executor;
+    if (!retained || !executor) return false;
+    if (this.authoritativeExecutorActive(state, retained.plan, this.deps.activity(state.sessionId)))
+      return false;
+    const planFingerprint = fingerprint(retained.plan);
+    // Issued is not accepted. A later wait can replace the transient probe
+    // state, but cannot erase this durable ambiguity. Resume protection must
+    // hand diagnosis back to root rather than silently selecting a command
+    // which replay protection will refuse to issue again.
+    return Boolean(
+      executor.commands?.some(
+        (command) =>
+          command.status === 'issued' &&
+          !command.processAction &&
+          command.planIdentity === retained.identity &&
+          command.planFingerprint === planFingerprint &&
+          command.canonicalPosition === executor.canonicalPosition &&
+          command.canonicalTaskName === executor.canonicalTaskName &&
+          command.taskPath === executor.taskPath &&
+          command.threadId === executor.threadId,
+      ),
+    );
   }
   private executorTurnActive(
     executor: ExecutorLifecycle,
