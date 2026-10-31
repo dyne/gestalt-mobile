@@ -187,6 +187,7 @@ export class ChatController {
   #generation = 0;
   #authoritativeGeneration = -1;
   #socket: WebSocket | null = null;
+  #connectionInterrupted = false;
   #resyncSocket = false;
   #resyncSequence: number | null = null;
   #snapshot: { id: string; generation: number; promise: Promise<void> } | null = null;
@@ -232,9 +233,18 @@ export class ChatController {
     this.#options.window.addEventListener('focus', this.#foreground);
   }
   get view(): ChatViewState {
+    const loading =
+      this.#projection.snapshotting &&
+      this.#authoritativeGeneration !== this.#generation &&
+      !this.#historyKnownEmpty &&
+      !hasConversationContent(this.#projection);
     return Object.freeze({
       ...this.#projection,
-      status: deriveStatus(this.#projection),
+      status: this.#connectionInterrupted
+        ? 'Connection interrupted. Reconnecting…'
+        : loading
+          ? 'Loading conversation…'
+          : deriveStatus(this.#projection),
       readySince: this.#readySince,
       starting: this.#projection.lifecycle === 'starting',
       newEmpty: this.#historyKnownEmpty && !hasConversationContent(this.#projection),
@@ -437,7 +447,7 @@ export class ChatController {
       );
     } catch {
       this.#options.onConnectionChange?.(false);
-      this.#projection = { ...this.#projection, lifecycle: 'recoverable' };
+      this.#connectionInterrupted = true;
       this.#publish();
       this.#reconnect = this.#options.setTimeout(
         () => this.#open(id, generation),
@@ -450,7 +460,10 @@ export class ChatController {
     socket.onopen = () => {
       if (this.#current(id, generation) && this.#socket === socket) {
         this.#options.onConnectionChange?.(true);
+        const interrupted = this.#connectionInterrupted;
+        this.#connectionInterrupted = false;
         this.#attempt = 0;
+        if (interrupted) this.#publish();
         if (snapshotOnOpen && !this.#historyKnownEmpty) void this.#takeSnapshot(id, generation);
       }
     };
@@ -465,6 +478,8 @@ export class ChatController {
         void this.#takeSnapshot(id, generation);
         return;
       }
+      this.#connectionInterrupted = true;
+      this.#publish();
       this.#reconnect = this.#options.setTimeout(
         () => this.#open(id, generation),
         Math.min(1000 * 2 ** this.#attempt++, 10_000),
@@ -570,19 +585,14 @@ export class ChatController {
       return typeof value.state === 'string' && typeof value.reason === 'string';
     if (event.type === 'tool.efficiency.updated')
       return parseToolEfficiencySnapshot(payload, this.#projection.sessionId ?? '') !== null;
-    if (
-      event.type === 'autopilot.updated' ||
-      event.type === 'org-plan.attention-required' ||
-      event.type === 'org-plan.attention-resolved' ||
-      [
-        'autopilot.continuation-scheduled',
-        'autopilot.control-issued',
-        'autopilot.turn-started',
-        'autopilot.turn-failed',
-      ].includes(event.type)
-    )
-      return true;
-    return event.type === 'plan.updated' || event.type === 'plan.closed';
+    // Supervision metadata shares the chat journal's sequence. Even events
+    // without a chat rendering must reach both cursors to avoid false gaps.
+    return (
+      event.type === 'plan.updated' ||
+      event.type === 'plan.closed' ||
+      event.type.startsWith('autopilot.') ||
+      event.type.startsWith('org-plan.')
+    );
   }
   #takeSnapshot(id: string, generation: number): Promise<void> {
     if (this.#snapshot?.id === id && this.#snapshot.generation === generation) {
@@ -670,8 +680,7 @@ export class ChatController {
       void this.#options.cache.write(this.#sessionId, this.#projection).catch(() => {});
   }
   #publish(): void {
-    // A history refresh temporarily changes the label, but is not new work.
-    // Keep the episode across snapshots and reset it on actual lifecycle changes.
+    // Keep the ready episode across snapshots; only lifecycle changes reset it.
     if (
       this.#projection.sessionId &&
       this.#projection.lifecycle === 'finished' &&
@@ -712,6 +721,7 @@ export class ChatController {
   }
   #stop(): void {
     this.#options.onConnectionChange?.(false);
+    this.#connectionInterrupted = false;
     this.#transport = { attempts: 0, coalesced: 0, resyncs: 0, socketOpens: 0 };
     this.#resyncSocket = false;
     this.#resyncSequence = null;
