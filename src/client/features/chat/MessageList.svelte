@@ -499,9 +499,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         </section>
       {:else if group.commentary !== null}
         {@const ownedActivities = turnActivities(group)}
-        <section class={isLive(group) ? 'progress-turn' : 'commentary-turn'}>
+        <section class="progress-turn">
           <div class="entry-heading">
-            <strong>{isLive(group) ? 'working' : 'commentary'}</strong>
+            <strong>working</strong>
             {#if group.occurredAt}
               <time datetime={new Date(group.occurredAt).toISOString()}>
                 {formatMessageTime(group.occurredAt)}
@@ -511,16 +511,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               </time>
             {/if}
           </div>
+          {#if group.commentary}
+            <div class="entry-content">{@render workingContent(group.commentary)}</div>
+          {/if}
           {#if isLive(group)}
-            {#if group.commentary}
-              <div class="entry-content">{@render workingContent(group.commentary)}</div>
-            {/if}
             <ActivityList activities={regularActivities(ownedActivities)} variant="live" />
           {:else}
-            <details>
-              <summary>commentary</summary>
-              {@render content(group.commentary)}
-            </details>
             <WorkDetails activities={ownedActivities} {now} />
           {/if}
           {#if isLive(group)}{@render changedFiles(ownedActivities)}{/if}
@@ -587,7 +583,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     padding-inline-start: 0.625rem;
   }
 
-  .commentary-turn,
   .orphan-activity-turn,
   .progress-turn,
   .commentary-content {
