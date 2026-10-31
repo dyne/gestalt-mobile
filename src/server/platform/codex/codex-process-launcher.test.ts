@@ -79,7 +79,8 @@ if (mode === 'stubborn') {
   process.on('SIGTERM', () => {});
   setInterval(() => {}, 1000);
 } else if (mode === 'blocked-read') {
-  process.on('SIGTERM', () => process.exit(143));
+  // EOF must release the filesystem reader even when SIGTERM is ignored.
+  process.on('SIGTERM', () => {});
 }
 const input = mode === 'blocked-read' ? createReadStream(null, {fd: 0}) : process.stdin;
 createInterface({input}).on('line', line => {
@@ -127,7 +128,7 @@ createInterface({input}).on('line', line => {
         await expect(server.rpc.request('initialize', {})).resolves.toEqual({ ready: true });
         server.close();
         server.close();
-        await expect(exit).resolves.toEqual([143, null]);
+        await expect(exit).resolves.toEqual([0, null]);
         expect(server.child.stdin.writableEnded).toBe(true);
       } finally {
         await cleanup();

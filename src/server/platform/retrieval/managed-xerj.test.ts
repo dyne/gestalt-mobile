@@ -103,24 +103,29 @@ else { const timer = setInterval(() => { if (fs.existsSync(path.join(root, 'rele
         .trim()
         .split('\n')
         .map((line) => JSON.parse(line));
+    const startup = adapter.check({ cwd: root, deadline: Date.now() + 10_000, start: true });
+    // Synchronize with the child before exercising short chat waits. A loaded
+    // runner can take longer than those waits just to schedule the executable.
+    await vi.waitFor(async () => expect(await readCalls()).toHaveLength(1), { timeout: 5_000 });
     const first = adapter.check({ cwd: root, deadline: Date.now() + 200, start: true });
     const second = adapter.check({ cwd: '/tmp', deadline: Date.now() + 250, start: true });
     expect(await first).toEqual({ status: 'starting' });
     expect(await second).toEqual({ status: 'starting' });
-    await vi.waitFor(async () => expect(await readCalls()).toHaveLength(1));
+    expect(await readCalls()).toHaveLength(1);
     expect((await readCalls())[0].budget).toBe('30000');
     const pid = (await readCalls())[0].pid;
     expect(() => process.kill(pid, 0)).not.toThrow();
-    const observer = adapter.check({ cwd: root, deadline: Date.now() + 1000, start: false });
+    const observer = adapter.check({ cwd: root, deadline: Date.now() + 5_000, start: false });
     await writeFile(join(root, 'release'), '');
+    expect(await startup).toMatchObject({ status: 'ready' });
     expect(await observer).toMatchObject({ status: 'ready' });
     await writeFile(join(root, 'reject'), '');
-    expect(await adapter.check({ cwd: root, deadline: Date.now() + 1000, start: false })).toEqual({
+    expect(await adapter.check({ cwd: root, deadline: Date.now() + 5_000, start: false })).toEqual({
       status: 'unavailable',
       reason: 'authentication-failed',
     });
     expect((await readCalls()).map((call) => call.operation)).toEqual(['ensure-ready', 'probe']);
-  });
+  }, 10_000);
   it('cancels and reaps an in-flight startup on shutdown without stopping the shared backend', async () => {
     const { adapter, root } = await manager(
       `require('node:fs').writeFileSync('pid', String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);`,
