@@ -94,6 +94,19 @@ describe('AutopilotController', () => {
     controller.observe('a', {
       sequence: 4,
       type: 'autopilot.updated',
+      payload: {
+        ...blocked,
+        health: {
+          ...checkpointRecoverySnapshot().health,
+          phase: 'waitingForAgentEvent',
+          healthy: true,
+        },
+      },
+    });
+    expect(published.errors.has('a')).toBe(false);
+    controller.observe('a', {
+      sequence: 5,
+      type: 'autopilot.updated',
       payload: { ...snapshot('disabled'), reason: 'reconcileFailed' },
     });
     expect(published.errors.has('a')).toBe(false);

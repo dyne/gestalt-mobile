@@ -34,8 +34,26 @@ describe('redacted XERJ indexing diagnostics', () => {
   ])('classifies %j without retaining native prose', (message, code) => {
     const diagnostic = xerjIndexDiagnostic(message);
     expect(diagnostic.code).toBe(code);
-    expect(Object.keys(diagnostic).sort()).toEqual(['code', 'id', 'messageDigest', 'occurredAt']);
+    expect(Object.keys(diagnostic).sort()).toEqual([
+      'code',
+      'id',
+      'messageDigest',
+      'occurredAt',
+      ...(diagnostic.watchPass ? ['watchPass'] : []),
+    ]);
     expect(JSON.stringify(diagnostic)).not.toContain('private provider prose');
+  });
+
+  it('retains pass number and duration independently of the classified cause', () => {
+    expect(
+      xerjIndexDiagnostic('watch: pass 12 FAILED after 0.4s: connection refused private-path'),
+    ).toMatchObject({ code: 'connection', watchPass: { number: 12, durationSeconds: 0.4 } });
+    expect(
+      xerjIndexDiagnostic('watch: pass 999999999999999999999 FAILED after 0.4s: private'),
+    ).not.toHaveProperty('watchPass');
+    expect(xerjIndexDiagnostic('watch: pass 1 FAILED after 0..4s: private')).not.toHaveProperty(
+      'watchPass',
+    );
   });
 
   it('correlates repeated warning content while giving each occurrence a unique identity', () => {

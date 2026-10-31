@@ -127,6 +127,41 @@ describe('host-owned XERJ indexing', () => {
     expect(indexer.status().message).toBeUndefined();
   });
 
+  it('distinguishes a failed pass, an active retry and a recovered index', async () => {
+    const f = await fixture(
+      `console.error(JSON.stringify({event:'done',ok:true,files:6,records:12}));
+       console.error(JSON.stringify({event:'warning',message:'watch: pass 12 FAILED after 0.4s: connection refused private-path'}));
+       let retry=false, done=false;
+       setInterval(() => {
+         if (!retry && require('node:fs').existsSync(process.env.ARGS_FILE+'.retry')) {
+           retry=true; console.error(JSON.stringify({event:'progress',phase:'scan',pct:20}));
+         }
+         if (!done && require('node:fs').existsSync(process.env.ARGS_FILE+'.finish')) {
+           done=true; console.error(JSON.stringify({event:'done',ok:true,files:7,records:14}));
+         }
+       },20);`,
+    );
+    const indexer = f.create();
+    indexer.start();
+    await vi.waitFor(() => expect(indexer.status().state).toBe('error'));
+    expect(indexer.status()).toMatchObject({
+      diagnostic: { code: 'connection', watchPass: { number: 12, durationSeconds: 0.4 } },
+      message: expect.stringContaining('watch pass 12 failed after 0.4s'),
+      readiness: { connection: { state: 'ready' }, coverage: { state: 'stale' } },
+    });
+    expect(indexer.status().message).toContain('backend connection failed');
+    expect(indexer.status().message).not.toContain('unclassified');
+    await writeFile(join(f.root, 'args.json.retry'), '');
+    await vi.waitFor(() => expect(indexer.status().state).toBe('indexing'));
+    expect(indexer.status().message).toContain('indexing is in progress');
+    expect(indexer.status().readiness?.coverage.state).toBe('stale');
+    await writeFile(join(f.root, 'args.json.finish'), '');
+    await vi.waitFor(() => expect(indexer.status().state).toBe('watching'));
+    expect(indexer.status().message).toBeUndefined();
+    expect(indexer.status().readiness?.coverage.state).toBe('ready');
+    expect(JSON.stringify([indexer.status(), f.report.mock.calls])).not.toContain('private-path');
+  });
+
   it.each([0, 12, undefined])(
     'derives coverage only from completed index counters: %s records',
     async (records) => {

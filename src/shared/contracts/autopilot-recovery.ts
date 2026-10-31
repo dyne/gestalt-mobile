@@ -10,12 +10,18 @@ export const checkpointHandoffRecoveryMessage =
 
 /** Reconciliation can fail while the coordinator remains enabled for recovery. */
 export const reconciliationRecoveryMessage =
-  'Autopilot cannot confirm agent status. Automatic continuation is waiting for session recovery. If this persists, restore or reopen the session, then retry Autopilot, or disable it to continue manually.';
+  'Autopilot is recovering after a continuation or agent status check failed. It will retry automatically. If recovery persists, retry Autopilot or restore the session.';
 
 export function isReconciliationRecovery(
-  snapshot: { state: string; enabled: boolean; reason?: string } | null | undefined,
+  snapshot:
+    | { state: string; enabled: boolean; reason?: string; health?: { healthy: boolean } }
+    | null
+    | undefined,
 ): boolean {
   return Boolean(
-    snapshot?.enabled && snapshot.state === 'monitoring' && snapshot.reason === 'reconcileFailed',
+    snapshot?.enabled &&
+    snapshot.state === 'monitoring' &&
+    snapshot.reason === 'reconcileFailed' &&
+    snapshot.health?.healthy !== true,
   );
 }

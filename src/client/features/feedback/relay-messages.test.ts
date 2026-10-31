@@ -37,7 +37,7 @@ describe('relayFeedback', () => {
     ).toEqual({
       code: 'SESSION_HISTORY_READ_FAILED',
       message:
-        'Session history could not be read. The conversation remains saved; try again shortly.',
+        'Session history could not be loaded from its provider. Try again shortly; reopen the session if this persists.',
       retryable: true,
     }));
 

@@ -103,7 +103,7 @@ describe('AutopilotSafetyStop', () => {
       ondisable,
     });
     expect(screen.getByRole('alert', { name: 'Autopilot recovery warning' }).textContent).toContain(
-      'Autopilot cannot confirm agent status.',
+      'Autopilot is recovering after a continuation or agent status check failed.',
     );
     await fireEvent.click(screen.getByRole('button', { name: 'Retry Autopilot' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Disable Autopilot' }));

@@ -12,6 +12,9 @@ import type { XerjIndexDiagnostic } from '../../../shared/contracts/xerj-status.
 /** Classify bounded native prose; never retain it or copy arbitrary native fields. */
 export function xerjIndexDiagnostic(message: unknown): XerjIndexDiagnostic {
   const text = typeof message === 'string' ? message.slice(0, 16_384) : '';
+  const pass = /^watch: pass (\d+) FAILED after (\d+(?:\.\d+)?)s:/.exec(text);
+  const number = pass ? Number(pass[1]) : Number.NaN;
+  const durationSeconds = pass ? Number(pass[2]) : Number.NaN;
   const code = text.includes('refusing ambiguous assignment')
     ? 'ambiguous-assignment'
     : /\b(timeout|timed out)\b/i.test(text)
@@ -35,6 +38,9 @@ export function xerjIndexDiagnostic(message: unknown): XerjIndexDiagnostic {
     occurredAt: new Date().toISOString(),
     code,
     messageDigest: text ? createHash('sha256').update(text).digest('hex') : null,
+    ...(Number.isSafeInteger(number) && Number.isFinite(durationSeconds)
+      ? { watchPass: { number, durationSeconds } }
+      : {}),
   };
 }
 

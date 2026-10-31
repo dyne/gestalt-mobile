@@ -184,6 +184,32 @@ for (const width of [1280, 390]) {
     page,
   }) => {
     await page.setViewportSize({ width, height: 900 });
+    await page.routeWebSocket('**/api/sessions/session-1/events?*', (socket) => {
+      socket.send(
+        JSON.stringify({
+          type: 'relay.event',
+          event: {
+            sequence: 1,
+            type: 'activity.updated',
+            payload: {
+              id: 'xerj-startup',
+              label: 'XERJ startup',
+              detail: 'Ready',
+              mcpStartup: {
+                schemaVersion: 1,
+                runtimeId: 'runtime',
+                attemptId: 'attempt',
+                threadId: 'codex-thread-1',
+                serverName: 'gestalt-xerj',
+                observedAt: '2026-10-31T12:00:00.000Z',
+                status: 'ready',
+                failure: null,
+              },
+            },
+          },
+        }),
+      );
+    });
     let historyReads = 0;
     const session = {
       id: 'session-1',
@@ -264,7 +290,7 @@ for (const width of [1280, 390]) {
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));
     expect(historyReads).toBe(0);
     await expect(page.getByLabel('Notifications')).not.toContainText(
-      'Session history could not be read',
+      'Session history could not be loaded',
     );
     await expect(page.getByText(/^Agents \(/)).toHaveCount(0);
     await expect(page.getByRole('button', { name: /^Autopilot/ })).toHaveCount(0);

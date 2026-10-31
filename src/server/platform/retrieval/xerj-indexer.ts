@@ -245,7 +245,14 @@ export class XerjIndexer {
           typeof event.pct === 'number' && event.pct >= 0 && event.pct <= 100
             ? event.pct
             : undefined;
-        this.value = { ...this.value, state: 'indexing', phase, percent, message: undefined };
+        this.value = {
+          ...this.value,
+          state: 'indexing',
+          phase,
+          percent,
+          message:
+            'XERJ indexing is in progress. Index coverage is unverified until this pass succeeds.',
+        };
       } else if (event.event === 'done') {
         if (event.ok !== true) {
           this.fail(
@@ -304,13 +311,6 @@ export class XerjIndexer {
           );
           return;
         }
-        if (diagnostic.code === 'watch-pass-failed') {
-          this.fail(
-            'XERJ index update failed. The watcher is still running and will retry after a source change; existing index coverage is unverified until an update succeeds.' +
-              reference,
-          );
-          return;
-        }
         if (diagnostic.code === 'ambiguous-assignment') {
           this.fail(
             'XERJ incremental dataset assignment failed; the index is stale. See the XERJ recovery guide for this upstream limitation.' +
@@ -318,8 +318,21 @@ export class XerjIndexer {
           );
           return;
         }
+        const cause = {
+          timeout: 'An indexing operation timed out.',
+          authentication: 'The indexing backend rejected authentication or access.',
+          connection: 'The indexing backend connection failed.',
+          capacity: 'Indexing ran out of memory or disk space.',
+          'watch-pass-failed': 'The underlying cause could not be classified.',
+          'unknown-warning': 'The warning could not be classified.',
+        }[diagnostic.code];
+        const pass = diagnostic.watchPass;
         this.fail(
-          'XERJ reported an unclassified indexing warning. Inspect the index with gestalt xerj autoindex status.' +
+          (pass
+            ? `XERJ watch pass ${pass.number} failed after ${pass.durationSeconds}s. `
+            : 'XERJ indexing reported a warning. ') +
+            cause +
+            ' The watcher is still running and is waiting for a source change to retry; index coverage is unverified until an update succeeds.' +
             reference,
         );
       }

@@ -20,6 +20,8 @@ export type XerjIndexDiagnostic = {
     | 'watch-rescan'
     | 'unknown-warning';
   messageDigest: string | null;
+  /** Native pass metadata only; never filenames or exception prose. */
+  watchPass?: { number: number; durationSeconds: number };
 };
 
 export type XerjStatus = {

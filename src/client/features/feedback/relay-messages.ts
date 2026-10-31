@@ -18,7 +18,7 @@ const relayMessages = {
   SESSION_HISTORY_UNAVAILABLE:
     'Session history is unavailable. Check the relay connection and try opening the session again.',
   SESSION_HISTORY_READ_FAILED:
-    'Session history could not be read. The conversation remains saved; try again shortly.',
+    'Session history could not be loaded from its provider. Try again shortly; reopen the session if this persists.',
   SESSION_WRITER_BUSY:
     'This thread is active in another Codex client. Release it there, then retry sending here.',
   SESSION_WORKSPACE_UNAVAILABLE:
