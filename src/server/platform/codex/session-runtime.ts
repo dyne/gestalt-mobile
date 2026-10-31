@@ -667,7 +667,12 @@ export class CodexSessionRuntime {
   /** Stops the previous root's actor tree without transferring its native collaboration namespace. */
   async quiesceForTakeover(
     session: RelaySessionSnapshot,
-    recordedProcesses: readonly { ownerThreadId: string; processId: string; state: string }[] = [],
+    recordedProcesses: readonly {
+      ownerThreadId: string;
+      processId: string;
+      itemId?: string;
+      state: string;
+    }[] = [],
     executor?: { threadId: string; taskPath: string },
   ): Promise<boolean> {
     let expired = false;
@@ -690,7 +695,12 @@ export class CodexSessionRuntime {
 
   private async quiesceTakeoverActors(
     session: RelaySessionSnapshot,
-    recordedProcesses: readonly { ownerThreadId: string; processId: string; state: string }[],
+    recordedProcesses: readonly {
+      ownerThreadId: string;
+      processId: string;
+      itemId?: string;
+      state: string;
+    }[],
     executor: { threadId: string; taskPath: string } | undefined,
     allowed: () => boolean,
   ): Promise<boolean> {
@@ -763,13 +773,42 @@ export class CodexSessionRuntime {
       }
       const processes = await this.inspectChildProcesses(writer.session, thread);
       if (!current()) return false;
-      if (
-        thread.status === 'notLoaded' &&
-        recordedProcesses.some(
+      if (thread.status === 'notLoaded') {
+        const unresolved = recordedProcesses.filter(
           (p) => p.ownerThreadId === thread.id && ['running', 'detached-active'].includes(p.state),
-        )
-      )
-        return false;
+        );
+        // Closing the old runtime can leave a stale running projection. Unloaded
+        // alone is not exit evidence; require the exact durable command result.
+        if (unresolved.length) {
+          if (unresolved.some((p) => !p.itemId)) return false;
+          const result = await resource.process.rpc.request('thread/read', {
+            threadId: thread.id,
+            includeTurns: true,
+          });
+          const history = asRecord(asRecord(result)?.thread);
+          if (!current() || history?.id !== thread.id) return false;
+          const turns = history.turns;
+          if (!Array.isArray(turns) || turns.length > 10_000) return false;
+          const completed = new Map<string, string>();
+          for (const turn of turns) {
+            const items = asRecord(turn)?.items;
+            if (!Array.isArray(items) || items.length > 10_000) return false;
+            for (const candidate of items) {
+              const item = asRecord(candidate);
+              const itemId = boundedString(item?.id, 256);
+              const processId = boundedString(item?.processId, 256);
+              if (
+                item?.type === 'commandExecution' &&
+                itemId &&
+                processId &&
+                ['completed', 'failed', 'declined'].includes(String(item.status))
+              )
+                completed.set(itemId, processId);
+            }
+          }
+          if (unresolved.some((p) => completed.get(p.itemId!) !== p.processId)) return false;
+        }
+      }
       if (thread.status !== 'notLoaded') await this.interruptExecutor(writer.session, thread.id);
       for (const process of processes) {
         if (!current()) return false;
