@@ -242,6 +242,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <dl>
         <div>
           <dt>XERJ service</dt>
+          <dd>{readinessLabel(xerj.readiness?.connection?.state)}</dd>
+        </div>
+        <div>
+          <dt>Indexer</dt>
           <dd>{xerj.state}</dd>
         </div>
         <div>

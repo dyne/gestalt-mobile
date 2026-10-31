@@ -15,6 +15,9 @@ export type XerjIndexDiagnostic = {
     | 'authentication'
     | 'connection'
     | 'capacity'
+    | 'rebuild-required'
+    | 'watch-pass-failed'
+    | 'watch-rescan'
     | 'unknown-warning';
   messageDigest: string | null;
 };

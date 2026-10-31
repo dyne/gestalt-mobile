@@ -15,6 +15,19 @@ describe('redacted XERJ indexing diagnostics', () => {
     ['unauthorized request', 'authentication'],
     ['connection refused', 'connection'],
     ['no space left on device', 'capacity'],
+    [
+      'watch: pass 12 FAILED after 0.4s: private provider error. Still watching',
+      'watch-pass-failed',
+    ],
+    [
+      'watch: pass 0 FAILED after 0.2s: autoindex execution configuration changed since the committed generation; rebuild with a new --state-dir and a new --prefix',
+      'rebuild-required',
+    ],
+    [
+      'watch: the platform reported dropped events (watch queue overflow); re-hashing the whole tree for this pass',
+      'watch-rescan',
+    ],
+    ['watch: pass 12 FAILED after 0.4s: connection refused', 'connection'],
     ['arbitrary private provider prose', 'unknown-warning'],
     [undefined, 'unknown-warning'],
     [{ message: 'timeout' }, 'unknown-warning'],
