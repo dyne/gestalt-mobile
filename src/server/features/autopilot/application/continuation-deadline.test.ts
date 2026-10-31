@@ -5,6 +5,7 @@
  */
 
 import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SqliteEventJournal } from '../../../platform/persistence/sqlite-event-journal.js';
 import { migrate } from '../../../platform/persistence/migrate.js';
@@ -20,6 +21,7 @@ describe('continuation deadline across reconciliation', () => {
     pendingProcessResult?: (sessionId: string) => boolean,
     rootState: 'idle' | 'working' = 'idle',
     processResultState?: (sessionId: string, runId: string) => 'running' | 'completed' | 'missing',
+    withExecutor = false,
   ) {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-18T05:59:19.000Z'));
@@ -42,6 +44,7 @@ describe('continuation deadline across reconciliation', () => {
     const start = vi.fn(async () => {
       activeTurnId = 'continued';
     });
+    const resume = vi.fn(async () => {});
     const reconcile = vi.fn(async () => {
       activity.confidence = 'fresh';
       activity.root.observedAt = now();
@@ -88,6 +91,18 @@ describe('continuation deadline across reconciliation', () => {
       },
       nextControlId: () => `control-${++controlNumber}`,
       turnStarter: { start },
+      ...(withExecutor
+        ? {
+            executorController: {
+              resume,
+              interrupt: async () => true,
+              refresh: async () => {},
+              transferProcess: () => {},
+              consumeProcess: () => {},
+              terminateProcess: async () => true,
+            },
+          }
+        : {}),
       publish: (sessionId, type, payload, at, outboxId) => {
         events.push(type);
         journal.append(sessionId, type, payload, at, outboxId);
@@ -100,6 +115,7 @@ describe('continuation deadline across reconciliation', () => {
       store,
       activity,
       start,
+      resume,
       reconcile,
       events,
       block: () => {
@@ -111,6 +127,101 @@ describe('continuation deadline across reconciliation', () => {
       },
     };
   }
+
+  it.each(['continue', 'manual-off', 'pending-interaction', 'executor-active'] as const)(
+    'retains an unconfirmed issued command and diagnoses at root after wait expiry (%s)',
+    async (gate) => {
+      const f = fixture(undefined, 'working', undefined, true);
+      try {
+        const clock = new Date().toISOString();
+        f.activity.subagents = [
+          {
+            id: 'child',
+            threadId: 'child',
+            canonicalPosition: 'L1',
+            canonicalTaskName: 'l1',
+            taskPath: '/root/l1',
+            continuationGeneration: 1,
+            state: 'idle',
+            outcome: 'partial',
+            reason: 'turnCompleted',
+            observedAt: clock,
+            lastActivityAt: clock,
+            ownedProcesses: [],
+          },
+        ];
+        const state = f.store.find('s')!;
+        const commandId = createHash('sha256')
+          .update(
+            JSON.stringify([
+              state.planIdentity,
+              state.planFingerprint,
+              'L1',
+              'l1',
+              '/root/l1',
+              'child',
+              2,
+              'partial',
+            ]),
+          )
+          .digest('hex');
+        f.store.save({
+          ...state,
+          executor: {
+            canonicalPosition: 'L1',
+            canonicalTaskName: 'l1',
+            taskPath: '/root/l1',
+            threadId: 'child',
+            l1State: 'WIP',
+            outcome: 'partial',
+            lastActivityAt: clock,
+            ownedProcesses: [],
+            continuationGeneration: 1,
+            continuationCount: 0,
+            commands: [
+              {
+                commandId,
+                status: 'issued',
+                planIdentity: state.planIdentity!,
+                planFingerprint: state.planFingerprint!,
+                canonicalPosition: 'L1',
+                canonicalTaskName: 'l1',
+                taskPath: '/root/l1',
+                threadId: 'child',
+                generation: 2,
+                trigger: 'partial',
+                createdAt: clock,
+                updatedAt: clock,
+              },
+            ],
+          },
+        });
+        expect(
+          f.coordinator.registerProactiveWait('s', {
+            id: 'baseline-check',
+            leaseId: 'bounded-wait',
+            maxWaitMs: 60_000,
+            wakeConditions: ['processExited'],
+          }),
+        ).toBe(true);
+        f.activity.root.state = 'idle';
+        if (gate === 'manual-off') f.coordinator.disable('s');
+        if (gate === 'pending-interaction') f.block();
+        if (gate === 'executor-active')
+          f.activity.subagents = [{ ...f.activity.subagents[0]!, state: 'working' }];
+        await vi.advanceTimersByTimeAsync(66_000);
+        expect(f.resume).not.toHaveBeenCalled();
+        expect(f.store.find('s')?.executor?.commands?.[0]?.status).toBe('issued');
+        if (gate === 'continue') {
+          expect(f.start).toHaveBeenCalledOnce();
+          expect(f.events.filter((type) => type === 'autopilot.wait-expired')).toHaveLength(1);
+          expect(f.events).toContain('autopilot.probe-required');
+        } else expect(f.start).not.toHaveBeenCalled();
+      } finally {
+        f.close();
+      }
+    },
+  );
 
   it('persists a run-scoped lease and ignores unrelated or unscoped process wakeups', () => {
     const runId = '00000000-0000-4000-8000-000000000001';
