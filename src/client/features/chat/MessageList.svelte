@@ -21,6 +21,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { formatElapsedAfter, formatMessageTime, formatRelativeAge } from './message-time.js';
   import { summarizeChangedFiles, summarizeFileChangeTotals } from './file-change-summary.js';
   import MessageContent from './MessageContent.svelte';
+  import WorkingContent from './WorkingContent.svelte';
   import type { ProjectedInteraction } from './chat-projection.js';
   import type { SubmittedQuizAnswer } from './quiz-submission.js';
 
@@ -311,6 +312,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <MessageContent {text} {onopenorg} {onopenfile} {oncopyresult} {clipboard} />
 {/snippet}
 
+{#snippet workingContent(text: string)}
+  <WorkingContent {text} {onopenorg} {onopenfile} {oncopyresult} {clipboard} />
+{/snippet}
+
 {#if attention || pendingInteractions.length}
   <PendingChatRequests>
     {#if attention}
@@ -458,12 +463,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {/if}
           </div>
           {#if isLive(group)}
+            <div class="entry-content">{@render workingContent(group.answer)}</div>
             {#if group.commentary}
               <div class="commentary-content live-commentary">
-                {@render content(group.commentary)}
+                {@render workingContent(group.commentary)}
               </div>
             {/if}
             <ActivityList activities={regularActivities(ownedActivities)} variant="live" />
+            {@render changedFiles(ownedActivities)}
           {:else if group.commentary || regularActivities(ownedActivities).length}
             <div class="answer-history">
               {#if group.commentary}
@@ -485,8 +492,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               {@render content(group.commentary)}
             </div>
           {/if}
-          <div class="entry-content">{@render content(group.answer)}</div>
-          <WorkDetails activities={ownedActivities} {now} />
+          {#if !isLive(group)}
+            <div class="entry-content">{@render content(group.answer)}</div>
+            <WorkDetails activities={ownedActivities} {now} />
+          {/if}
         </section>
       {:else if group.commentary !== null}
         {@const ownedActivities = turnActivities(group)}
@@ -504,7 +513,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           </div>
           {#if isLive(group)}
             {#if group.commentary}
-              <div class="entry-content">{@render content(group.commentary)}</div>
+              <div class="entry-content">{@render workingContent(group.commentary)}</div>
             {/if}
             <ActivityList activities={regularActivities(ownedActivities)} variant="live" />
           {:else}

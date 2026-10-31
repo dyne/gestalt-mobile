@@ -13,6 +13,81 @@ import MessageList from './MessageList.svelte';
 import { mcpStartupActivity } from '../../../shared/contracts/mcp-startup-failure.js';
 
 describe('MessageList', () => {
+  it('keeps working text expanded and prepends paragraphs without replacing older text', async () => {
+    const first = {
+      id: 'first',
+      role: 'assistant' as const,
+      phase: 'commentary' as const,
+      turnId: 'turn',
+      text: 'Oldest paragraph.\n\nSecond paragraph.',
+      complete: false,
+    };
+    const view = render(MessageList, { messages: [first], activities: [], activeTurnId: 'turn' });
+    const oldest = screen.getByText('Oldest paragraph.');
+    const progress = screen.getByText('working').closest('.progress-turn');
+    expect(
+      [...progress!.querySelectorAll('.message-content')].map((node) => node.textContent),
+    ).toEqual(['Second paragraph.', 'Oldest paragraph.']);
+    expect(progress!.querySelector('details')).toBeNull();
+    await view.rerender({
+      messages: [first, { ...first, id: 'next', text: 'Newest paragraph.' }],
+      activities: [],
+      activeTurnId: 'turn',
+    });
+    expect(screen.getByText('working').closest('.progress-turn')).toBe(progress);
+    expect(screen.getByText('Oldest paragraph.')).toBe(oldest);
+    expect(
+      [...progress!.querySelectorAll('.message-content')].map((node) => node.textContent),
+    ).toEqual(['Newest paragraph.', 'Second paragraph.', 'Oldest paragraph.']);
+  });
+
+  it('puts streaming answer paragraphs above commentary and restores normal answer order on completion', async () => {
+    const messages = [
+      {
+        id: 'commentary',
+        role: 'assistant' as const,
+        phase: 'commentary' as const,
+        turnId: 'turn',
+        text: 'Older status.\n\nNewer status.',
+        complete: true,
+      },
+      {
+        id: 'answer',
+        role: 'assistant' as const,
+        phase: 'final_answer' as const,
+        turnId: 'turn',
+        text: 'First answer paragraph.\n\nLast answer paragraph.',
+        complete: false,
+      },
+    ];
+    const view = render(MessageList, {
+      messages,
+      activities: [
+        { id: 'command', label: 'Command · completed', detail: 'npm test', turnId: 'turn' },
+      ],
+      activeTurnId: 'turn',
+    });
+    const working = screen.getByText('working').closest('.answer-turn');
+    expect(
+      [...working!.querySelectorAll('.message-content')].map((node) => node.textContent),
+    ).toEqual([
+      'Last answer paragraph.',
+      'First answer paragraph.',
+      'Newer status.',
+      'Older status.',
+    ]);
+    expect(working!.querySelector('.commentary-toggle, .work-details')).toBeNull();
+    await view.rerender({
+      messages: messages.map((message) => ({ ...message, complete: true })),
+      activities: [],
+      activeTurnId: null,
+    });
+    expect(view.container.querySelector('.working-content')).toBeNull();
+    expect(view.container.querySelector('.answer-turn .entry-content')?.textContent).toBe(
+      'First answer paragraph.\n\nLast answer paragraph.',
+    );
+  });
+
   it.each([null, 'turn-1'])(
     'omits startup-only activity blocks with active turn %j',
     async (activeTurnId) => {
