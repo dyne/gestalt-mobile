@@ -183,9 +183,19 @@ paths inside Codex's versioned plugin cache are rebound to the currently
 discovered plugin version when their marketplace, plugin, and skill-relative
 path still match. Fixed Gestalt workflow skills are session infrastructure: Mobile
 always enables and advertises its workflow skills, including skills
-added after a profile was saved. The editor labels them **Always advertised**
-and does not offer a disable control. Refresh discovery and start a new session
+added after a profile was saved. Fixed infrastructure is filtered out of the
+profile editor and does not offer a disable control. Refresh discovery and start a new session
 after upgrading Gestalt Agents; running sessions retain their startup catalog.
+
+The optional [Dyne.org collection](https://github.com/dyne/gestalt-skills) uses
+ordinary skill names, starting with `nuklear-gui`. Its **Gestalt verified** badge
+marks a current canonical managed installation whose manifest and bundled files
+match the installer receipt. It does not enable the skill, start runtime tools,
+or represent a separate security audit. Disable it in **Manage skill profiles**,
+save the complete selection, and choose that profile for a new session. Updates
+retain saved choices; newly installed paths absent from a complete profile stay
+disabled. Missing or invalid receipts remove only the badge. See the
+[installed collection workflow and qualification](docs/verified-skills.md).
 
 Browser access is a separate, explicit profile choice. The profile editor's
 **Browser access (Playwright)** control permits the host to activate a managed

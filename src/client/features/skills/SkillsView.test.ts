@@ -6,9 +6,10 @@
 
 /* @vitest-environment jsdom */
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { RelaySkillProfile } from '../sessions/relay-client.js';
 import SkillsView from './SkillsView.svelte';
 import { SkillsState, type SkillsClient } from './skills-state.js';
 
@@ -74,6 +75,186 @@ async function renderedAlwaysAdvertised() {
 }
 
 describe('SkillsView', () => {
+  it('badges only verified optional skills and preserves count, disable, save and reload', async () => {
+    const verified = {
+      name: 'nuklear-gui',
+      displayName: 'Nuklear GUI development with deliberately long wrapped guidance',
+      path: '/home/gestalt/collection/with/a/very/long/path/nuklear-gui/SKILL.md',
+      description: 'Long metadata remains plain text alongside the optional selection.',
+      nativeEnabled: true,
+      effectiveEnabled: true,
+      alwaysAdvertised: false,
+      provenance: {
+        kind: 'gestalt-verified' as const,
+        repository: 'dyne/gestalt-skills' as const,
+        revision: 'a'.repeat(40),
+      },
+    };
+    const ordinary = {
+      name: 'local-control',
+      path: '/skills/local-control/SKILL.md',
+      nativeEnabled: true,
+      effectiveEnabled: true,
+      alwaysAdvertised: false,
+    };
+    let profiles: RelaySkillProfile[] = [];
+    const replaceSkillProfile = vi.fn(async (_name, profile) => {
+      const saved = { ...profile, path: '/profiles/verified.yml' };
+      profiles = [saved];
+      return saved;
+    });
+    const skillsClient: SkillsClient = {
+      ...client,
+      listAvailableSkills: vi.fn(async () => ({
+        source: 'native' as const,
+        errors: [],
+        skills: [
+          verified,
+          ordinary,
+          {
+            ...verified,
+            name: 'gestalt:org-plan',
+            path: '/plugins/org-plan/SKILL.md',
+            alwaysAdvertised: true,
+          },
+        ],
+      })),
+      listSkillProfiles: vi.fn(async () => ({ profiles })),
+      replaceSkillProfile,
+    };
+    const state = new SkillsState(skillsClient);
+    await state.load('workspace', 'default');
+    const props = {
+      skillsState: state,
+      onrefresh: async () => state.refresh(),
+      onprofileschange: vi.fn(),
+    };
+    render(SkillsView, props);
+    const toggle = screen.getByRole('checkbox', { name: /Nuklear GUI.*Gestalt verified.*Enabled/ });
+    expect((toggle as HTMLInputElement).disabled).toBe(false);
+    expect(screen.getAllByText('Gestalt verified')).toHaveLength(1);
+    expect(screen.queryByText('gestalt:org-plan')).toBeNull();
+    expect(
+      within(screen.getByRole('checkbox', { name: /local-control/ }).closest('li')!).queryByText(
+        'Gestalt verified',
+      ),
+    ).toBeNull();
+    expect(screen.getByText('2 of 2 skills enabled.')).toBeTruthy();
+    expect(
+      screen.getByText('~/collection/with/a/very/long/path/nuklear-gui/SKILL.md'),
+    ).toBeTruthy();
+    await fireEvent.click(toggle);
+    expect(screen.getByText('1 of 2 skills enabled.')).toBeTruthy();
+    expect(screen.getAllByText('Gestalt verified')).toHaveLength(1);
+    await fireEvent.input(screen.getByLabelText('Save as'), { target: { value: 'verified' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+    expect(replaceSkillProfile).toHaveBeenCalledWith('verified', {
+      version: 1,
+      name: 'verified',
+      skills: [
+        { name: verified.name, path: verified.path, enabled: false },
+        { name: ordinary.name, path: ordinary.path, enabled: true },
+      ],
+    });
+    cleanup();
+    const reloaded = new SkillsState(skillsClient);
+    await reloaded.load('workspace', 'default');
+    render(SkillsView, { ...props, skillsState: reloaded });
+    await fireEvent.change(screen.getByLabelText('Skill profile'), {
+      target: { value: 'verified' },
+    });
+    expect(
+      (
+        screen.getByRole('checkbox', {
+          name: /Nuklear GUI.*Gestalt verified.*Disabled/,
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(false);
+    expect(screen.getByText('1 of 2 skills enabled.')).toBeTruthy();
+  });
+
+  it('refreshes current editor provenance after profile selection without discarding local edits', async () => {
+    const verified = {
+      name: 'nuklear-gui',
+      path: '/managed/nuklear-gui/SKILL.md',
+      nativeEnabled: true,
+      effectiveEnabled: true,
+      alwaysAdvertised: false,
+      provenance: {
+        kind: 'gestalt-verified' as const,
+        repository: 'dyne/gestalt-skills' as const,
+        revision: 'a'.repeat(40),
+      },
+    };
+    const ordinary = {
+      name: 'local-control',
+      path: '/skills/local-control/SKILL.md',
+      nativeEnabled: true,
+      effectiveEnabled: true,
+      alwaysAdvertised: false,
+    };
+    let intact = true;
+    const skillsClient: SkillsClient = {
+      ...client,
+      listAvailableSkills: vi.fn(async () => ({
+        source: 'native' as const,
+        errors: [],
+        skills: [{ ...verified, provenance: intact ? verified.provenance : undefined }, ordinary],
+      })),
+      listSkillProfiles: vi.fn(async () => ({
+        profiles: [
+          {
+            version: 1 as const,
+            name: 'saved',
+            path: '/profiles/saved.yml',
+            skills: [
+              { name: verified.name, path: verified.path, enabled: false },
+              { name: ordinary.name, path: ordinary.path, enabled: true },
+            ],
+          },
+        ],
+      })),
+    };
+    const state = new SkillsState(skillsClient);
+    await state.load('workspace', 'default');
+    const onrefresh = vi.fn(async (editor = state) => editor.refresh());
+    render(SkillsView, { skillsState: state, onrefresh, onprofileschange: vi.fn() });
+    await fireEvent.change(screen.getByLabelText('Skill profile'), { target: { value: 'saved' } });
+    await fireEvent.click(screen.getByRole('checkbox', { name: /local-control/ }));
+    expect(screen.getByText('0 of 2 skills enabled.')).toBeTruthy();
+    intact = false;
+    await fireEvent.click(screen.getByRole('button', { name: 'Refresh skills' }));
+    expect(screen.queryByText('Gestalt verified')).toBeNull();
+    expect(
+      (screen.getByRole('checkbox', { name: /nuklear-gui/ }) as HTMLInputElement).checked,
+    ).toBe(false);
+    expect(
+      (screen.getByRole('checkbox', { name: /local-control/ }) as HTMLInputElement).checked,
+    ).toBe(false);
+    expect(screen.getByText('0 of 2 skills enabled.')).toBeTruthy();
+    intact = true;
+    await fireEvent.click(screen.getByRole('button', { name: 'Refresh skills' }));
+    expect(screen.getByText('Gestalt verified')).toBeTruthy();
+    expect(screen.getByText('0 of 2 skills enabled.')).toBeTruthy();
+  });
+
+  it('leaves a managed-looking skill plain when provenance is absent', async () => {
+    const state = await rendered();
+    state.skills[0]!.name = 'nuklear-gui';
+    state.skills[0]!.path =
+      '/home/gestalt/.codex-gestalt/gestalt-skills/skills/nuklear-gui/SKILL.md';
+    cleanup();
+    render(SkillsView, {
+      skillsState: state,
+      onrefresh: vi.fn(async () => undefined),
+      onprofileschange: vi.fn(),
+    });
+    expect(screen.queryByText('Gestalt verified')).toBeNull();
+    expect(
+      (screen.getByRole('checkbox', { name: /Alpha tool/ }) as HTMLInputElement).disabled,
+    ).toBe(false);
+  });
+
   it('labels browser consent separately, defaults off, and explains unavailable host access', async () => {
     const state = await rendered();
     const toggle = screen.getByRole('checkbox', { name: 'Browser access (Playwright)' });
@@ -117,11 +298,40 @@ describe('SkillsView', () => {
     });
     Object.defineProperty(card, 'scrollIntoView', { value: scrollIntoView });
 
-    await fireEvent.focus(checkbox);
+    checkbox.focus();
 
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
     vi.unstubAllGlobals();
   });
+
+  it.each(['focus moved to Save', 'checkbox detached'])(
+    'does not scroll an old skill card after %s before the next frame',
+    async (change) => {
+      await rendered();
+      const checkbox = screen.getByRole('checkbox', { name: /Alpha tool/ });
+      const card = checkbox.closest('.skill-card') as HTMLElement;
+      const scrollIntoView = vi.fn();
+      const frames: FrameRequestCallback[] = [];
+      vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+      Object.defineProperty(card, 'scrollIntoView', { value: scrollIntoView });
+      try {
+        checkbox.focus();
+        expect(frames).toHaveLength(1);
+        if (change === 'focus moved to Save')
+          screen.getByRole('button', { name: 'Save profile' }).focus();
+        else checkbox.remove();
+
+        for (const frame of frames) frame(0);
+
+        expect(scrollIntoView).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 
   it('labels Gestalt infrastructure skills and does not offer a disable control', async () => {
     await renderedAlwaysAdvertised();
@@ -129,6 +339,7 @@ describe('SkillsView', () => {
 
     expect((checkbox as HTMLInputElement).disabled).toBe(true);
     expect(screen.getByText('Always advertised')).toBeTruthy();
+    expect(screen.queryByText('Gestalt verified')).toBeNull();
   });
 
   it('highlights a missing disabled skill and removes it from the selected profile', async () => {

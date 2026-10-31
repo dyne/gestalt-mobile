@@ -11,7 +11,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   type Props = {
     skillsState: SkillsState;
-    onrefresh: () => Promise<void>;
+    onrefresh: (state: SkillsState) => Promise<void>;
     onprofileschange: () => void;
     heading?: string;
   };
@@ -40,7 +40,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function refreshSkills(): Promise<void> {
-    await onrefresh();
+    await onrefresh(snapshot);
     changed();
   }
 
@@ -97,8 +97,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function revealFocusedSkill(event: FocusEvent): void {
-    const card = (event.currentTarget as HTMLElement).closest<HTMLElement>('.skill-card');
-    requestAnimationFrame(() => card?.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
+    const control = event.currentTarget as HTMLElement;
+    const card = control.closest<HTMLElement>('.skill-card');
+    requestAnimationFrame(() => {
+      if (control.isConnected && document.activeElement === control)
+        card?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    });
   }
 </script>
 
@@ -267,7 +271,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 changed();
               }}
             />
-            <span>{skill.displayName ?? skill.name}</span>
+            <span class="skill-name">
+              <span>{skill.displayName ?? skill.name}</span>
+              {#if skill.provenance?.kind === 'gestalt-verified' && !skill.alwaysAdvertised}
+                <span class="verified-badge">Gestalt verified</span>
+              {/if}
+            </span>
             <span class="state"
               >{skill.alwaysAdvertised
                 ? 'Always advertised'
@@ -420,6 +429,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.65rem;
   }
+  .profile-actions button {
+    scroll-margin-block: var(--sticky-header-clearance) var(--bottom-navigation-clearance);
+  }
   .skills-toolbar {
     display: flex;
     flex-wrap: wrap;
@@ -460,7 +472,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   .skill-card {
     min-inline-size: 0;
-    scroll-margin-block: 1rem;
+    scroll-margin-block: var(--sticky-header-clearance) var(--bottom-navigation-clearance);
     border: 1px solid var(--theme-border);
     border-radius: 0.5rem;
     padding: 0.75rem;
@@ -480,6 +492,26 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     flex: 0 0 auto;
     inline-size: 1.25rem;
     min-block-size: 1.25rem;
+  }
+  .skill-name {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem 0.5rem;
+  }
+  .skill-name > span {
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+  }
+  .verified-badge {
+    border: 1px solid var(--theme-border);
+    border-radius: 0.25rem;
+    padding: 0.1em 0.4em;
+    color: var(--theme-text);
+    background: var(--theme-surface);
+    font-size: 0.8em;
+    font-weight: 500;
+    line-height: 1.4;
   }
   .state {
     margin-inline-start: auto;

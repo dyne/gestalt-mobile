@@ -2152,7 +2152,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {#if skillsState}
               <SkillsView
                 {skillsState}
-                onrefresh={() => skillsState?.refresh() ?? Promise.resolve()}
+                onrefresh={(state) => state.refresh()}
                 onprofileschange={() => void refreshSkillProfiles()}
                 heading="Skill profile editor"
               />
