@@ -42,6 +42,7 @@ export type UploadInput = Readonly<{
   content: Buffer;
 }>;
 export type DeleteInput = Readonly<{ path: string; recursive: true }>;
+export type CreateDirectoryInput = Readonly<{ directory: string; name: string }>;
 
 export type FilePreview = Readonly<
   | { kind: 'directory'; path: string }
@@ -59,5 +60,6 @@ export interface WorkspaceFileSource {
   copy?(workspaceRoot: string, input: CopyMoveInput): Promise<FileMutationResult>;
   move?(workspaceRoot: string, input: CopyMoveInput): Promise<FileMutationResult>;
   upload?(workspaceRoot: string, input: UploadInput): Promise<FileMutationResult>;
+  createDirectory?(workspaceRoot: string, input: CreateDirectoryInput): Promise<FileMutationResult>;
   delete?(workspaceRoot: string, input: DeleteInput): Promise<FileMutationResult>;
 }

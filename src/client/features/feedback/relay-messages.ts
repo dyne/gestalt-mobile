@@ -51,6 +51,8 @@ const relayMessages = {
   GIT_CLONE_FAILED: 'Clone failed.',
   WORKSPACE_FILES_READ_FAILED: 'Files could not be read. Try again.',
   WORKSPACE_FILES_UPLOAD_FAILED: 'The file could not be uploaded. Try dropping it again.',
+  WORKSPACE_FOLDER_CREATE_FAILED: 'The folder could not be created. Check the name and try again.',
+  WORKSPACE_FOLDER_EXISTS: 'An item with that name already exists. Choose a different folder name.',
   QUIT_FAILED: 'Gestalt Mobile could not quit cleanly. Try again or stop it from the terminal.',
   UPGRADE_FAILED:
     'Gestalt could not complete the upgrade and reconnect. Check update-restart.log and reload when Mobile is ready.',

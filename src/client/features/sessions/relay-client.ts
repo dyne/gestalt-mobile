@@ -398,6 +398,16 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
         signal,
       );
     },
+    createWorkspaceDirectory: (
+      workspaceId: string,
+      input: { directory: string; name: string },
+      key: string,
+    ) =>
+      request<{ path: string; entryKind: 'directory' }>(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/files/directories`,
+        input,
+        { 'idempotency-key': key },
+      ),
     deleteWorkspaceEntry: (workspaceId: string, path: string, key: string) =>
       deleteJson<{ path: string; kind: string }>(
         `/api/workspaces/${encodeURIComponent(workspaceId)}/files`,

@@ -7007,6 +7007,12 @@ describe('production composition', () => {
         ],
         [
           'POST',
+          '/api/workspaces/:workspaceId/files/directories',
+          '/api/workspaces/workspace-1/files/directories',
+          'protected',
+        ],
+        [
+          'POST',
           '/api/workspaces/:workspaceId/files/move',
           '/api/workspaces/workspace-1/files/move',
           'protected',

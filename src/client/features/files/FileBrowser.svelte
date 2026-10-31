@@ -32,6 +32,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   type Props = {
     root: WorkspaceOption;
+    createDirectory?: (
+      workspaceId: string,
+      input: { directory: string; name: string },
+      key: string,
+    ) => Promise<{ path: string }>;
     listDirectory: (
       workspaceId: string,
       input?: { directory?: string; cursor?: string; limit?: number },
@@ -80,6 +85,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   let {
     root,
+    createDirectory,
     listDirectory,
     copyEntry,
     moveEntry,
@@ -98,6 +104,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let transfer = $state<TransferState>(idleTransfer);
   let conflictPanel = $state<HTMLElement | null>(null);
   let selectedPath = $state('');
+  let newFolderParent = $state<string | null>(null);
+  let folderName = $state('');
+  let creatingFolder = $state(false);
+  let folderNameInput = $state<HTMLInputElement | null>(null);
+  let newFolderButton = $state<HTMLButtonElement | null>(null);
   let deleteConfirmation = $state(false);
   let deleting = $state(false);
   let deleteCancel = $state<HTMLButtonElement | null>(null);
@@ -138,7 +149,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   onDestroy(() => controller?.close());
 
   function close(): void {
-    if (transfer.phase === 'submitting' || deleting) return;
+    if (transfer.phase === 'submitting' || deleting || creatingFolder) return;
     uploadAbort?.abort();
     controller?.close();
     dialog?.close();
@@ -147,6 +158,53 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     selectedEntry?.kind === 'directory' || !selectedPath ? selectedPath : '',
   );
   const uploadDestination = $derived(selectedDirectory || '');
+
+  async function openNewFolder(): Promise<void> {
+    newFolderParent = selectedDirectory;
+    folderName = '';
+    await tick();
+    folderNameInput?.focus();
+  }
+
+  async function cancelNewFolder(): Promise<void> {
+    if (creatingFolder) return;
+    newFolderParent = null;
+    await tick();
+    newFolderButton?.focus();
+  }
+
+  async function createFolder(event: SubmitEvent): Promise<void> {
+    event.preventDefault();
+    if (creatingFolder || newFolderParent === null || !createDirectory || !controller) return;
+    const directory = newFolderParent;
+    const name = folderName.trim();
+    if (!name) return;
+    creatingFolder = true;
+    try {
+      const result = await createDirectory(root.id, { directory, name }, createIdempotencyKey());
+      await controller.refresh(directory);
+      await controller.expand(directory);
+      controller.select(result.path);
+      selectedPath = result.path;
+      newFolderParent = null;
+      onmutation();
+      onsuccess(`Created folder ${name}.`);
+    } catch (error) {
+      onerror(
+        Object.assign(new Error('WORKSPACE_FOLDER_CREATE_FAILED'), {
+          code:
+            (error as RelayRequestError).status === 409
+              ? 'WORKSPACE_FOLDER_EXISTS'
+              : 'WORKSPACE_FOLDER_CREATE_FAILED',
+        }),
+      );
+    } finally {
+      creatingFolder = false;
+      await tick();
+      if (newFolderParent === null) newFolderButton?.focus();
+      else folderNameInput?.focus();
+    }
+  }
   async function uploadQueue(
     conflict: 'reject' | 'replace' | 'keep-both' = 'reject',
   ): Promise<void> {
@@ -225,11 +283,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function handleCancel(event: Event): void {
-    if (transfer.phase === 'submitting' || deleting) {
+    if (transfer.phase === 'submitting' || deleting || creatingFolder) {
       event.preventDefault();
       return;
     }
     event.preventDefault();
+    if (newFolderParent !== null) {
+      void cancelNewFolder();
+      return;
+    }
     close();
   }
   async function requestDelete(): Promise<void> {
@@ -327,10 +389,46 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <button type="button" class="close" aria-label="Close file browser" onclick={close}>×</button>
     </header>
     <div class="browser-actions">
+      {#if createDirectory}
+        <button
+          bind:this={newFolderButton}
+          type="button"
+          onclick={() => void openNewFolder()}
+          disabled={rootState.loading ||
+            newFolderParent !== null ||
+            creatingFolder ||
+            uploading ||
+            deleting ||
+            transfer.phase !== 'idle' ||
+            (selectedEntry !== undefined && selectedEntry.kind !== 'directory')}>New folder</button
+        >
+      {/if}
       <button type="button" onclick={() => void controller?.refresh()} disabled={rootState.loading}
         >Refresh</button
       >
     </div>
+    {#if newFolderParent !== null}
+      <form class="picker" aria-label="New folder" onsubmit={createFolder}>
+        <p>Create in: {newFolderParent || 'root folder'}</p>
+        <label for="new-folder-name">Folder name</label>
+        <input
+          bind:this={folderNameInput}
+          id="new-folder-name"
+          bind:value={folderName}
+          required
+          maxlength="255"
+          disabled={creatingFolder}
+        />
+        <div class="browser-actions">
+          <button type="submit" disabled={creatingFolder || !folderName.trim()}
+            >{creatingFolder ? 'Creating…' : 'Create folder'}</button
+          >
+          <button type="button" disabled={creatingFolder} onclick={() => void cancelNewFolder()}
+            >Cancel</button
+          >
+        </div>
+      </form>
+    {/if}
     <div class="upload-actions">
       <input
         bind:this={uploadInput}
