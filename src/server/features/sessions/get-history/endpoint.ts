@@ -70,7 +70,7 @@ export function registerGetHistory(
         title: 'Session history read failed',
         status: 502,
         detail:
-          'GET /api/sessions/:id/history reached the relay, but Codex could not read this session history. The Codex process may have stopped during recovery; open the session again and inspect the running relay output if it persists.',
+          'GET /api/sessions/:id/history reached the relay, but the provider could not return session history. Retry shortly; reopen the session if this persists.',
         code: 'SESSION_HISTORY_READ_FAILED',
         retryable: true,
       });

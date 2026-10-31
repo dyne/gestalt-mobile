@@ -593,6 +593,31 @@ describe('ChatController', () => {
         payload: { state: 'idle', reason: 'unknown' },
       },
     });
+    for (const [index, status] of ['starting', 'ready'].entries())
+      socket.emit({
+        type: 'relay.event',
+        event: {
+          sequence: 3 + index,
+          type: 'activity.updated',
+          payload: {
+            id: 'startup',
+            label: 'XERJ startup',
+            detail: status,
+            mcpStartup: {
+              schemaVersion: 1,
+              runtimeId: 'runtime',
+              attemptId: 'attempt',
+              threadId: 'thread',
+              serverName: 'gestalt-xerj',
+              observedAt: '2026-10-31T12:00:00.000Z',
+              status,
+              failure: null,
+            },
+          },
+        },
+      });
+    expect(controller.view.activities).toHaveLength(1);
+    expect(controller.view.newEmpty).toBe(true);
     controller.refresh();
     controller.select(null);
     controller.select('new-session');

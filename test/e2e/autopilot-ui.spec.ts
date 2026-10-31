@@ -1008,14 +1008,14 @@ test('monitoring reconciliation failure announces a warning and persistent recov
   await install(page, 'monitoring', 'reconcileFailed', false);
   await page.goto('/');
   await expect(page.getByRole('alert', { name: 'Autopilot recovery warning' })).toContainText(
-    'Autopilot cannot confirm agent status.',
+    'Autopilot is recovering after a continuation or agent status check failed.',
   );
   await expect(page.locator('.toast.warning')).toContainText(
-    'Autopilot cannot confirm agent status.',
+    'Autopilot is recovering after a continuation or agent status check failed.',
   );
   await page.getByRole('button', { name: 'Chat' }).click();
   await expect(page.getByRole('alert', { name: 'Autopilot recovery warning' })).toContainText(
-    'restore or reopen the session',
+    'restore the session',
   );
   await expect(page.getByRole('button', { name: 'Retry Autopilot' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Disable Autopilot' })).toBeVisible();

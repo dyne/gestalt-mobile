@@ -12,6 +12,7 @@ import type {
 import { createIdempotencyKey } from '../sessions/idempotency-key.js';
 import { autopilotAuditAttention } from '../../../shared/contracts/autopilot-audit.js';
 import { parseToolEfficiencySnapshot } from '../../../shared/contracts/tool-efficiency.js';
+import { parseMcpStartupStatus } from '../../../shared/contracts/mcp-startup-failure.js';
 import {
   acceptSnapshot,
   applyProjectionEvent,
@@ -528,12 +529,12 @@ export class ChatController {
         'agentMessageDelta',
         'agentMessageStarted',
         'agentMessageCompleted',
-        'activity.updated',
         'interaction.requested',
         'interaction.resolved',
         'turnCompleted',
         'turnInterrupted',
       ].includes(event.type) ||
+      (event.type === 'activity.updated' && isConversationActivity(event.payload)) ||
       (event.type === 'session.updated' &&
         typeof (event.payload as { activeTurnId?: unknown }).activeTurnId === 'string')
     )
@@ -742,9 +743,19 @@ function hasConversationContent(view: ChatProjection): boolean {
   return Boolean(
     view.activeTurnId ||
     view.messages.length ||
-    view.activities.length ||
+    view.activities.some(isConversationActivity) ||
     view.prompts.length ||
     view.interactions.length,
+  );
+}
+
+/** Tool startup is observable before Codex has created any conversation history. */
+function isConversationActivity(value: unknown): boolean {
+  const activity = value as { mcpStartup?: unknown; turnId?: unknown; actorTurnId?: unknown };
+  return Boolean(
+    !parseMcpStartupStatus(activity.mcpStartup) ||
+    typeof activity.turnId === 'string' ||
+    typeof activity.actorTurnId === 'string',
   );
 }
 
