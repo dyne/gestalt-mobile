@@ -10,8 +10,90 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import MessageList from './MessageList.svelte';
+import { mcpStartupActivity } from '../../../shared/contracts/mcp-startup-failure.js';
 
 describe('MessageList', () => {
+  it.each([null, 'turn-1'])(
+    'omits startup-only activity blocks with active turn %j',
+    async (activeTurnId) => {
+      const activities = [
+        ...(
+          ['context-mode', 'gestalt-context-mode', 'gestalt-serena', 'gestalt-xerj'] as const
+        ).map((serverName) =>
+          mcpStartupActivity({
+            schemaVersion: 1,
+            runtimeId: 'runtime',
+            attemptId: 'attempt',
+            threadId: null,
+            serverName,
+            observedAt: '2026-10-31T12:00:00.000Z',
+            status: 'ready',
+            failure: null,
+          }),
+        ),
+        {
+          id: 'gestalt-serena-availability',
+          label: 'Serena connected',
+          detail: 'Connection verified.',
+        },
+        { id: 'gestalt-xerj-availability', label: 'Xerj unavailable', detail: 'Use rg.' },
+        {
+          id: 'gestalt-retrieval-thread-repo',
+          label: 'Semantic checks · ready',
+          detail: 'Symbols ready; references ready.',
+        },
+      ];
+      const view = render(MessageList, { messages: [], activities, activeTurnId });
+      const timeline = screen.getByRole('list', { name: 'Chat messages' });
+      expect(timeline.children).toHaveLength(0);
+      await view.rerender({
+        messages: [],
+        activeTurnId,
+        activities: [
+          ...activities,
+          {
+            id: 'actual-tool-call',
+            label: 'Tool · completed',
+            detail: 'gestalt-serena get_symbols_overview',
+          },
+        ],
+      });
+      expect(timeline.children).toHaveLength(1);
+      expect(timeline.textContent).toContain('gestalt-serena get_symbols_overview');
+      expect(timeline.textContent).not.toContain('Serena connected');
+      await view.rerender({ messages: [], activities, activeTurnId });
+      expect(timeline.children).toHaveLength(0);
+    },
+  );
+
+  it('does not attach service health to prompts or answers as work details', () => {
+    const view = render(MessageList, {
+      messages: [
+        { id: 'prompt', role: 'user', text: 'Hello', turnId: 'turn-1', complete: true },
+        {
+          id: 'answer',
+          role: 'assistant',
+          text: 'How can I help?',
+          turnId: 'turn-1',
+          complete: true,
+        },
+      ],
+      activities: [
+        {
+          id: 'gestalt-serena-availability',
+          label: 'Serena connected',
+          detail: 'Connected',
+          turnId: 'turn-1',
+        },
+      ],
+    });
+    expect(screen.getByText('Hello')).toBeTruthy();
+    expect(screen.getByText('How can I help?')).toBeTruthy();
+    expect(
+      view.container.querySelector('.work-details, .live-activity, .orphan-activity-turn'),
+    ).toBeNull();
+  });
+
   it('pins a quiz, renders shared Markdown and file links once, then archives at resolution time', async () => {
     const question = '**Choose** [Source](/workspace/app.ts:12)';
     const quiz = {

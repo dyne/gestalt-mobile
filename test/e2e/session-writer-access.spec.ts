@@ -127,7 +127,7 @@ for (const viewport of [
     const turn = fixture.deferTurn('saved-session');
     await page.getByRole('button', { name: 'Retry send' }).click();
     turn.resolve({ kind: 'fulfill', status: 200, body: { activeTurnId: 'turn-1' } });
-    await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Choose prompt action' })).toBeVisible();
     expect(fixture.commands).toHaveLength(2);
     expect(fixture.commands[1]?.idempotencyKey).toBe(fixture.commands[0]?.idempotencyKey);
     expect(restoreRequests).toBe(0);
@@ -197,7 +197,7 @@ for (const viewport of [
     const turn = fixture.deferTurn('recent-session');
     await page.getByRole('button', { name: 'Retry send' }).click();
     turn.resolve({ kind: 'fulfill', status: 200, body: { activeTurnId: 'recent-turn' } });
-    await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Choose prompt action' })).toBeVisible();
     expect(fixture.commands).toHaveLength(2);
     expect(fixture.commands[1]?.idempotencyKey).toBe(firstKey);
     expect(fixture.protocol.filter((call) => call.kind === 'resume')).toHaveLength(1);

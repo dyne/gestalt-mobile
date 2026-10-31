@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import type { FastifyInstance } from 'fastify';
+import { MAX_UPLOAD_BYTES } from '../../../../shared/contracts/file-upload.js';
 import type { WorkspaceCatalog } from '../../catalog/application/ports.js';
 import type { FileConflict, WorkspaceFileSource } from '../application/ports.js';
 import { map } from '../copy-entry/endpoint.js';
@@ -18,7 +19,7 @@ export function registerUploadFile(
   );
   app.put(
     '/api/workspaces/:workspaceId/files/upload',
-    { bodyLimit: 25 * 1024 * 1024 },
+    { bodyLimit: MAX_UPLOAD_BYTES },
     async (request, reply) => {
       const q = request.query as Record<string, unknown>;
       const conflict = q.conflict;

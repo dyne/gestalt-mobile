@@ -50,6 +50,7 @@ const relayMessages = {
   GIT_PUSH_FAILED: 'The push failed. Refresh Git status and resolve remote divergence first.',
   GIT_CLONE_FAILED: 'Clone failed.',
   WORKSPACE_FILES_READ_FAILED: 'Files could not be read. Try again.',
+  WORKSPACE_FILES_UPLOAD_FAILED: 'The file could not be uploaded. Try dropping it again.',
   QUIT_FAILED: 'Gestalt Mobile could not quit cleanly. Try again or stop it from the terminal.',
   UPGRADE_FAILED:
     'Gestalt could not complete the upgrade and reconnect. Check update-restart.log and reload when Mobile is ready.',

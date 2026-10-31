@@ -255,7 +255,7 @@ for (const width of [1280, 390]) {
     const emptyHeight = (await prompt.boundingBox())!.height;
     expect(emptyHeight).toBeGreaterThan(450);
     expect(emptyHeight).toBeLessThanOrEqual(675);
-    const sendBox = (await page.getByRole('button', { name: 'Send prompt' }).boundingBox())!;
+    const sendBox = (await page.getByRole('button', { name: 'Upload files' }).boundingBox())!;
     const navigationBox = (await page.getByLabel('Primary').boundingBox())!;
     expect(sendBox.y + sendBox.height).toBeLessThanOrEqual(navigationBox.y);
     await page.screenshot({ path: screenshotPath(`new-empty-chat-${width}.png`) });
@@ -277,7 +277,7 @@ for (const width of [1280, 390]) {
     await page.getByRole('textbox', { name: 'Prompt' }).fill('Inspect this workspace');
     await page.getByRole('textbox', { name: 'Prompt' }).press('Control+Enter');
     await expect(page.getByText('Inspect this workspace')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Choose prompt action' })).toBeVisible();
     expect((await prompt.boundingBox())!.height).toBeLessThan(emptyHeight / 2);
   });
 }
@@ -1366,7 +1366,7 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
       page.evaluate(() => (window as Window & { copiedCode?: string }).copiedCode ?? null),
     )
     .toBe('const ready = true;\n');
-  await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Choose prompt action' })).toBeVisible();
   const messageList = page.getByRole('list', { name: 'Chat messages' });
   const promptTurn = messageList.locator('.prompt-turn');
   const answerTurn = messageList
@@ -1380,7 +1380,9 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
   expect(
     await promptTurn.evaluate((element) => getComputedStyle(element).backgroundColor),
   ).not.toBe(await answerTurn.evaluate((element) => getComputedStyle(element).backgroundColor));
-  await expect(page.getByRole('button', { name: 'Interrupt' }).locator('svg')).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Choose prompt action' }).locator('svg'),
+  ).toBeVisible();
   const answerHeading = answerTurn.locator('.answer-turn .entry-heading');
   expect(
     await answerHeading
@@ -2027,7 +2029,7 @@ test('clears an interrupted active turn when relay recovery updates the session'
   await page.goto('/');
 
   await openChat(page);
-  await expect(page.getByRole('button', { name: 'Interrupt' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Choose prompt action' })).toHaveCount(0);
   await page.getByRole('textbox', { name: 'Prompt' }).fill('Continue after recovery');
   await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled();
 });

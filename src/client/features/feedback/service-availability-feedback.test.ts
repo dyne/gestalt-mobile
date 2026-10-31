@@ -6,9 +6,9 @@
 
 import { describe, expect, it } from 'vitest';
 import { normalizeCodexNotification } from '../../../server/platform/codex/normalizer.js';
-import { serenaAvailabilityFeedback } from './serena-feedback.js';
+import { serviceAvailabilityFeedback } from './service-availability-feedback.js';
 
-describe('session Serena availability feedback', () => {
+describe('session service availability feedback', () => {
   it.each(['failed', 'cancelled'])(
     'routes %s through bounded existing activity and warning channels',
     (status) => {
@@ -27,12 +27,12 @@ describe('session Serena availability feedback', () => {
         type: 'activity.updated',
         payload: { label: 'Serena unavailable', turnId: 'turn' },
       });
-      expect(serenaAvailabilityFeedback(event!)).toMatchObject({
+      expect(serviceAvailabilityFeedback(event!)).toMatchObject({
         kind: 'warning',
         code: 'SERENA_UNAVAILABLE',
       });
       expect(JSON.stringify(event)).not.toContain('secret');
-      expect(JSON.stringify(serenaAvailabilityFeedback(event!))).not.toContain('secret');
+      expect(JSON.stringify(serviceAvailabilityFeedback(event!))).not.toContain('secret');
     },
   );
   it('reports connection separately from language readiness without a failure warning', () => {
@@ -44,7 +44,7 @@ describe('session Serena availability feedback', () => {
       label: 'Serena connected',
       detail: expect.stringContaining('language readiness is still unverified'),
     });
-    expect(serenaAvailabilityFeedback(event!)).toBeNull();
+    expect(serviceAvailabilityFeedback(event!)).toBeNull();
   });
   it('does not turn unrelated activity or raw details into Serena warnings', () => {
     for (const event of [
@@ -52,9 +52,9 @@ describe('session Serena availability feedback', () => {
       { type: 'activity.updated', payload: null },
       { type: 'activity.updated', payload: { id: 'other', label: 'Serena unavailable' } },
     ])
-      expect(serenaAvailabilityFeedback(event)).toBeNull();
+      expect(serviceAvailabilityFeedback(event)).toBeNull();
     expect(
-      serenaAvailabilityFeedback({
+      serviceAvailabilityFeedback({
         type: 'activity.updated',
         payload: {
           id: 'gestalt-serena-availability',
@@ -63,5 +63,18 @@ describe('session Serena availability feedback', () => {
         },
       })?.message,
     ).not.toContain('secret');
+  });
+
+  it('preserves legacy XERJ failures in warning notifications', () => {
+    const event = normalizeCodexNotification('session', 1, 't', {
+      method: 'mcpServer/statusUpdated',
+      params: { name: 'gestalt-xerj', status: 'failed', error: 'private token' },
+    });
+    expect(serviceAvailabilityFeedback(event!)).toMatchObject({
+      kind: 'warning',
+      code: 'XERJ_UNAVAILABLE',
+      message: expect.stringContaining('Use rg and current source reads.'),
+    });
+    expect(JSON.stringify(serviceAvailabilityFeedback(event!))).not.toContain('private token');
   });
 });

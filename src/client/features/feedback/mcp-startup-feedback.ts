@@ -54,10 +54,8 @@ export function createMcpStartupFeedback(queue: Pick<ToastQueue, 'enqueue' | 'di
     }
     if (!status.failure || before?.failureId === status.failure.failureId) return;
     if (before?.toastId) queue.dismiss(before.toastId);
-    const required =
-      status.serverName === 'context-mode' || status.serverName === 'gestalt-context-mode';
     const toastId = queue.enqueue({
-      kind: required ? 'error' : 'warning',
+      kind: 'warning',
       code: `MCP_STARTUP_${sessionId}_${status.failure.failureId}`,
       message: `${startupToolLabel(status.serverName)} startup ${status.status}. ${startupRecoveryGuidance(status.serverName)} Trace reference: ${status.failure.failureId}.`,
     });

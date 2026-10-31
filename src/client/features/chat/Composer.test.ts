@@ -6,7 +6,7 @@
 
 /* @vitest-environment jsdom */
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Composer from './Composer.svelte';
 import { tick } from 'svelte';
@@ -17,6 +17,151 @@ afterEach(() => {
 });
 
 describe('Composer', () => {
+  it('uploads dropped files without changing the draft and blocks sending until settled', async () => {
+    const done = Promise.withResolvers<void>();
+    const onuploadfiles = vi.fn(() => done.promise);
+    const onchange = vi.fn();
+    const onsend = vi.fn();
+    render(Composer, {
+      status: 'Ready.',
+      message: 'draft',
+      activeTurnId: null,
+      starting: false,
+      onchange,
+      onsend,
+      oninterrupt: vi.fn(),
+      onuploadfiles,
+    });
+    const prompt = screen.getByRole('textbox', { name: 'Prompt' });
+    const file = new File(['contents'], 'note.txt');
+    const dataTransfer = { types: ['Files'], files: [file], dropEffect: 'none' };
+    await fireEvent.dragEnter(prompt, { dataTransfer });
+    expect(screen.getByText(/Drop files to upload to workspace root/)).toBeTruthy();
+    await fireEvent.dragOver(prompt, { dataTransfer });
+    expect(dataTransfer.dropEffect).toBe('copy');
+    await fireEvent.drop(prompt, { dataTransfer });
+    expect(onuploadfiles).toHaveBeenCalledWith([file]);
+    expect(onchange).not.toHaveBeenCalled();
+    expect(screen.getByText('Uploading files to workspace root…')).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Send prompt' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await fireEvent.keyDown(prompt, { key: 'Enter', ctrlKey: true });
+    await fireEvent.drop(prompt, { dataTransfer });
+    expect(onsend).not.toHaveBeenCalled();
+    expect(onuploadfiles).toHaveBeenCalledOnce();
+    done.resolve();
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Send prompt' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    expect(screen.getByText(/Upload or drop files · 100 MiB per file/)).toBeTruthy();
+  });
+
+  it('opens the file picker for an empty prompt, accepts multiple files and allows picking them again', async () => {
+    const onuploadfiles = vi.fn(async () => {});
+    const onsend = vi.fn();
+    const props = {
+      status: 'Ready.',
+      message: '  ',
+      activeTurnId: null,
+      starting: false,
+      onchange: vi.fn(),
+      onsend,
+      oninterrupt: vi.fn(),
+      onuploadfiles,
+    };
+    const { rerender } = render(Composer, props);
+    const input = screen.getByLabelText('Choose files to upload') as HTMLInputElement;
+    const click = vi.spyOn(input, 'click').mockImplementation(() => {});
+    expect(input.multiple).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Send prompt' })).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: 'Upload files' }));
+    expect(click).toHaveBeenCalledOnce();
+    await fireEvent.change(input, { target: { files: [] } });
+    expect(onuploadfiles).not.toHaveBeenCalled();
+    const files = [new File(['one'], 'one.txt'), new File(['two'], 'two.txt')];
+    await fireEvent.change(input, { target: { files } });
+    expect(onuploadfiles).toHaveBeenCalledWith(files);
+    expect(input.value).toBe('');
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Upload files' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    await fireEvent.change(input, { target: { files } });
+    expect(onuploadfiles).toHaveBeenCalledTimes(2);
+    expect(onsend).not.toHaveBeenCalled();
+    await rerender({ ...props, message: 'Send this' });
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Send prompt' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    expect(screen.queryByRole('button', { name: 'Upload files' })).toBeNull();
+  });
+
+  it.each(['', 'draft'])(
+    'offers file picking alongside active-turn actions with prompt %j',
+    async (message) => {
+      const onuploadfiles = vi.fn(async () => {});
+      render(Composer, {
+        status: 'Working',
+        message,
+        activeTurnId: 'turn-1',
+        starting: false,
+        onchange: vi.fn(),
+        onsend: vi.fn(),
+        oninterrupt: vi.fn(),
+        onuploadfiles,
+      });
+      const input = screen.getByLabelText('Choose files to upload') as HTMLInputElement;
+      const click = vi.spyOn(input, 'click').mockImplementation(() => {});
+      const trigger = screen.getByRole('button', { name: 'Choose prompt action' });
+      await fireEvent.click(trigger);
+      expect(trigger.getAttribute('aria-expanded')).toBe('true');
+      expect(screen.queryByRole('button', { name: /^Interrupt$/ }) !== null).toBe(!message);
+      expect(screen.queryByRole('button', { name: 'Queue message' }) !== null).toBe(
+        Boolean(message),
+      );
+      expect(screen.queryByRole('button', { name: 'Interrupt and send' }) !== null).toBe(
+        Boolean(message),
+      );
+      await fireEvent.click(screen.getByRole('button', { name: 'Upload files' }));
+      expect(click).toHaveBeenCalledOnce();
+      expect(trigger.getAttribute('aria-expanded')).toBe('false');
+      const file = new File(['contents'], 'note.txt');
+      await fireEvent.change(input, { target: { files: [file] } });
+      expect(onuploadfiles).toHaveBeenCalledWith([file]);
+    },
+  );
+
+  it('leaves text drops available for editing and clears highlighting on drag leave', async () => {
+    const onuploadfiles = vi.fn();
+    render(Composer, {
+      status: 'Ready.',
+      message: '',
+      activeTurnId: null,
+      starting: false,
+      onchange: vi.fn(),
+      onsend: vi.fn(),
+      oninterrupt: vi.fn(),
+      onuploadfiles,
+    });
+    const prompt = screen.getByRole('textbox', { name: 'Prompt' });
+    expect(
+      await fireEvent.drop(prompt, { dataTransfer: { types: ['text/plain'], files: [] } }),
+    ).toBe(true);
+    expect(onuploadfiles).not.toHaveBeenCalled();
+    const dataTransfer = { types: ['Files'], files: [] };
+    await fireEvent.dragEnter(prompt, { dataTransfer });
+    await fireEvent.dragLeave(prompt, { dataTransfer });
+    expect(screen.queryByText(/Drop files to upload to workspace root/)).toBeNull();
+    await fireEvent.drop(prompt, { dataTransfer });
+    expect(onuploadfiles).not.toHaveBeenCalled();
+  });
+
   it('updates Ready elapsed time locally every 30 seconds and stops on unmount', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-18T12:00:00Z'));
@@ -250,7 +395,7 @@ describe('Composer', () => {
     expect(onsend).not.toHaveBeenCalled();
   });
 
-  it('uses the side control to interrupt an active turn when the prompt is empty', async () => {
+  it('offers interrupt in the action menu when an active turn has an empty prompt', async () => {
     const oninterrupt = vi.fn();
     render(Composer, {
       status: 'Codex is working…',
@@ -263,6 +408,8 @@ describe('Composer', () => {
     });
 
     expect(screen.queryByRole('button', { name: 'Send prompt' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Interrupt' })).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: 'Choose prompt action' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Interrupt' }));
     expect(oninterrupt).toHaveBeenCalledOnce();
   });

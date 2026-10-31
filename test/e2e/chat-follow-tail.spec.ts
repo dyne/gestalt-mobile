@@ -162,7 +162,7 @@ for (const viewport of [
         }),
       );
       await expect(page.getByText('after approval')).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Choose prompt action' })).toBeVisible();
     });
   if (viewport.name === 'compact')
     test('reduced motion opens Chat instantly at the top', async ({ page }) => {
@@ -534,7 +534,7 @@ for (const viewport of [
     expect(positions.text).toHaveLength(24);
     positions.text.forEach((text, index) => expect(text).toContain(`message ${23 - index}`));
     await expect(page.getByText('message 23')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Send prompt' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Upload files' })).toBeVisible();
     await page.screenshot({
       path: screenshotPath(`chat-follow-tail-initial-${viewport.name}.png`),
       fullPage: false,
