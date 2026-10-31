@@ -39,6 +39,38 @@ const failure = (serverName = 'context-mode') =>
 
 describe('MCP startup presentation', () => {
   afterEach(cleanup);
+  it('shows a pending backend without a failure and explains activation at resume', () => {
+    const startup = {
+      ...failure('gestalt-xerj'),
+      status: 'starting' as const,
+      phase: 'readiness' as const,
+      failure: null,
+    };
+    render(McpStartupDetails, { startup });
+    expect(screen.getByText(/backend startup continues in the background/)).toBeTruthy();
+    expect(screen.getByText(/when its runtime resumes/)).toBeTruthy();
+    expect(screen.queryByText(/Codex reported/)).toBeNull();
+    expect(screen.queryByText('Trace reference')).toBeNull();
+  });
+  it('shows a manager readiness reason without attributing it to a Codex child', () => {
+    const initial = failure('gestalt-xerj');
+    const startup = parseMcpStartupStatus({
+      ...initial,
+      phase: 'readiness',
+      failure: {
+        ...initial.failure,
+        phase: 'readiness',
+        code: 'readiness-failed',
+        readinessReason: 'authentication-failed',
+        stderr: 'private',
+      },
+    })!;
+    render(McpStartupDetails, { startup });
+    expect(screen.getByText(/backend authentication is unavailable or was rejected/)).toBeTruthy();
+    expect(screen.queryByText(/Codex/)).toBeNull();
+    expect(screen.queryByText('Child process')).toBeNull();
+    expect(document.body.textContent).not.toContain('private');
+  });
   it('shows required failure, observed phase, unknown diagnostics and an accessible trace disclosure', async () => {
     render(McpStartupDetails, { startup: failure() });
     expect(screen.getByRole('region', { name: 'Context Mode startup' })).toBeTruthy();

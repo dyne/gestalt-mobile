@@ -4,13 +4,15 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { parseXerjStartupReason, type XerjStartupReason } from './xerj-startup.js';
+
 export const startupServers = [
   'context-mode',
   'gestalt-context-mode',
   'gestalt-serena',
   'gestalt-xerj',
 ] as const;
-export const startupPhases = ['artifact', 'spawn', 'initialize', 'startup'] as const;
+export const startupPhases = ['artifact', 'spawn', 'initialize', 'startup', 'readiness'] as const;
 export const startupFailureCodes = [
   'artifact-unavailable',
   'process-exited',
@@ -19,6 +21,7 @@ export const startupFailureCodes = [
   'reauthentication-required',
   'startup-failed',
   'cancelled',
+  'readiness-failed',
 ] as const;
 const signals = [
   'SIGHUP',
@@ -44,6 +47,7 @@ export type McpStartupFailure = Readonly<{
   artifactDigest: string | null;
   exitCode: number | null;
   signal: (typeof signals)[number] | null;
+  readinessReason?: XerjStartupReason;
 }>;
 
 export function startupIdentifier(value: unknown): string | null {
@@ -82,6 +86,11 @@ export function parseMcpStartupFailure(value: unknown): McpStartupFailure | unde
     !member(startupFailureCodes, r.code)
   )
     return undefined;
+  if (
+    (r.phase === 'readiness' || r.code === 'readiness-failed') &&
+    !(r.phase === 'readiness' && r.code === 'readiness-failed' && r.serverName === 'gestalt-xerj')
+  )
+    return undefined;
   return {
     schemaVersion: 1,
     failureId,
@@ -104,6 +113,9 @@ export function parseMcpStartupFailure(value: unknown): McpStartupFailure | unde
         ? r.exitCode
         : null,
     signal: member(signals, r.signal) ? r.signal : null,
+    ...(r.phase === 'readiness' && r.code === 'readiness-failed' && r.serverName === 'gestalt-xerj'
+      ? { readinessReason: parseXerjStartupReason(r.readinessReason) }
+      : {}),
   };
 }
 
@@ -117,6 +129,8 @@ export type McpStartupStatus = Readonly<{
   observedAt: string;
   status: 'starting' | 'ready' | 'failed' | 'cancelled';
   failure: McpStartupFailure | null;
+  /** Local backend preparation, before any Codex MCP child is configured. */
+  phase?: 'readiness';
 }>;
 
 export function parseMcpStartupStatus(value: unknown): McpStartupStatus | undefined {
@@ -158,6 +172,9 @@ export function parseMcpStartupStatus(value: unknown): McpStartupStatus | undefi
     observedAt,
     status: r.status as McpStartupStatus['status'],
     failure: failure ?? null,
+    ...(r.phase === 'readiness' && r.serverName === 'gestalt-xerj'
+      ? { phase: 'readiness' as const }
+      : {}),
   };
 }
 
@@ -167,7 +184,9 @@ export function mcpStartupActivity(status: McpStartupStatus) {
     id: `mcp-startup:${status.threadId ?? `unattributed:${status.runtimeId}`}:${status.serverName}`,
     label: `${status.serverName} · ${status.status}`,
     detail: status.failure
-      ? `Startup observation: ${status.failure.code}. Child exit diagnostics are unavailable.`
+      ? status.failure.phase === 'readiness'
+        ? `Backend readiness: ${status.failure.readinessReason ?? 'unknown'}.`
+        : `Startup observation: ${status.failure.code}. Child exit diagnostics are unavailable.`
       : `Startup observation: ${status.status}.`,
     mcpStartup: status,
   };
@@ -190,6 +209,7 @@ export function startupFailureReason(code: McpStartupFailure['code']): string {
     'reauthentication-required': 'Codex reported that authentication is required again.',
     'startup-failed': 'Codex reported a startup failure without a more specific reason.',
     cancelled: 'Startup was cancelled.',
+    'readiness-failed': 'Gestalt could not prepare the XERJ backend.',
   }[code];
 }
 

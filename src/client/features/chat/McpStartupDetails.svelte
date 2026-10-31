@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import { xerjStartupMessage } from '../../../shared/contracts/xerj-startup.js';
   import {
     startupFailureReason,
     startupRecoveryGuidance,
@@ -18,25 +19,28 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <section class="startup-details" aria-label={`${startupToolLabel(startup.serverName)} startup`}>
   {#if startup.failure}
     <p>{startupFailureReason(startup.failure.code)}</p>
+    {#if startup.failure.phase === 'readiness'}
+      <p>{xerjStartupMessage(startup.failure.readinessReason ?? 'unknown')}</p>
+    {/if}
     <dl>
       <div>
         <dt>Observed phase</dt>
         <dd>{startup.failure.phase}</dd>
       </div>
-      <div>
-        <dt>Child process</dt>
-        <dd>
-          Exit: {startup.failure.exitCode ?? 'Unavailable'}; signal: {startup.failure.signal ??
-            'Unavailable'}.
-        </dd>
-      </div>
+      {#if startup.failure.phase !== 'readiness'}<div>
+          <dt>Child process</dt>
+          <dd>
+            Exit: {startup.failure.exitCode ?? 'Unavailable'}; signal: {startup.failure.signal ??
+              'Unavailable'}.
+          </dd>
+        </div>{/if}
     </dl>
     {#if startup.failure.phase === 'startup'}
       <p class="secondary">
         Codex did not expose a finer startup phase. No underlying cause is established.
       </p>
     {/if}
-    {#if startup.failure.exitCode === null && startup.failure.signal === null}
+    {#if startup.failure.phase !== 'readiness' && startup.failure.exitCode === null && startup.failure.signal === null}
       <p class="secondary">Codex did not expose child exit or signal details.</p>
     {/if}
     <p>{startupRecoveryGuidance(startup.serverName)}</p>
@@ -73,6 +77,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         </div>
       </dl>
     </details>
+  {:else if startup.phase === 'readiness'}
+    <p>
+      XERJ backend startup continues in the background. This session uses native tools; retrieval
+      will be checked when its runtime resumes.
+    </p>
   {:else if startup.status === 'ready'}
     <p>
       Connection ready. Any earlier startup failures remain in the session trace and notification

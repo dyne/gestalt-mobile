@@ -11,6 +11,60 @@ import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { McpStartupTracker } from '../../src/server/platform/codex/mcp-startup-failure.js';
 import { normalizeCodexNotification } from '../../src/server/platform/codex/normalizer.js';
 
+test('background XERJ readiness stays pending without a warning and reports local failure accurately', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockAuthenticatedStatus(page);
+  const fixture = new ChatRelayFixture(page);
+  const session = {
+    id: 'xerj-startup',
+    state: 'ready',
+    threadId: 'root',
+    provider: 'codex',
+    workspaceId: 'workspace',
+    workspacePath: '/private/workspace',
+    profile: 'default',
+    activeTurnId: null,
+  };
+  await fixture.install([session]);
+  await page.route('**/api/skill-profiles', (route) => route.fulfill({ json: { profiles: [] } }));
+  await page.route('**/api/sessions/*/plan', (route) => route.fulfill({ status: 204 }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await expect.poll(() => fixture.sockets.has(session.id)).toBe(true);
+  const tracker = new McpStartupTracker();
+  const send = (status: 'starting' | 'failed', sequence: number, reason?: string) => {
+    const observed = tracker.observeReadiness(status, reason)!;
+    const event = normalizeCodexNotification(session.id, sequence, observed.observedAt, {
+      method: 'gestalt/mcpStartup',
+      params: observed,
+    })!;
+    fixture.event(session.id, sequence, event.type, event.payload, event.occurredAt);
+  };
+  send('starting', 1);
+  const timeline = page.getByRole('list', { name: 'Chat messages' });
+  // A visible activity confirms the preceding readiness event has been consumed.
+  fixture.event(session.id, 2, 'activity.updated', {
+    id: 'command',
+    label: 'Command · completed',
+    detail: 'git status --short',
+  });
+  await expect(timeline).toContainText('Work details · 1 activity');
+  await expect(timeline).not.toContainText('XERJ');
+  await expect(page.getByRole('status').filter({ hasText: 'XERJ startup failed' })).toHaveCount(0);
+  await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeEnabled();
+  send('failed', 3, 'authentication-failed');
+  const warning = page.getByRole('status').filter({ hasText: 'XERJ startup failed' });
+  await expect(warning).toBeVisible();
+  await expect(warning).toContainText('backend authentication is unavailable or was rejected');
+  await expect(warning).not.toContainText('Codex');
+  await expect(warning).not.toContainText('Child process');
+  await expect(timeline).not.toContainText('XERJ');
+  await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeEnabled();
+  expect(fixture.commands).toEqual([]);
+});
+
 for (const width of [390, 1440]) {
   for (const fontScale of [100, 200]) {
     test(`MCP health stays out of chat and failures notify at ${width}px font${fontScale}`, async ({

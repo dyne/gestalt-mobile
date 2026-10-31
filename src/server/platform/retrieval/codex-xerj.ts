@@ -5,6 +5,10 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import {
+  parseXerjStartupReason,
+  type XerjStartupReason,
+} from '../../../shared/contracts/xerj-startup.js';
 import type { RetrievalCapabilityPort } from '../../features/skills/application/ports.js';
 import type { AvailableSkill } from '../../features/skills/model/skill-profile.js';
 import { ReadinessEvidence } from './readiness-evidence.js';
@@ -21,6 +25,7 @@ export type CodexRetrievalState = {
   skillsConfig: readonly { path: string; enabled: boolean }[];
   ready: boolean;
   diagnostic?: string;
+  backendPreparation?: { status: 'starting' | 'unavailable'; reason?: XerjStartupReason };
   /** Verified optional capability guidance inserted only when starting a root turn. */
   turnInstructions?: string;
   evidence?: ReadinessEvidence;
@@ -124,7 +129,14 @@ export class CodexXerj {
         start: input.start,
       });
       if (ready.status !== 'ready') {
-        if (ready.status === 'unavailable') state.diagnostic = 'backend-unavailable';
+        if (ready.status === 'starting') state.backendPreparation = { status: 'starting' };
+        if (ready.status === 'unavailable') {
+          state.diagnostic = 'backend-unavailable';
+          state.backendPreparation = {
+            status: 'unavailable',
+            reason: parseXerjStartupReason(ready.reason),
+          };
+        }
         return state;
       }
       const guidance = await beforeDeadline(readFile(skill.path, 'utf8'), input.deadline);

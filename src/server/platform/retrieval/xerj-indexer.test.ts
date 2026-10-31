@@ -246,6 +246,9 @@ describe('host-owned XERJ indexing', () => {
     const manual = f.create('manual');
     manual.start();
     await vi.waitFor(() => expect(manual.status().state).toBe('ready'));
+    const allowance = f.check.mock.calls[0]![0].deadline - Date.now();
+    expect(allowance).toBeGreaterThan(29_000);
+    expect(allowance).toBeLessThanOrEqual(31_000);
     expect(manual.status().readiness?.coverage.state).toBe('unknown');
     await expect(readFile(join(f.root, '.xerjignore'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(f.args()).rejects.toMatchObject({ code: 'ENOENT' });

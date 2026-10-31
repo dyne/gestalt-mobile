@@ -9,6 +9,7 @@ import {
   startupToolLabel,
   startupRecoveryGuidance,
 } from '../../../shared/contracts/mcp-startup-failure.js';
+import { xerjStartupMessage } from '../../../shared/contracts/xerj-startup.js';
 import type { ToastQueue } from './toast-queue.js';
 
 /** Current notices are scoped to session/thread/tool; dismissal preserves notification history. */
@@ -54,10 +55,14 @@ export function createMcpStartupFeedback(queue: Pick<ToastQueue, 'enqueue' | 'di
     }
     if (!status.failure || before?.failureId === status.failure.failureId) return;
     if (before?.toastId) queue.dismiss(before.toastId);
+    const reason =
+      status.failure.phase === 'readiness'
+        ? `${xerjStartupMessage(status.failure.readinessReason ?? 'unknown')} `
+        : '';
     const toastId = queue.enqueue({
       kind: 'warning',
       code: `MCP_STARTUP_${sessionId}_${status.failure.failureId}`,
-      message: `${startupToolLabel(status.serverName)} startup ${status.status}. ${startupRecoveryGuidance(status.serverName)} Trace reference: ${status.failure.failureId}.`,
+      message: `${startupToolLabel(status.serverName)} startup ${status.status}. ${reason}${startupRecoveryGuidance(status.serverName)} Trace reference: ${status.failure.failureId}.`,
     });
     current.set(key, {
       toastId,

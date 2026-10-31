@@ -12,6 +12,29 @@ import { createToastQueue } from './toast-queue.js';
 
 describe('MCP startup toast pipeline', () => {
   afterEach(() => vi.useRealTimers());
+  it('reports local XERJ readiness reasons in warnings while pending preparation stays silent', () => {
+    const queue = createToastQueue();
+    const observe = createMcpStartupFeedback(queue);
+    const tracker = new McpStartupTracker();
+    const event = (status: 'starting' | 'failed', reason?: string) => ({
+      type: 'activity.updated',
+      payload: mcpStartupActivity(tracker.observeReadiness(status, reason)!),
+    });
+    observe('session', event('starting'));
+    expect(queue.snapshot()).toEqual([]);
+    expect(queue.historySnapshot()).toEqual([]);
+    observe('session', event('failed', 'authentication-failed'));
+    expect(queue.snapshot()).toHaveLength(1);
+    expect(queue.snapshot()[0]!.message).toContain(
+      'XERJ backend authentication is unavailable or was rejected.',
+    );
+    expect(queue.snapshot()[0]!.message).not.toContain('Codex');
+    observe('session', event('starting'));
+    observe('session', event('failed', 'private-secret TOKEN=secret'));
+    expect(queue.snapshot()).toHaveLength(1);
+    expect(queue.snapshot()[0]!.message).toContain('no more specific cause is available');
+    expect(JSON.stringify(queue.historySnapshot())).not.toContain('private-secret');
+  });
   it('isolates current errors by session, child and tool, preserves history and ignores replayed failures', () => {
     vi.useFakeTimers();
     const queue = createToastQueue();
