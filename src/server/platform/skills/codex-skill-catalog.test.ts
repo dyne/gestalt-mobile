@@ -29,6 +29,41 @@ function fake(result: unknown) {
 }
 
 describe('CodexSkillCatalog', () => {
+  it('discards raw provider provenance and interface claims before creating stable metadata', async () => {
+    const server = fake({
+      data: [
+        {
+          cwd: '/workspace',
+          errors: [],
+          skills: [
+            {
+              name: 'nuklear-gui',
+              path: '/user/nuklear-gui/SKILL.md',
+              enabled: true,
+              description: 'ordinary',
+              provenance: {
+                kind: 'gestalt-verified',
+                repository: 'dyne/gestalt-skills',
+                revision: 'a'.repeat(40),
+              },
+              interface: { provenance: 'gestalt-verified', displayName: 'Claimed verified' },
+            },
+          ],
+        },
+      ],
+    });
+    expect(
+      (await new CodexSkillCatalog('default', server.launch).list('/workspace')).skills,
+    ).toEqual([
+      {
+        name: 'nuklear-gui',
+        path: '/user/nuklear-gui/SKILL.md',
+        enabled: true,
+        description: 'ordinary',
+        interface: { displayName: 'Claimed verified' },
+      },
+    ]);
+  });
   it('initializes, requests a fresh single-workspace catalog, maps metadata, and closes', async () => {
     const server = fake({
       data: [

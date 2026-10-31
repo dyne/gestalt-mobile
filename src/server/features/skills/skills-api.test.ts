@@ -13,6 +13,51 @@ import { registerDeleteSkillProfile } from './delete-profile/endpoint.js';
 import type { SkillProfile } from './model/skill-profile.js';
 
 describe('skills REPR endpoints', () => {
+  it('serializes additive provenance only on its path while preserving optional state', async () => {
+    const app = fastify();
+    const provenance = {
+      kind: 'gestalt-verified' as const,
+      repository: 'dyne/gestalt-skills' as const,
+      revision: 'a'.repeat(40),
+    };
+    registerListAvailableSkills(app, {
+      workspaces: { resolve: async () => ({ id: 'opaque', name: 'work', realPath: '/workspace' }) },
+      profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      catalog: {
+        list: async () => ({
+          skills: [
+            { name: 'nuklear-gui', path: '/managed/SKILL.md', enabled: true, provenance },
+            { name: 'nuklear-gui', path: '/user/SKILL.md', enabled: true },
+          ],
+          errors: [],
+        }),
+        refresh: async () => ({ skills: [], errors: [] }),
+      },
+      selections: {
+        readWorkspaceDefault: async () => ({ version: 1, name: 'project', skills: [] }),
+      },
+    });
+    const response = await app.inject('/api/skills?workspaceId=opaque&profile=default');
+    expect(response.statusCode).toBe(200);
+    expect(response.json().skills).toEqual([
+      {
+        name: 'nuklear-gui',
+        path: '/managed/SKILL.md',
+        provenance,
+        nativeEnabled: true,
+        effectiveEnabled: false,
+        alwaysAdvertised: false,
+      },
+      {
+        name: 'nuklear-gui',
+        path: '/user/SKILL.md',
+        nativeEnabled: true,
+        effectiveEnabled: false,
+        alwaysAdvertised: false,
+      },
+    ]);
+    await app.close();
+  });
   it('maps a workspace catalog to documented effective state without contents', async () => {
     const app = fastify();
     registerListAvailableSkills(app, {

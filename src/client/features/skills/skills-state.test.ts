@@ -43,6 +43,194 @@ function client(overrides: Partial<SkillsClient> = {}): SkillsClient {
 }
 
 describe('SkillsState', () => {
+  it('preserves explicit missing-row removal across refresh and save, and reset restores the saved row', async () => {
+    const missing = { name: 'nuklear-gui', path: '/managed/nuklear-gui/SKILL.md', enabled: false };
+    const saved = {
+      version: 1 as const,
+      name: 'work',
+      path: '/profiles/work.yml',
+      skills: [missing],
+    };
+    const state = new SkillsState(
+      client({
+        listAvailableSkills: async () => ({ ...available, skills: [] }),
+        listSkillProfiles: async () => ({ profiles: [saved] }),
+      }),
+    );
+    await state.load('w', 'default');
+    state.selectProfile('work');
+    state.removeMissingSkill(missing.path);
+    await state.refresh();
+    expect(state.missingSkills).toEqual([]);
+    expect(state.savePayload().skills).toEqual([]);
+    expect(state.dirty).toBe(true);
+    state.reset();
+    expect(state.missingSkills).toEqual([missing]);
+    expect(state.dirty).toBe(false);
+    state.removeMissingSkill(missing.path);
+    await state.save();
+    await state.refresh();
+    expect(state.missingSkills).toEqual([]);
+    expect(state.savePayload().skills).toEqual([]);
+    expect(state.dirty).toBe(false);
+  });
+
+  it('warns about newly missing paths without resurrecting a different explicitly removed row', async () => {
+    const absent = { name: 'absent', path: '/missing/SKILL.md', enabled: false };
+    const saved = {
+      version: 1 as const,
+      name: 'work',
+      path: '/profiles/work.yml',
+      skills: [
+        absent,
+        { name: available.skills[0].name, path: available.skills[0].path, enabled: false },
+      ],
+    };
+    const state = new SkillsState(
+      client({
+        listAvailableSkills: vi
+          .fn()
+          .mockResolvedValueOnce({ ...available, skills: [available.skills[0]] })
+          .mockResolvedValueOnce({ ...available, skills: [] }),
+        listSkillProfiles: async () => ({ profiles: [saved] }),
+      }),
+    );
+    await state.load('w', 'default');
+    state.selectProfile('work');
+    state.removeMissingSkill(absent.path);
+    await state.refresh();
+    expect(state.missingSkills).toEqual([saved.skills[1]]);
+    expect(state.status.kind).toBe('warning');
+    expect(state.dirty).toBe(true);
+    state.reset();
+    expect(state.missingSkills.map((skill) => skill.path).sort()).toEqual(
+      saved.skills.map((skill) => skill.path).sort(),
+    );
+    expect(state.dirty).toBe(false);
+  });
+
+  it.each([true, false])(
+    'restores a returned path without duplicate missing rows and resets removed=%s intent',
+    async (remove) => {
+      const managed = {
+        ...available.skills[0],
+        name: 'nuklear-gui',
+        path: '/managed/nuklear-gui/SKILL.md',
+      };
+      const saved = {
+        version: 1 as const,
+        name: 'work',
+        path: '/profiles/work.yml',
+        skills: [{ name: managed.name, path: managed.path, enabled: true }],
+      };
+      const state = new SkillsState(
+        client({
+          listAvailableSkills: vi
+            .fn()
+            .mockResolvedValueOnce({ ...available, skills: [] })
+            .mockResolvedValue({ ...available, skills: [managed] }),
+          listSkillProfiles: async () => ({ profiles: [saved] }),
+        }),
+      );
+      await state.load('w', 'default');
+      state.selectProfile('work');
+      if (remove) state.removeMissingSkill(managed.path);
+      await state.refresh();
+      expect(state.missingSkills).toEqual([]);
+      expect(state.skills[0].enabled).toBe(false);
+      expect(state.dirty).toBe(true);
+      state.reset();
+      expect(state.missingSkills).toEqual([]);
+      expect(state.skills[0].enabled).toBe(true);
+      expect(state.dirty).toBe(false);
+      await state.refresh();
+      expect(state.savePayload().skills).toEqual(saved.skills);
+      expect(state.dirty).toBe(false);
+    },
+  );
+  it('retains saved disabled choices and excludes update-added paths when refreshing a selected complete profile', async () => {
+    const managed = {
+      ...available.skills[0],
+      name: 'nuklear-gui',
+      path: '/codex/gestalt-skills/skills/nuklear-gui/SKILL.md',
+    };
+    const added = {
+      ...available.skills[1],
+      name: 'new-skill',
+      path: '/codex/gestalt-skills/skills/new-skill/SKILL.md',
+      effectiveEnabled: true,
+    };
+    const saved = {
+      version: 1 as const,
+      name: 'work',
+      path: '/profiles/work.yml',
+      skills: [{ name: managed.name, path: managed.path, enabled: false }],
+    };
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({ ...available, skills: [managed] })
+      .mockResolvedValueOnce({ ...available, skills: [managed, added] })
+      .mockResolvedValueOnce({ ...available, skills: [added] });
+    const api = client({
+      listAvailableSkills: list,
+      listSkillProfiles: async () => ({ profiles: [saved] }),
+    });
+    const state = new SkillsState(api);
+    await state.load('w', 'default');
+    state.selectProfile('work');
+    await state.refresh();
+    expect(state.skills.map(({ path, enabled }) => ({ path, enabled }))).toEqual([
+      { path: managed.path, enabled: false },
+      { path: added.path, enabled: false },
+    ]);
+    state.toggle(added.path, true);
+    await state.refresh();
+    expect(state.skills[0].enabled).toBe(true);
+    expect(state.missingSkills).toEqual([
+      { name: managed.name, path: managed.path, enabled: false },
+    ]);
+    state.saveAsName = 'work';
+    await state.save();
+    const reload = new SkillsState(
+      client({
+        listAvailableSkills: async () => ({ ...available, skills: [added] }),
+        listSkillProfiles: async () => ({ profiles: state.profiles }),
+      }),
+    );
+    await reload.load('w', 'default');
+    reload.selectProfile('work');
+    expect(reload.skills[0].enabled).toBe(true);
+    expect(reload.missingSkills[0].enabled).toBe(false);
+  });
+  it('refreshes provenance independently from path-keyed edits and excludes it from saved profiles', async () => {
+    const provenance = {
+      kind: 'gestalt-verified' as const,
+      repository: 'dyne/gestalt-skills' as const,
+      revision: 'a'.repeat(40),
+    };
+    const api = client({
+      listAvailableSkills: vi
+        .fn()
+        .mockResolvedValueOnce({
+          ...available,
+          skills: [{ ...available.skills[0], provenance }, available.skills[1]],
+        })
+        .mockResolvedValueOnce(available),
+    });
+    const state = new SkillsState(api);
+    await state.load('w', 'default');
+    expect(state.skills[0].provenance).toEqual(provenance);
+    expect(state.skills[1].provenance).toBeUndefined();
+    state.toggle(state.skills[0].path, false);
+    expect(state.savePayload('work').skills).toEqual(
+      available.skills.map(({ name, path }) => ({ name, path, enabled: false })),
+    );
+    await state.refresh();
+    expect(state.skills[0].provenance).toBeUndefined();
+    expect(state.skills[0].enabled).toBe(false);
+    expect(state.skills[1].enabled).toBe(false);
+    expect(state.dirty).toBe(true);
+  });
   it('defaults browser access off and retains explicit choices through save, duplicate, reload and delete', async () => {
     const api = client();
     const state = new SkillsState(api);

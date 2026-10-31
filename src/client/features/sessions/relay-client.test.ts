@@ -6,9 +6,32 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createRelayClient } from './relay-client.js';
+import { createRelayClient, type RelayAvailableSkill } from './relay-client.js';
 
 describe('relay client', () => {
+  it('carries additive skill provenance and accepts older skill responses without it', async () => {
+    const provenance = {
+      kind: 'gestalt-verified' as const,
+      repository: 'dyne/gestalt-skills' as const,
+      revision: 'a'.repeat(40),
+    };
+    const skill = {
+      name: 'nuklear-gui',
+      path: '/managed/SKILL.md',
+      nativeEnabled: false,
+      effectiveEnabled: false,
+      alwaysAdvertised: false,
+    };
+    let current: RelayAvailableSkill = { ...skill, provenance };
+    const client = createRelayClient(
+      async () => new Response(JSON.stringify({ source: 'native', errors: [], skills: [current] })),
+    );
+    expect((await client.listAvailableSkills('w', 'default')).skills[0].provenance).toEqual(
+      provenance,
+    );
+    current = skill;
+    expect((await client.listAvailableSkills('w', 'default')).skills[0]).toEqual(skill);
+  });
   it('requests a graceful relay quit through the maintenance endpoint', async () => {
     let request: { url: string; method?: string; body?: string } | undefined;
     const client = createRelayClient(async (url, init) => {

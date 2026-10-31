@@ -38,6 +38,16 @@ export type SkillSelectionEntry = z.infer<typeof skillSelectionEntrySchema>;
 export type SkillSelection = readonly SkillSelectionEntry[];
 
 /** Metadata exposed by the stable skill catalog boundary, never protocol objects. */
+export const skillProvenanceSchema = z
+  .object({
+    kind: z.literal('gestalt-verified'),
+    repository: z.literal('dyne/gestalt-skills'),
+    revision: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+  })
+  .strict();
+
+export type SkillProvenance = z.infer<typeof skillProvenanceSchema>;
+
 export const availableSkillSchema = z
   .object({
     name: z.string().trim().min(1),
@@ -72,6 +82,7 @@ export const availableSkillSchema = z
       })
       .optional(),
     scope: z.string().optional(),
+    provenance: skillProvenanceSchema.optional(),
   })
   .strict();
 

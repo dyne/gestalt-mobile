@@ -8,6 +8,8 @@ import { resolve } from 'node:path';
 
 import type { LlmProvider } from '../../../shared/contracts/llm-provider.js';
 import type { SkillCatalogResult } from '../../features/skills/model/skill-profile.js';
+import type { SkillProvenanceVerifier } from '../../features/skills/application/ports.js';
+import { verifySkillProvenance } from './verified-skill-catalog.js';
 
 type Discover = (
   provider: LlmProvider,
@@ -27,6 +29,7 @@ export class CachedSkillCatalog {
       workspace: string,
       result: SkillCatalogResult,
     ) => Promise<SkillCatalogResult>,
+    private readonly provenance?: SkillProvenanceVerifier,
   ) {}
 
   async list(
@@ -43,11 +46,13 @@ export class CachedSkillCatalog {
         },
       ],
     };
-    if (!this.validate) return result;
     // Validation is a live capability projection over the last discovered
     // catalog. Keep the discovery baseline so a transient outage can recover
     // on the next list without requiring package rediscovery.
-    return this.validate(provider, profile, workspace, result);
+    const current = this.validate
+      ? await this.validate(provider, profile, workspace, result)
+      : result;
+    return this.provenance ? verifySkillProvenance(current, this.provenance) : current;
   }
 
   async refresh(
@@ -58,7 +63,7 @@ export class CachedSkillCatalog {
     try {
       const result = await this.discover(provider, profile, workspace);
       this.entries.set(this.key(provider, profile, workspace), result);
-      return result;
+      return this.provenance ? verifySkillProvenance(result, this.provenance) : result;
     } catch {
       const result = {
         skills: [],

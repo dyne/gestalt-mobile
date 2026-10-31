@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { isAbsolute, resolve } from 'node:path';
+import { realpath } from 'node:fs/promises';
+import { isAbsolute, join, resolve } from 'node:path';
 
 import type { SkillCatalog } from '../../features/skills/application/ports.js';
 import {
@@ -36,12 +37,40 @@ export class KimiSkillCatalog implements SkillCatalog {
   public constructor(
     private readonly servers: KimiWebServerManager | null,
     private readonly available: boolean,
+    private readonly managedSkills?: SkillCatalog,
   ) {}
 
   public async list(workspace: string): Promise<SkillCatalogResult> {
     if (!this.available || !this.servers) return { skills: [], errors: [] };
+    const [native, managed] = await Promise.all([
+      this.listNative(workspace, this.servers),
+      this.managedSkills?.list(workspace) ?? { skills: [], errors: [] },
+    ]);
+    const managedPaths = new Set(managed.skills.map((skill) => skill.path));
+    const nativeSkills: AvailableSkill[] = [];
+    for (const skill of native.skills) {
+      let entry = skill.path;
+      try {
+        entry = await realpath(
+          skill.path.endsWith('/SKILL.md') ? skill.path : join(skill.path, 'SKILL.md'),
+        );
+      } catch {
+        // Keep native metadata for paths that cannot be resolved locally.
+      }
+      if (!managedPaths.has(entry)) nativeSkills.push(skill);
+    }
+    return {
+      skills: [...nativeSkills, ...managed.skills],
+      errors: [...native.errors, ...managed.errors],
+    };
+  }
+
+  private async listNative(
+    workspace: string,
+    servers: KimiWebServerManager,
+  ): Promise<SkillCatalogResult> {
     try {
-      const handle = await this.servers.ensure('default', []);
+      const handle = await servers.ensure('default', []);
       const canonicalWorkspace = resolve(workspace);
       const workspaces = (await withTimeout(
         handle.client.get('/api/v1/workspaces'),

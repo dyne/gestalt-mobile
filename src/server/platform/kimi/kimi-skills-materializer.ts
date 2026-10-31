@@ -5,7 +5,7 @@
  */
 
 import { mkdirSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
-import { basename, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 
 import type { SkillSelection } from '../../features/skills/model/skill-profile.js';
 
@@ -21,8 +21,8 @@ export type MaterializedSkills = {
  * Materializes a kimi skills directory from a gestalt skill selection: one
  * symlink per enabled entry, named by the entry's basename. kimi discovers
  * both directory skills (a folder holding `SKILL.md`) and flat `.md` skills
- * in an `extra_skill_dirs` entry, so linking the canonical path as-is
- * preserves either shape.
+ * in an `extra_skill_dirs` entry. Canonical SKILL.md identities link their
+ * parent folder so names and relative references retain the directory shape.
  *
  * Note: `extra_skill_dirs` only *adds* directories on top of kimi's automatic
  * user/project discovery — unlike codex's `skills.config` override, kimi web
@@ -41,12 +41,13 @@ export function materializeKimiSkillsDir(
   for (const entry of selection) {
     if (!entry.enabled) continue;
     if (!isAbsolute(entry.path)) continue;
-    const name = basename(entry.path);
+    const target = basename(entry.path) === 'SKILL.md' ? dirname(entry.path) : entry.path;
+    const name = basename(target);
     if (taken.has(name)) {
       skipped.push(entry.path);
       continue;
     }
-    symlinkSync(entry.path, join(skillsDir, name));
+    symlinkSync(target, join(skillsDir, name));
     taken.add(name);
     linked.push(entry.path);
   }

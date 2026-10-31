@@ -8,6 +8,9 @@ import { describe, expect, it } from 'vitest';
 import { SkillProfileError } from './errors.js';
 import {
   applySkillSelectionSnapshot,
+  availableSkillSchema,
+  isAlwaysAdvertisedSkill,
+  isGestaltSkillName,
   compileSkillOverride,
   createSkillProfile,
   createSkillSelection,
@@ -19,6 +22,40 @@ const alpha = { name: 'Alpha', path: '/skills/alpha/SKILL.md', enabled: true };
 const beta = { name: 'Beta', path: '/skills/beta/SKILL.md', enabled: false };
 
 describe('skill profile codec', () => {
+  it('accepts bounded additive provenance without changing optional identity or advertisement', () => {
+    const provenance = {
+      kind: 'gestalt-verified' as const,
+      repository: 'dyne/gestalt-skills' as const,
+      revision: 'a'.repeat(40),
+    };
+    const skill = {
+      name: 'nuklear-gui',
+      path: '/codex/gestalt-skills/skills/nuklear-gui/SKILL.md',
+      enabled: false,
+      provenance,
+    };
+    expect(availableSkillSchema.parse(alpha)).toEqual(alpha);
+    expect(availableSkillSchema.parse(skill)).toEqual(skill);
+    expect(applySkillSelectionSnapshot([skill])).toEqual([skill]);
+    expect(isGestaltSkillName(skill.name)).toBe(false);
+    expect(isAlwaysAdvertisedSkill(skill)).toBe(false);
+    expect(
+      availableSkillSchema.safeParse({ ...skill, provenance: { ...provenance, revision: 'main' } })
+        .success,
+    ).toBe(false);
+    expect(
+      availableSkillSchema.safeParse({
+        ...skill,
+        provenance: { ...provenance, repository: 'other/repo' },
+      }).success,
+    ).toBe(false);
+    expect(
+      availableSkillSchema.safeParse({ ...skill, provenance: { ...provenance, enabled: true } })
+        .success,
+    ).toBe(false);
+    expect(availableSkillSchema.safeParse({ ...skill, forged: true }).success).toBe(false);
+    expect(() => createSkillSelection([skill])).toThrow(SkillProfileError);
+  });
   it.each([
     {
       label: 'global profile',

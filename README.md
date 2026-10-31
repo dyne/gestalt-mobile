@@ -308,6 +308,12 @@ profile, keyed by the profile's skill selection) under
 enabled never share a runtime. Authentication is shared by symlinking it from
 `~/.kimi-code`; Gestalt never copies or rewrites kimi credentials.
 
+The managed optional collection also appears in Kimi's skill catalog. Only
+selected entries are added to the isolated profile directory; disabled entries
+and newly installed skills absent from a saved complete selection are omitted.
+Kimi still discovers unrelated user and project skills itself, and its web API
+cannot disable those native discoveries.
+
 Kimi sessions stay on core chat: org-plan/autopilot tooling (the Plan tab,
 autopilot controls) remains Codex-only and is hidden for Kimi sessions.
 

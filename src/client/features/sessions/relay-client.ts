@@ -162,6 +162,11 @@ export type RelayGitSummary = {
 };
 
 export type RelayAvailableSkill = {
+  provenance?: {
+    kind: 'gestalt-verified';
+    repository: 'dyne/gestalt-skills';
+    revision: string;
+  };
   name: string;
   description?: string;
   shortDescription?: string;

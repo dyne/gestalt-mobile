@@ -79,6 +79,7 @@ export function registerListAvailableSkills(
             dependencies: skill.dependencies,
             path: skill.path,
             scope: skill.scope,
+            ...(skill.provenance ? { provenance: skill.provenance } : {}),
             nativeEnabled:
               discovered.skills.find((native) => native.path === skill.path)?.enabled ?? false,
             effectiveEnabled: skill.enabled,

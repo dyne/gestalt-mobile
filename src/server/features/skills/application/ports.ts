@@ -6,6 +6,7 @@
 
 import type { SkillProfile } from '../model/skill-profile.js';
 import type { SkillCatalogResult } from '../model/skill-profile.js';
+import type { SkillProvenance } from '../model/skill-profile.js';
 
 /** Persistence boundary for named user profiles and one workspace default. */
 export interface SkillProfileStore {
@@ -19,6 +20,11 @@ export interface SkillProfileStore {
 /** Fresh Codex discovery boundary; it returns domain metadata, not JSON-RPC values. */
 export interface SkillCatalog {
   list(workspace: string): Promise<SkillCatalogResult>;
+}
+
+/** Current managed-install verification; paths are catalog identities, not authority. */
+export interface SkillProvenanceVerifier {
+  verify(paths: readonly string[]): Promise<ReadonlyMap<string, SkillProvenance>>;
 }
 
 /** Optional retrieval: availability must be recomputed at runtime boundaries. */
