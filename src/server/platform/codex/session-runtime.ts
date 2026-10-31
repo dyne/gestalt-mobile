@@ -51,6 +51,7 @@ import { resolvedServerRequestId } from './server-request.js';
 import type { CodexRetrievalState } from '../retrieval/codex-xerj.js';
 import { xerjDeadline } from '../retrieval/managed-xerj.js';
 import { McpStartupTracker } from './mcp-startup-failure.js';
+import type { McpStartupStatus } from '../../../shared/contracts/mcp-startup-failure.js';
 
 export type AppServer = {
   rpc: {
@@ -1823,8 +1824,26 @@ export class CodexSessionRuntime {
     resource.retrieval = state;
     resource.skillsConfig = state.skillsConfig;
     resource.modelConfig = state.config;
+    if (state.backendPreparation) {
+      const status = state.backendPreparation.status === 'starting' ? 'starting' : 'failed';
+      this.publishStartupStatus(
+        resource,
+        resource.mcpStartup.observeReadiness(status, state.backendPreparation.reason),
+      );
+      if (status === 'failed') {
+        resource.retrievalFailureReported = true;
+        this.onNotification?.(
+          session.id,
+          {
+            method: 'mcpServer/statusUpdated',
+            params: { name: 'gestalt-xerj', status },
+          },
+          { kind: 'root' },
+        );
+      }
+    }
     this.reportCapabilityFailures(resource, session);
-    if (state.diagnostic && !resource.retrievalFailureReported) {
+    if (state.diagnostic && !state.backendPreparation && !resource.retrievalFailureReported) {
       resource.retrievalFailureReported = true;
       this.publishMcpStartup(resource, {
         method: 'mcpServer/statusUpdated',
@@ -1843,6 +1862,8 @@ export class CodexSessionRuntime {
 
   private reportCapabilityFailures(resource: SessionResource, session: RelaySessionSnapshot): void {
     for (const capability of resource.retrieval?.capabilities ?? []) {
+      if (capability.serverName === 'gestalt-xerj' && resource.retrieval?.backendPreparation)
+        continue;
       if (!capability.diagnostic || resource.capabilityFailuresReported.has(capability.serverName))
         continue;
       resource.capabilityFailuresReported.add(capability.serverName);
@@ -1941,6 +1962,13 @@ export class CodexSessionRuntime {
     notification: { method: string; params: unknown },
   ): void {
     const status = resource.mcpStartup.observe(notification);
+    this.publishStartupStatus(resource, status);
+  }
+
+  private publishStartupStatus(
+    resource: SessionResource,
+    status: McpStartupStatus | undefined,
+  ): void {
     if (!status) return;
     this.onNotification?.(
       resource.sessionId,

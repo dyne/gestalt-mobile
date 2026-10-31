@@ -13,6 +13,7 @@ import {
   type McpStartupStatus,
 } from '../../../shared/contracts/mcp-startup-failure.js';
 import { randomUUID } from 'node:crypto';
+import { parseXerjStartupReason } from '../../../shared/contracts/xerj-startup.js';
 
 export type StartupCorrelation = Pick<McpStartupFailure, 'failureId' | 'attemptId' | 'occurredAt'> &
   Partial<Pick<McpStartupFailure, 'threadId' | 'runtimeId' | 'artifactDigest'>>;
@@ -77,6 +78,29 @@ export function observedMcpStartupFailure(
 export class McpStartupTracker {
   readonly runtimeId = randomUUID();
   private readonly attempts = new Map<string, McpStartupStatus>();
+
+  /** Trusted local observation only; upstream notifications cannot supply this phase. */
+  observeReadiness(status: 'starting' | 'failed', reason?: unknown): McpStartupStatus | undefined {
+    const observation = this.observe({
+      method: 'mcpServer/statusUpdated',
+      params: { name: 'gestalt-xerj', status },
+    });
+    if (!observation) return undefined;
+    const local = parseMcpStartupStatus({
+      ...observation,
+      phase: 'readiness',
+      failure: observation.failure
+        ? {
+            ...observation.failure,
+            phase: 'readiness',
+            code: 'readiness-failed',
+            readinessReason: parseXerjStartupReason(reason),
+          }
+        : null,
+    });
+    if (local) this.attempts.set(JSON.stringify([null, 'gestalt-xerj']), local);
+    return local;
+  }
 
   observe(notification: { method?: string; params?: unknown }): McpStartupStatus | undefined {
     if (

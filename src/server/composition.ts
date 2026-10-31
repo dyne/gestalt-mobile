@@ -2991,6 +2991,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     });
   } catch (error) {
     await hostTests?.close();
+    await retrievalCapability.close?.();
     authorization?.close();
     database.close();
     throw error;
@@ -3052,6 +3053,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     closing = true;
     providerRecovery.dispose();
     await hostTests?.close();
+    await retrievalCapability.close?.();
     await xerjIndexer.close();
     for (const [sessionId, timer] of capacityRecoveryTimers) {
       clearTimeout(timer);

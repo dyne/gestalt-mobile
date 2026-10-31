@@ -32,6 +32,9 @@ export class CodexCapabilities {
     const serenaPath = input.skills.find((skill) => skill.name === 'gestalt:serena')?.path;
     const state: CodexRetrievalState = {
       repositories: new RepositoryReadiness(input.cwd),
+      get backendPreparation() {
+        return xerj.backendPreparation;
+      },
       deadline: Math.max(
         input.deadline,
         xerj.ready ? xerj.deadline : input.deadline,

@@ -17,9 +17,13 @@ import {
 } from './xerj-index-config.js';
 import type { XerjIndexDiagnostic, XerjStatus } from '../../../shared/contracts/xerj-status.js';
 import type { RetrievalCapabilityPort } from '../../features/skills/application/ports.js';
-import { xerjDeadline } from './managed-xerj.js';
+import { xerjStartupTimeout } from './managed-xerj.js';
 import { ReadinessEvidence } from './readiness-evidence.js';
 import { saveXerjIndexDiagnostic, xerjIndexDiagnostic } from './xerj-index-diagnostic.js';
+import {
+  parseXerjStartupReason,
+  xerjStartupMessage,
+} from '../../../shared/contracts/xerj-startup.js';
 
 // Native gitignore syntax, editable by the host operator. Hidden directories and
 // symlinks are already skipped by XERJ. Never replace an existing root policy.
@@ -111,7 +115,9 @@ export class XerjIndexer {
     this.value = { ...this.value, root, namespace };
     const ready = await this.capability.check({
       cwd: root,
-      deadline: xerjDeadline(this.environment),
+      // This background task waits for backend startup, not the chat allowance.
+      // Leave room for the owned manager client's bounded shutdown.
+      deadline: Date.now() + xerjStartupTimeout(this.environment) + 1_000,
       start: true,
     });
     if (this.closed) return;
@@ -127,7 +133,7 @@ export class XerjIndexer {
     if (ready.status !== 'ready') {
       this.evidence.connection('unavailable');
       this.fail(
-        'XERJ backend unavailable. Run gestalt doctor; check the managed data directory and local port.',
+        `${xerjStartupMessage(parseXerjStartupReason(ready.status === 'unavailable' ? ready.reason : 'unknown'))} Inspect gestalt xerj status.`,
       );
       return;
     }

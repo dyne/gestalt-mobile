@@ -9,6 +9,17 @@ gestalt mobile -- --cwd /path/to/source-root
 `auto` is the default when launched through Mobile's CLI. It indexes and watches
 the source root in the background without blocking startup.
 
+Backend startup is also shared in the background. Mobile gives each chat a
+five-second readiness wait (`XERJ_READY_TIMEOUT_MS`), while a single manager
+startup attempt may continue for 30 seconds (`XERJ_STARTUP_TIMEOUT_MS`). Both
+settings accept 100–60000 milliseconds. Sessions and the background indexer
+share the in-flight attempt. A chat that exhausts its wait uses native tools;
+XERJ remains pending rather than failed and is checked again when the runtime
+resumes. A successful backend start does not inject tools into an active turn.
+The indexer waits for the longer startup allowance before beginning its watcher.
+Read-only discovery does not initiate startup. Shutdown cancels only Mobile's
+owned readiness clients and watcher; it does not stop a retained shared backend.
+
 Use `--xerj manual` for retrieval only. It starts or discovers
 the retrieval backend but does not scan source files, create an ignore file, or
 start a watcher. Existing indexes remain available and unchanged; an empty index
