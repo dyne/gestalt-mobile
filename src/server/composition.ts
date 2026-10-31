@@ -117,6 +117,9 @@ import { promoteRecentThread } from './features/sessions/promote-recent-thread/u
 import { FilesystemSkillProfileStore } from './platform/skills/filesystem-skill-profile-store.js';
 import { CodexSkillCatalog } from './platform/skills/codex-skill-catalog.js';
 import { CachedSkillCatalog } from './platform/skills/cached-skill-catalog.js';
+import { ManagedSkillProvenance } from './platform/skills/managed-skill-provenance.js';
+import { ManagedSkillCatalog } from './platform/skills/managed-skill-catalog.js';
+import { VerifiedSkillCatalog } from './platform/skills/verified-skill-catalog.js';
 import { XerjIndexer } from './platform/retrieval/xerj-indexer.js';
 import type { XerjStatus } from '../shared/contracts/xerj-status.js';
 import { ManagedXerj, xerjDeadline } from './platform/retrieval/managed-xerj.js';
@@ -731,7 +734,17 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   );
   // kimi discovery is workspace-scoped, not profile-scoped: the profile only
   // decides which discovered skills a session's server materializes.
-  const kimiSkillCatalog = new KimiSkillCatalog(kimiManager ?? null, kimiManager != null);
+  const codexHome =
+    process.env.CODEX_HOME ?? join(options.homeDirectory ?? homedir(), '.codex-gestalt');
+  const skillProvenance = new ManagedSkillProvenance(codexHome);
+  const kimiSkillCatalog = new VerifiedSkillCatalog(
+    new KimiSkillCatalog(
+      kimiManager ?? null,
+      kimiManager != null,
+      new ManagedSkillCatalog(codexHome),
+    ),
+    skillProvenance,
+  );
   const retrievalCapability =
     options.xerj === 'off'
       ? { check: async () => ({ status: 'absent' as const }) }
@@ -760,15 +773,21 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const skillCatalog = (provider: LlmProvider, profile: string) =>
     provider === 'kimi'
       ? kimiSkillCatalog
-      : new CodexSkillCatalog(profile, options.launchAppServer ?? launchCodexAppServer);
+      : new VerifiedSkillCatalog(
+          new CodexSkillCatalog(profile, options.launchAppServer ?? launchCodexAppServer),
+          skillProvenance,
+        );
   const editorSkillCatalog = new CachedSkillCatalog(
     (provider, profile, workspace) =>
       provider === 'codex'
-        ? new CodexSkillCatalog(
-            profile,
-            options.launchAppServer ?? launchCodexAppServer,
-            5_000,
-            capabilities,
+        ? new VerifiedSkillCatalog(
+            new CodexSkillCatalog(
+              profile,
+              options.launchAppServer ?? launchCodexAppServer,
+              5_000,
+              capabilities,
+            ),
+            skillProvenance,
           ).list(workspace)
         : kimiSkillCatalog.list(workspace),
     async (provider, _profile, workspace, result) => {
@@ -791,6 +810,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         ),
       };
     },
+    skillProvenance,
   );
   const workspacePlanCatalog = new FilesystemWorkspacePlanCatalog();
   const planArchiver = new FilesystemPlanArchiver();

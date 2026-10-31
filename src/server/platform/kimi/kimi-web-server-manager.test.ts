@@ -6,7 +6,7 @@
 
 import { EventEmitter } from 'node:events';
 import { PassThrough, type Readable, type Writable } from 'node:stream';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -100,6 +100,40 @@ const selection = (enabled: boolean): SkillSelection => [
 ];
 
 describe('KimiWebServerManager', () => {
+  it('publishes only isolated selected managed content for enabled and disabled profiles', async () => {
+    const root = await sandbox();
+    const { stateBase, sourceShareDir } = await fixture(root);
+    const managed = join(root, 'codex/gestalt-skills/skills/nuklear-gui');
+    await mkdir(join(managed, 'references'), { recursive: true });
+    await writeFile(join(managed, 'SKILL.md'), '---\nname: nuklear-gui\n---\n');
+    await writeFile(join(managed, 'references/guide.md'), 'guide');
+    const configPosts: unknown[] = [];
+    stubFetch(configPosts);
+    const manager = new KimiWebServerManager({
+      stateBase,
+      sourceShareDir,
+      spawnImpl: () => fakeChild() as never,
+    });
+    try {
+      const enabled = await manager.ensure('enabled', [
+        { name: 'nuklear-gui', path: join(managed, 'SKILL.md'), enabled: true },
+      ]);
+      const disabled = await manager.ensure('disabled', [
+        { name: 'nuklear-gui', path: join(managed, 'SKILL.md'), enabled: false },
+      ]);
+      expect(
+        await readFile(join(enabled.skillsDir, 'nuklear-gui/references/guide.md'), 'utf8'),
+      ).toBe('guide');
+      expect(await readdir(disabled.skillsDir)).toEqual([]);
+      expect(configPosts).toEqual([
+        { extra_skill_dirs: [enabled.skillsDir] },
+        { extra_skill_dirs: [disabled.skillsDir] },
+      ]);
+      expect(JSON.stringify(configPosts)).not.toContain('gestalt-skills');
+    } finally {
+      await manager.stopAll();
+    }
+  });
   it('spawns one kimi web per profile, publishes the materialized skills dir, and reuses it', async () => {
     const root = await sandbox();
     const { stateBase, sourceShareDir } = await fixture(root);

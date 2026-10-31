@@ -56,6 +56,7 @@ export class SkillsState {
   private defaultExplicitCapabilities = false;
   private baseline = new Map<string, boolean>();
   private missingBaseline = new Map<string, { name: string; path: string; enabled: boolean }>();
+  private removedMissingPaths = new Set<string>();
   private saving = false;
   private deleting = false;
   private request: AbortController | null = null;
@@ -80,7 +81,9 @@ export class SkillsState {
         (skill) => this.missingBaseline.get(skill.path)?.enabled !== skill.enabled,
       ) ||
       [...this.missingBaseline].some(
-        ([path]) => !this.missingSkills.some((skill) => skill.path === path),
+        ([path]) =>
+          !this.missingSkills.some((skill) => skill.path === path) &&
+          !this.skills.some((skill) => skill.path === path),
       )
     );
   }
@@ -168,6 +171,7 @@ export class SkillsState {
       return;
     }
     this.selectedProfileName = selected.name;
+    this.removedMissingPaths.clear();
     this.saveAsName = selected.name;
     this.playwrightEnabled = selected.capabilities?.playwright.enabled ?? false;
     this.explicitCapabilities = selected.capabilities !== undefined;
@@ -191,6 +195,7 @@ export class SkillsState {
   }
 
   selectDefaultProfile(): void {
+    this.removedMissingPaths.clear();
     this.selectedProfileName = '';
     this.saveAsName = '';
     this.playwrightEnabled = this.defaultPlaywrightEnabled;
@@ -213,6 +218,7 @@ export class SkillsState {
   }
 
   removeMissingSkill(path: string): void {
+    if (this.missingSkills.some((skill) => skill.path === path)) this.removedMissingPaths.add(path);
     this.missingSkills = this.missingSkills.filter((skill) => skill.path !== path);
     this.status = this.missingSkills.length
       ? this.missingSkillsStatus()
@@ -222,16 +228,17 @@ export class SkillsState {
   }
 
   reset(): void {
+    this.removedMissingPaths.clear();
     this.playwrightEnabled = this.browserBaseline;
     this.explicitCapabilities = this.capabilitiesBaseline;
     this.skills = this.skills.map((skill) => ({
       ...skill,
       enabled: this.baseline.get(skill.path) ?? false,
     }));
-    this.missingSkills = [...this.missingBaseline.values()].map((skill) => ({
-      ...skill,
-      enabled: false,
-    }));
+    const availablePaths = new Set(this.skills.map((skill) => skill.path));
+    this.missingSkills = [...this.missingBaseline.values()]
+      .filter((skill) => !availablePaths.has(skill.path))
+      .map((skill) => ({ ...skill, enabled: false }));
     if (this.missingSkills.length) this.status = this.missingSkillsStatus();
   }
 
@@ -335,6 +342,13 @@ export class SkillsState {
         .map((skill) => [skill.path, skill.enabled]),
     );
     const missingByPath = new Map(this.missingSkills.map((skill) => [skill.path, skill.enabled]));
+    const selected = this.profiles.find(
+      (profile) => !('error' in profile) && profile.name === this.selectedProfileName,
+    );
+    const selectedSkills = selected && !('error' in selected) ? selected.skills : undefined;
+    const selectedByPath = selectedSkills
+      ? new Map(selectedSkills.map((skill) => [skill.path, skill.enabled]))
+      : undefined;
     this.source = available.source;
     this.defaultPlaywrightEnabled = available.capabilities?.playwright.enabled ?? false;
     this.defaultExplicitCapabilities = available.capabilities !== undefined;
@@ -354,19 +368,37 @@ export class SkillsState {
     this.skills = optionalSkills.map((skill) => ({
       ...skill,
       enabled:
-        explicitEdits.get(skill.path) ?? missingByPath.get(skill.path) ?? skill.effectiveEnabled,
+        explicitEdits.get(skill.path) ??
+        missingByPath.get(skill.path) ??
+        (this.removedMissingPaths.has(skill.path)
+          ? false
+          : selectedByPath
+            ? (selectedByPath.get(skill.path) ?? false)
+            : skill.effectiveEnabled),
     }));
     const availablePaths = new Set(optionalSkills.map((skill) => skill.path));
-    this.missingSkills = this.missingSkills.filter((skill) => !availablePaths.has(skill.path));
+    this.missingSkills = selectedSkills
+      ? selectedSkills
+          .filter(
+            (skill) => !availablePaths.has(skill.path) && !this.removedMissingPaths.has(skill.path),
+          )
+          .map((skill) => ({ ...skill, enabled: false }))
+      : this.missingSkills.filter((skill) => !availablePaths.has(skill.path));
+    for (const skill of selectedSkills ?? []) {
+      if (!availablePaths.has(skill.path) && !this.missingBaseline.has(skill.path))
+        this.missingBaseline.set(skill.path, { ...skill });
+    }
     this.baseline = new Map(
       optionalSkills.map((skill) => [
         skill.path,
-        this.baseline.get(skill.path) ?? skill.effectiveEnabled,
+        this.baseline.get(skill.path) ??
+          (selectedByPath ? (selectedByPath.get(skill.path) ?? false) : skill.effectiveEnabled),
       ]),
     );
   }
 
   private captureBaseline(): void {
+    this.removedMissingPaths.clear();
     this.browserBaseline = this.playwrightEnabled;
     this.capabilitiesBaseline = this.explicitCapabilities;
     this.baseline = new Map(this.skills.map((skill) => [skill.path, skill.enabled]));

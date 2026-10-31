@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { mkdtemp, mkdir, readlink, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readlink, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -23,6 +23,37 @@ async function sandbox(): Promise<string> {
 const selection = (entries: SkillSelection): SkillSelection => entries;
 
 describe('materializeKimiSkillsDir', () => {
+  it('materializes canonical managed entries as folders with references and omits disabled entries', async () => {
+    const root = await sandbox();
+    const managed = join(root, 'codex/gestalt-skills/skills/nuklear-gui');
+    const other = join(root, 'user/other');
+    await mkdir(join(managed, 'references'), { recursive: true });
+    await mkdir(other, { recursive: true });
+    await writeFile(join(managed, 'SKILL.md'), '---\nname: nuklear-gui\ndescription: GUI\n---\n');
+    await writeFile(join(managed, 'references/guide.md'), 'relative reference');
+    await writeFile(join(other, 'SKILL.md'), '---\nname: other\n---\n');
+    const skillsDir = join(root, 'profile/skills');
+    const entries = [
+      { name: 'nuklear-gui', path: join(managed, 'SKILL.md'), enabled: true },
+      { name: 'other', path: join(other, 'SKILL.md'), enabled: true },
+    ];
+    expect(materializeKimiSkillsDir(skillsDir, entries).linked).toEqual(
+      entries.map((entry) => entry.path),
+    );
+    expect(await readdir(skillsDir)).toEqual(['nuklear-gui', 'other']);
+    expect(await readFile(join(skillsDir, 'nuklear-gui/references/guide.md'), 'utf8')).toBe(
+      'relative reference',
+    );
+    await writeFile(join(managed, 'references/guide.md'), 'updated reference');
+    expect(await readFile(join(skillsDir, 'nuklear-gui/references/guide.md'), 'utf8')).toBe(
+      'updated reference',
+    );
+    materializeKimiSkillsDir(
+      skillsDir,
+      entries.map((entry) => ({ ...entry, enabled: entry.name !== 'nuklear-gui' })),
+    );
+    expect(await readdir(skillsDir)).toEqual(['other']);
+  });
   it('links only enabled entries and keeps either skill shape', async () => {
     const root = await sandbox();
     const skillsDir = join(root, 'skills');
