@@ -9,6 +9,19 @@ import { describe, expect, it } from 'vitest';
 import { groupMessages } from './message-groups.js';
 
 describe('groupMessages', () => {
+  it('preserves a working section identity when more commentary messages arrive', () => {
+    const first = {
+      id: 'first',
+      role: 'assistant' as const,
+      phase: 'commentary' as const,
+      text: 'First',
+      complete: true,
+    };
+    const before = groupMessages([first]);
+    const after = groupMessages([first, { ...first, id: 'second', text: 'Second' }]);
+    expect(before[0]!.id).toBe('first');
+    expect(after[0]!.id).toBe('first');
+  });
   it('nests consecutive commentary entries beneath their final answer', () => {
     expect(
       groupMessages([

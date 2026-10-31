@@ -34,7 +34,7 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
   const addCommentary = () => {
     if (!commentary.length) return;
     groups.push({
-      id: commentary.at(-1)!.id,
+      id: commentary[0]!.id,
       kind: 'assistant',
       commentary: commentary.map((message) => message.text).join('\n\n'),
       answer: null,
