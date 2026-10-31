@@ -13,6 +13,52 @@ import MessageList from './MessageList.svelte';
 import { mcpStartupActivity } from '../../../shared/contracts/mcp-startup-failure.js';
 
 describe('MessageList', () => {
+  it.each([undefined, null, 'other-turn'])(
+    'keeps commentary without an answer expanded when active turn is %j, then folds it inside the answer',
+    async (activeTurnId) => {
+      const commentary = {
+        id: 'commentary',
+        role: 'assistant' as const,
+        phase: 'commentary' as const,
+        turnId: 'turn',
+        text: 'First update.\n\nLatest update.',
+        complete: true,
+      };
+      const view = render(MessageList, { messages: [commentary], activities: [], activeTurnId });
+      const working = screen.getByText('working').closest('.progress-turn');
+      expect(working?.querySelector('details, .commentary-toggle')).toBeNull();
+      expect(view.container.querySelector('.commentary-turn')).toBeNull();
+      expect(
+        [...working!.querySelectorAll('.message-content')].map((node) => node.textContent),
+      ).toEqual(['Latest update.', 'First update.']);
+      await view.rerender({
+        messages: [
+          commentary,
+          {
+            id: 'answer',
+            role: 'assistant',
+            phase: 'final_answer',
+            turnId: 'turn',
+            text: 'Finished reviewing the workspace.',
+            complete: true,
+          },
+        ],
+        activities: [],
+        activeTurnId: null,
+      });
+      expect(screen.queryByText('working')).toBeNull();
+      expect(screen.getByText('answer')).toBeTruthy();
+      const toggle = screen.getByRole('button', { name: 'commentary' });
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect(screen.queryByText('First update.')).toBeNull();
+      await fireEvent.click(toggle);
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      const details = document.getElementById(toggle.getAttribute('aria-controls')!);
+      expect(details?.textContent).toContain('First update.');
+      expect(details?.textContent).toContain('Latest update.');
+    },
+  );
+
   it('keeps working text expanded and prepends paragraphs without replacing older text', async () => {
     const first = {
       id: 'first',
