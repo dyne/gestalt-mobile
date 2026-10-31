@@ -170,9 +170,9 @@ test('queues an active turn with Ctrl+Enter or replaces it from the action contr
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat' }).click();
   const prompt = page.getByRole('textbox', { name: 'Prompt' });
-  await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Choose prompt action' })).toBeVisible();
   await prompt.fill('focus on tests');
-  await expect(page.getByRole('button', { name: 'Interrupt' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Choose prompt action' })).toBeVisible();
   await prompt.press('Control+Enter');
   await expect.poll(() => queued.length).toBe(1);
   expect(queued[0]?.body).toEqual({ text: 'focus on tests' });
@@ -301,7 +301,7 @@ test('converges a live item through an overlapping snapshot, reconnect, and refr
   await expect(page.getByText('live convergence prompt')).toBeVisible();
   await expect.poll(() => fixture.commands.length).toBe(1);
   turn.resolve({ kind: 'fulfill', status: 202, body: { activeTurnId: 'turn-live' } });
-  await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Choose prompt action' })).toBeVisible();
   const startedAt = '2026-01-01T12:10:00.000Z';
   fixture.event(
     'session-1',
@@ -814,7 +814,7 @@ test('shows working streamed state before terminal resume recovery', async ({ pa
   await expect(page.getByText('resume final')).toBeVisible();
   await expect.poll(() => fixture.sockets.get('session-1') !== oldSocket).toBe(true);
   expect(await promptHandle?.evaluate((node) => node.isConnected)).toBe(true);
-  await expect(page.getByRole('button', { name: 'Interrupt' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Choose prompt action' })).toHaveCount(0);
   const final = page.getByText('resume final');
   const finalHandle = await final.elementHandle();
   const box = await final.boundingBox();
@@ -934,7 +934,7 @@ for (const shot of [
       await page.getByRole('button', { name: 'Chat', exact: true }).click();
       await waitForSettledScroll(page);
       const [interruptBox, navigationBox] = await Promise.all([
-        page.getByRole('button', { name: 'Interrupt' }).boundingBox(),
+        page.getByRole('button', { name: 'Choose prompt action' }).boundingBox(),
         page.getByLabel('Primary').boundingBox(),
       ]);
       expect(interruptBox).not.toBeNull();
@@ -958,7 +958,7 @@ for (const shot of [
     await expect(page.getByText('working screenshot')).toBeAttached();
     await expect(page.getByText('working', { exact: true })).toBeVisible();
     await expect(page.locator('.progress-turn details')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Choose prompt action' })).toBeVisible();
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
@@ -980,7 +980,7 @@ for (const shot of [
     await expect(page.getByText('finished screenshot')).toBeVisible();
     await expect(page.getByRole('button', { name: 'commentary' })).toBeVisible();
     await expect(page.getByText('working screenshot')).toBeHidden();
-    await expect(page.getByRole('button', { name: 'Interrupt' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Choose prompt action' })).toHaveCount(0);
     await expect(page.getByRole('status')).toHaveText('Ready since less than a minute ago');
     expect(
       await page.evaluate(
@@ -996,7 +996,7 @@ for (const shot of [
       await waitForSettledScroll(page);
       const [promptBox, sendBox, navigationBox] = await Promise.all([
         page.getByRole('textbox', { name: 'Prompt' }).boundingBox(),
-        page.getByRole('button', { name: 'Send prompt' }).boundingBox(),
+        page.getByRole('button', { name: 'Upload files' }).boundingBox(),
         page.getByLabel('Primary').boundingBox(),
       ]);
       expect(promptBox).not.toBeNull();

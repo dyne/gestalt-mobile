@@ -17,4 +17,15 @@ describe('upload queue state', () => {
     expect(outcomes.map((outcome) => outcome.status)).toEqual(['queued', 'too-large']);
     expect(nextUpload(outcomes)).toBe(0);
   });
+
+  it('accepts exactly 100 MiB and rejects one byte over the limit', () => {
+    const boundaryFile = new File([], 'boundary.bin');
+    const oversizedFile = new File([], 'oversized.bin');
+    Object.defineProperty(boundaryFile, 'size', { value: 100 * 1024 * 1024 });
+    Object.defineProperty(oversizedFile, 'size', { value: 100 * 1024 * 1024 + 1 });
+    expect(initialiseUploads([boundaryFile, oversizedFile]).map(({ status }) => status)).toEqual([
+      'queued',
+      'too-large',
+    ]);
+  });
 });

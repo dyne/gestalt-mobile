@@ -14,7 +14,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import WorkDetails from './WorkDetails.svelte';
   import InteractionList from './InteractionList.svelte';
   import PendingChatRequests from './PendingChatRequests.svelte';
-  import type { HistoryActivity } from './activity-summary.js';
+  import { isServiceStatusActivity, type HistoryActivity } from './activity-summary.js';
   import type { ChatMessage } from './message-store.js';
   import { visibleInteraction, withoutDialogueEchoes } from './interaction-timeline.js';
   import { groupMessages } from './message-groups.js';
@@ -50,7 +50,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   };
   let {
     messages,
-    activities,
+    activities: allActivities,
     activeTurnId = null,
     autopilotAuditTruncated = false,
     interactions = [],
@@ -72,6 +72,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onopenfile,
     oncopyresult = () => {},
   }: Props = $props();
+  let activities = $derived(allActivities.filter((activity) => !isServiceStatusActivity(activity)));
   let groups = $derived.by(() => {
     const grouped = groupMessages(messages);
     if (

@@ -112,9 +112,10 @@ for (const viewport of [
         params: { name: 'gestalt-serena', status: 'connected' },
       })!;
       fixture.event(session.id, 1, connected.type, connected.payload, connected.occurredAt);
-      await page.getByText(/^Work details/).click();
-      await expect(page.getByText('Serena connected', { exact: true })).toBeVisible();
-      await expect(page.getByText(/language readiness is still unverified/)).toBeVisible();
+      await expect(
+        page.getByRole('list', { name: 'Chat messages' }).locator(':scope > li'),
+      ).toHaveCount(0);
+      await expect(page.getByText('Serena connected', { exact: true })).toHaveCount(0);
       await expect(
         page.getByRole('status').filter({ hasText: 'Serena is unavailable' }),
       ).toHaveCount(0);
@@ -128,7 +129,10 @@ for (const viewport of [
         .filter({ hasText: 'Serena is unavailable in this session.' });
       await expect(warning).toBeVisible();
       await expect(warning).toContainText(failureMessage);
-      await expect(page.getByText('Serena unavailable', { exact: true })).toBeVisible();
+      await expect(
+        page.getByRole('list', { name: 'Chat messages' }).locator(':scope > li'),
+      ).toHaveCount(0);
+      await expect(page.getByText('Serena unavailable', { exact: true })).toHaveCount(0);
       await expect(page.locator('body')).not.toContainText('secret-token');
       await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeEnabled();
       await page.screenshot({

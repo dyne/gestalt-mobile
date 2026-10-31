@@ -225,63 +225,18 @@ for (const viewport of [
           notification.payload,
           notification.occurredAt,
         );
-        // Wait for the journal activity to render before asserting that its
-        // older readiness payload did not upgrade the current status.
-        await expect(page.locator('body')).toContainText(
-          `Semantic checks · ${state === 'stale' ? 'stale' : 'ready'}`,
-        );
         await expect(summary).toHaveAccessibleName(`Repository tool readiness: ${expected}`);
       }
       expect(requests).toBe(beforeEvents);
       await page.keyboard.press('Escape');
-      await page.getByText(/^Work details/).click();
-      await expect(page.getByText('Semantic checks · ready', { exact: true })).toBeVisible();
       await expect(
-        page.getByText(
-          /Observed source only; compiler selection and repository index coverage are unverified/,
-        ),
-      ).toBeVisible();
+        page.getByRole('list', { name: 'Chat messages' }).locator(':scope > li'),
+      ).toHaveCount(0);
+      await expect(page.getByText('Semantic checks · ready', { exact: true })).toHaveCount(0);
       await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeEnabled();
       await page.screenshot({
         path: `${evidence}/activity-${viewport.width}-font${fontScale}.png`,
       });
-      if (fontScale === 200) {
-        const content = page.getByText(
-          /Observed source only; compiler selection and repository index coverage are unverified/,
-        );
-        const endMetrics = await content.evaluate((element) => {
-          for (let parent = element.parentElement; parent; parent = parent.parentElement) {
-            if (
-              parent.scrollHeight > parent.clientHeight &&
-              /auto|scroll/.test(getComputedStyle(parent).overflowY)
-            )
-              parent.scrollTo({ top: parent.scrollHeight, behavior: 'instant' });
-          }
-          element.scrollIntoView({ block: 'end', behavior: 'instant' });
-          window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' });
-          const range = document.createRange();
-          range.selectNodeContents(element);
-          const last = range.getClientRects();
-          const end = last[last.length - 1];
-          const nav = document.querySelector('nav')?.getBoundingClientRect();
-          return {
-            visible: end.bottom <= Math.min(innerHeight, nav?.top ?? innerHeight) && end.top >= 0,
-            endTop: end.top,
-            endBottom: end.bottom,
-            navTop: nav?.top,
-            scrollY,
-            documentHeight: document.documentElement.scrollHeight,
-          };
-        });
-        await writeFile(
-          `${evidence}/activity-end-${viewport.width}-font${fontScale}.json`,
-          JSON.stringify(endMetrics, null, 2),
-        );
-        expect(endMetrics.visible).toBe(true);
-        await page.screenshot({
-          path: `${evidence}/activity-end-${viewport.width}-font${fontScale}.png`,
-        });
-      }
       await page.getByRole('button', { name: 'Open configuration' }).click();
       response = observed('ready');
       await refresh.click();
@@ -313,7 +268,7 @@ for (const viewport of [
           params: { ...replay, runtimeId },
         })!;
         fixture.event(session.id, sequence, event.type, event.payload, event.occurredAt);
-        await expect(page.locator('body')).toContainText(label);
+        await expect(page.locator('body')).not.toContainText(label);
         await expect(summary).toHaveAccessibleName('Repository tool readiness: Unverified');
       }
       response = {};

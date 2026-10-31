@@ -33,7 +33,7 @@ describe('MCP startup toast pipeline', () => {
     observe('session', event('failed', 'gestalt-serena'));
     observe('session', event('failed', 'context-mode', 'other-child'));
     expect(queue.snapshot()).toHaveLength(4);
-    expect(queue.snapshot().filter((toast) => toast.kind === 'warning')).toHaveLength(1);
+    expect(queue.snapshot().every((toast) => toast.kind === 'warning')).toBe(true);
     observe('session', event('ready'));
     observe('session', first);
     expect(queue.snapshot()).toHaveLength(3);
@@ -50,5 +50,26 @@ describe('MCP startup toast pipeline', () => {
       payload: { mcpStartup: { error: 'secret' } },
     });
     expect(queue.snapshot()).toEqual([]);
+  });
+
+  it('keeps starting and healthy services out of notifications and history', () => {
+    const queue = createToastQueue();
+    const observe = createMcpStartupFeedback(queue);
+    const tracker = new McpStartupTracker();
+    for (const name of ['context-mode', 'gestalt-context-mode', 'gestalt-serena', 'gestalt-xerj']) {
+      for (const status of ['starting', 'ready']) {
+        observe('session', {
+          type: 'activity.updated',
+          payload: mcpStartupActivity(
+            tracker.observe({
+              method: 'mcpServer/startupStatus/updated',
+              params: { status, name },
+            })!,
+          ),
+        });
+      }
+    }
+    expect(queue.snapshot()).toEqual([]);
+    expect(queue.historySnapshot()).toEqual([]);
   });
 });

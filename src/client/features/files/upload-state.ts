@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+import { MAX_UPLOAD_BYTES } from '../../../shared/contracts/file-upload.js';
+export { MAX_UPLOAD_BYTES };
 
 export type UploadOutcome = Readonly<{
   file: File;

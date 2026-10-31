@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { MAX_UPLOAD_BYTES } from '../../../shared/contracts/file-upload.js';
   import {
     argumentPickerFor,
     commandQuery,
@@ -34,6 +35,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     oninterruptsend?(): void;
     onretry?(): void;
     oninterrupt(): void;
+    onuploadfiles?(files: File[]): Promise<void>;
   };
   let {
     status,
@@ -55,9 +57,63 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     oninterruptsend = () => {},
     onretry = () => {},
     oninterrupt,
+    onuploadfiles,
   }: Props = $props();
 
   let now = $state(Date.now());
+  let uploading = $state(false);
+  let dragDepth = $state(0);
+  let uploadInput = $state<HTMLInputElement | null>(null);
+
+  function pickFiles(): void {
+    if (uploading || !onuploadfiles) return;
+    actionMenuOpen = false;
+    uploadInput?.click();
+  }
+
+  function filesChosen(event: Event): void {
+    const input = event.currentTarget as HTMLInputElement;
+    const files = Array.from(input.files ?? []);
+    input.value = '';
+    void uploadFiles(files);
+  }
+
+  async function uploadFiles(files: File[]): Promise<void> {
+    if (uploading || !onuploadfiles || files.length === 0) return;
+    uploading = true;
+    try {
+      await onuploadfiles(files);
+    } finally {
+      uploading = false;
+    }
+  }
+
+  function fileDrag(event: DragEvent): boolean {
+    return Boolean(onuploadfiles && event.dataTransfer?.types.includes('Files'));
+  }
+
+  function dragEnter(event: DragEvent): void {
+    if (!fileDrag(event)) return;
+    event.preventDefault();
+    if (!uploading) dragDepth += 1;
+  }
+
+  function dragOver(event: DragEvent): void {
+    if (!fileDrag(event)) return;
+    event.preventDefault();
+    event.dataTransfer!.dropEffect = uploading ? 'none' : 'copy';
+  }
+
+  function dragLeave(event: DragEvent): void {
+    if (fileDrag(event)) dragDepth = Math.max(0, dragDepth - 1);
+  }
+
+  async function dropFiles(event: DragEvent): Promise<void> {
+    if (!fileDrag(event)) return;
+    event.preventDefault();
+    dragDepth = 0;
+    await uploadFiles(Array.from(event.dataTransfer!.files));
+  }
   let readyLabel = $derived.by(() => {
     if (readySince == null) return 'Ready';
     const minutes = Math.floor(Math.max(0, now - readySince) / 60_000);
@@ -92,13 +148,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let modelMenuOpen = $derived(argumentPicker === 'models');
   let sortedModels = $derived(sortModelsNewestFirst(models));
   let reasoningMenuOpen = $derived(argumentPicker === 'reasoning');
-  let sendEnabled = $derived(!activeTurnId && !starting && Boolean(message.trim()));
+  let sendEnabled = $derived(!activeTurnId && !starting && !uploading && Boolean(message.trim()));
   let hasPrompt = $derived(Boolean(message.trim()));
   let retryFromPrompt = $derived(retryable && !retryMessage);
 
-  function chooseActiveAction(action: 'queue' | 'interrupt-send'): void {
+  function chooseActiveAction(action: 'queue' | 'interrupt-send' | 'interrupt'): void {
+    if (starting || uploading) return;
     actionMenuOpen = false;
     if (action === 'queue') onqueue();
+    else if (action === 'interrupt') oninterrupt();
     else oninterruptsend();
   }
 
@@ -154,7 +212,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 </script>
 
-<form aria-busy={starting}>
+<form
+  aria-busy={starting || uploading}
+  class:drag-over={dragDepth > 0}
+  ondragenter={dragEnter}
+  ondragover={dragOver}
+  ondragleave={dragLeave}
+  ondrop={dropFiles}
+>
   <p
     role="status"
     aria-live="polite"
@@ -167,6 +232,26 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {status}
     {/if}
   </p>
+  {#if onuploadfiles}
+    <input
+      bind:this={uploadInput}
+      type="file"
+      multiple
+      hidden
+      aria-label="Choose files to upload"
+      disabled={uploading}
+      onchange={filesChosen}
+    />
+    <p class="upload-hint" aria-live="polite" aria-atomic="true">
+      {#if uploading}
+        Uploading files to workspace root…
+      {:else if dragDepth > 0}
+        Drop files to upload to workspace root · {MAX_UPLOAD_BYTES / 1024 / 1024} MiB per file
+      {:else}
+        Upload or drop files · {MAX_UPLOAD_BYTES / 1024 / 1024} MiB per file
+      {/if}
+    </p>
+  {/if}
   {#if detached}
     <p id="writer-hint" class="writer-hint">
       You can read this conversation. Sending will connect to {provider === 'kimi'
@@ -178,7 +263,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <div class="writer-feedback" role="alert" aria-atomic="true">
       <p>{retryMessage}</p>
       {#if retryable}
-        <button type="button" disabled={starting} onclick={onretry}>Retry send</button>
+        <button type="button" disabled={starting || uploading} onclick={onretry}>Retry send</button>
       {/if}
     </div>
   {/if}
@@ -232,11 +317,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       onkeydown={keydown}
       rows="1"
       required></textarea>
-    {#if activeTurnId && hasPrompt}
+    {#if activeTurnId}
       <div class="prompt-action">
         <button
           type="button"
           aria-label="Choose prompt action"
+          disabled={starting || uploading}
           aria-expanded={actionMenuOpen}
           aria-controls="prompt-action-panel"
           onclick={() => (actionMenuOpen = !actionMenuOpen)}
@@ -249,17 +335,40 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         </button>
         {#if actionMenuOpen}
           <div id="prompt-action-panel" class="action-panel" aria-label="Prompt actions">
-            <button type="button" onclick={() => chooseActiveAction('queue')}>Queue message</button>
-            <button type="button" onclick={() => chooseActiveAction('interrupt-send')}
-              >Interrupt and send</button
-            >
+            {#if onuploadfiles}
+              <button type="button" disabled={uploading} onclick={pickFiles}>Upload files</button>
+            {/if}
+            {#if hasPrompt}
+              <button
+                type="button"
+                disabled={starting || uploading}
+                onclick={() => chooseActiveAction('queue')}>Queue message</button
+              >
+              <button
+                type="button"
+                disabled={starting || uploading}
+                onclick={() => chooseActiveAction('interrupt-send')}>Interrupt and send</button
+              >
+            {:else}
+              <button
+                type="button"
+                disabled={starting || uploading}
+                onclick={() => chooseActiveAction('interrupt')}>Interrupt</button
+              >
+            {/if}
           </div>
         {/if}
       </div>
-    {:else if activeTurnId}
-      <button type="button" aria-label="Interrupt" disabled={starting} onclick={oninterrupt}>
+    {:else if !hasPrompt && onuploadfiles}
+      <button
+        type="button"
+        aria-label="Upload files"
+        title="Upload files"
+        disabled={uploading}
+        onclick={pickFiles}
+      >
         <svg aria-hidden="true" viewBox="0 0 24 24">
-          <path d="m7 7 10 10M17 7 7 17" />
+          <path d="M12 16V4m-4 4 4-4 4 4M4 16v4h16v-4" />
         </svg>
       </button>
     {:else}
@@ -278,6 +387,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </form>
 
 <style>
+  form.drag-over {
+    outline: 2px dashed var(--theme-focus);
+    outline-offset: -2px;
+  }
+  .upload-hint {
+    margin-block: 0.35rem;
+    color: var(--theme-text-muted);
+    font-size: 0.85em;
+  }
   form > [role='status'] {
     margin-block: 1rem 0.35rem;
     text-align: start;
@@ -390,7 +508,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     display: grid;
     gap: 0.125rem;
     min-inline-size: max-content;
-    inset-block-end: calc(100% + 0.35rem);
+    inset-block-start: calc(100% + 0.35rem);
     inset-inline-end: 0;
     padding: 0.25rem;
     background: var(--theme-surface);

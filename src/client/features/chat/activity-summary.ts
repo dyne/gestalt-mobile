@@ -18,6 +18,17 @@ export type HistoryActivity = {
   mcpStartup?: McpStartupStatus;
 };
 
+/** Runtime health belongs in diagnostics and failure notifications, outside the conversation. */
+export function isServiceStatusActivity(activity: HistoryActivity): boolean {
+  return (
+    activity.mcpStartup !== undefined ||
+    activity.id.startsWith('mcp-startup:') ||
+    activity.id === 'gestalt-serena-availability' ||
+    activity.id === 'gestalt-xerj-availability' ||
+    activity.id.startsWith('gestalt-retrieval-')
+  );
+}
+
 function fileChangeSummaries(value: unknown): FileChangeSummary[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((change) => {

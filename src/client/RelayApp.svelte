@@ -44,6 +44,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { reconciliationRecoveryMessage } from '../shared/contracts/autopilot-recovery.js';
   import { createAttentionToastDedupe } from './features/autopilot/attention-toast-dedupe.js';
   import Composer from './features/chat/Composer.svelte';
+  import { initialiseUploads } from './features/files/upload-state.js';
   import MessageList from './features/chat/MessageList.svelte';
   import type { XerjStatus } from '../shared/contracts/xerj-status.js';
   import type { SessionRetrievalReadiness } from '../shared/contracts/retrieval-readiness.js';
@@ -66,7 +67,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     browserNotificationHistoryStorage,
     createToastQueue,
   } from './features/feedback/toast-queue.js';
-  import { serenaAvailabilityFeedback } from './features/feedback/serena-feedback.js';
+  import { serviceAvailabilityFeedback } from './features/feedback/service-availability-feedback.js';
   import { createMcpStartupFeedback } from './features/feedback/mcp-startup-feedback.js';
   import ToastEvidence from './features/feedback/ToastEvidence.svelte';
   import ToastViewport from './features/feedback/ToastViewport.svelte';
@@ -461,13 +462,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onRelayEvent: (event) => {
       if (sessionId) activityController.observe(sessionId, event);
       if (sessionId) mcpStartupFeedback(sessionId, event);
-      const structuredSerenaFailure = chatView?.activities.some(
+      const availabilityId = (event.payload as { id?: unknown } | null)?.id;
+      const serviceName =
+        availabilityId === 'gestalt-serena-availability'
+          ? 'gestalt-serena'
+          : availabilityId === 'gestalt-xerj-availability'
+            ? 'gestalt-xerj'
+            : null;
+      const structuredServiceFailure = chatView?.activities.some(
         (activity) =>
-          activity.mcpStartup?.serverName === 'gestalt-serena' &&
+          activity.mcpStartup?.serverName === serviceName &&
           activity.mcpStartup.threadId === null &&
           activity.mcpStartup.failure,
       );
-      const feedback = structuredSerenaFailure ? null : serenaAvailabilityFeedback(event);
+      const feedback = structuredServiceFailure ? null : serviceAvailabilityFeedback(event);
       if (feedback) toastQueue.enqueue(feedback);
       if (
         event.type === 'activity.updated' &&
@@ -1151,6 +1159,40 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   async function interruptTurn() {
     await chatController.interrupt();
+  }
+
+  async function uploadChatFiles(files: File[]): Promise<void> {
+    const workspaceId = selectedSession?.workspaceId;
+    if (!workspaceId) {
+      toastQueue.enqueue({
+        kind: 'error',
+        message: 'Select a session workspace before uploading.',
+      });
+      return;
+    }
+    for (const outcome of initialiseUploads(files)) {
+      if (outcome.status === 'too-large') {
+        toastQueue.enqueue({
+          kind: 'error',
+          message: `${outcome.file.name} exceeds the 100 MiB file limit.`,
+        });
+        continue;
+      }
+      try {
+        const result = await relay.uploadWorkspaceFile(
+          workspaceId,
+          { directory: '', filename: outcome.file.name, conflict: 'keep-both', file: outcome.file },
+          createIdempotencyKey(),
+        );
+        toastQueue.enqueue({
+          kind: 'success',
+          message: `Uploaded ${result.path} to workspace root.`,
+        });
+        scheduleFileBrowserGitRefresh();
+      } catch (error) {
+        reportRelayError(error, 'WORKSPACE_FILES_UPLOAD_FAILED');
+      }
+    }
   }
 
   function reconcileVisibleHistory(): void {
@@ -1973,6 +2015,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                   oninterruptsend={() => void interruptAndSendMessage()}
                   onretry={() => void retrySend()}
                   oninterrupt={() => void interruptTurn()}
+                  onuploadfiles={uploadChatFiles}
                 />
                 {#if hasAssignedOrgPlan(selectedSession)}
                   <div class="chat-controls" aria-label="Chat controls">
