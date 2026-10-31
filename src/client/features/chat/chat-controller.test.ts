@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ChatController, decodeChatSnapshot, type ChatViewState } from './chat-controller.js';
 import { efficiencyFixture } from '../../../shared/contracts/tool-efficiency.test-fixture.js';
+import { AgentActivityController } from '../agent-activity/agent-activity-controller.js';
 
 class Socket {
   onopen: (() => void) | null = null;
@@ -95,6 +96,176 @@ const environment = () => ({
   window: { addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as Window,
 });
 describe('ChatController', () => {
+  it.each([null, 'turn'])(
+    'keeps normal background refreshes quiet with active turn %j',
+    async (activeTurnId) => {
+      const initial = deferred<unknown>();
+      const refresh = deferred<unknown>();
+      const history = { baseSequence: 0, items: [], turns: [], interactions: [], activeTurnId };
+      const getHistory = vi
+        .fn()
+        .mockReturnValueOnce(initial.promise)
+        .mockReturnValueOnce(refresh.promise);
+      const controller = new ChatController({
+        ...environment(),
+        relay: {
+          getHistory,
+          startTurn: vi.fn(),
+          interruptTurn: vi.fn(),
+          respondInteraction: vi.fn(),
+        },
+        publish: vi.fn(),
+        websocket: () => new Socket() as unknown as WebSocket,
+      });
+      try {
+        controller.select('s');
+        expect(controller.view.status).toBe('Loading conversation…');
+        initial.resolve(history);
+        await vi.waitFor(() => expect(controller.view.snapshotting).toBe(false));
+        const status = controller.view.status;
+        controller.refresh();
+        expect(controller.view.snapshotting).toBe(true);
+        expect(controller.view.status).toBe(status);
+        refresh.resolve(history);
+        await vi.waitFor(() => expect(controller.view.snapshotting).toBe(false));
+        expect(controller.view.status).toBe(status);
+      } finally {
+        initial.resolve(history);
+        refresh.resolve(history);
+        controller.dispose();
+      }
+    },
+  );
+
+  it('consumes supervision journal events without creating gaps in chat or the agent overview', async () => {
+    const activity = {
+      sessionId: 's',
+      root: {
+        state: 'idle' as const,
+        observedAt: '2026-10-31T12:00:00Z',
+        lastActivityAt: '2026-10-31T12:00:00Z',
+      },
+      subagents: [],
+      aggregateSubagents: 'idle' as const,
+      confidence: 'fresh' as const,
+    };
+    const refreshActivity = vi.fn().mockResolvedValue(undefined);
+    const confidence: string[] = [];
+    const activityController = new AgentActivityController({
+      relay: {
+        getSession: async () => ({ agentActivity: activity, currentSequence: 0 }),
+        refreshActivity,
+      },
+      publish: (snapshots) => {
+        const state = snapshots.get('s');
+        if (state) confidence.push(state.confidence);
+      },
+      location: environment().location,
+    });
+    activityController.bootstrap([{ id: 's', agentActivity: activity }], 's');
+    const socket = new Socket();
+    const getHistory = vi.fn().mockResolvedValue({
+      baseSequence: 0,
+      items: [],
+      turns: [],
+      interactions: [],
+      activeTurnId: 'turn',
+    });
+    const statuses: string[] = [];
+    const controller = new ChatController({
+      ...environment(),
+      relay: {
+        getHistory,
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      publish: (view) => statuses.push(view.status),
+      websocket: () => socket as unknown as WebSocket,
+      onRelayEvent: (event) => activityController.observe('s', event),
+    });
+    try {
+      controller.select('s');
+      await vi.waitFor(() => expect(controller.view.status).toBe('Codex is working…'));
+      statuses.length = 0;
+      socket.emit({
+        type: 'relay.event',
+        event: { sequence: 1, type: 'autopilot.wait-registered', payload: { waitId: 'wait' } },
+      });
+      socket.emit({
+        type: 'relay.event',
+        event: { sequence: 2, type: 'org-plan.step-checkpointed', payload: { stepId: 'step' } },
+      });
+      socket.emit({
+        type: 'relay.event',
+        event: { sequence: 3, type: 'agent.activity.updated', payload: activity },
+      });
+      expect(controller.view.cursor).toBe(3);
+      expect(controller.view.snapshotting).toBe(false);
+      expect(getHistory).toHaveBeenCalledOnce();
+      expect(refreshActivity).not.toHaveBeenCalled();
+      expect(statuses.every((status) => status === 'Codex is working…')).toBe(true);
+      expect(confidence).not.toContain('reconciling');
+    } finally {
+      controller.dispose();
+      activityController.dispose();
+    }
+  });
+
+  it('reports real socket loss immediately and keeps it visible through offline history reads', async () => {
+    const sockets: Socket[] = [];
+    const timers: Array<() => void> = [];
+    const pending = deferred<unknown>();
+    const snapshot = {
+      baseSequence: 0,
+      items: [],
+      turns: [],
+      interactions: [],
+      activeTurnId: 'turn',
+    };
+    const getHistory = vi.fn().mockResolvedValue(snapshot);
+    const controller = new ChatController({
+      ...environment(),
+      relay: {
+        getHistory,
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: () => {
+        const socket = new Socket();
+        sockets.push(socket);
+        return socket as unknown as WebSocket;
+      },
+      setTimeout: (callback) => {
+        timers.push(callback);
+        return timers.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: vi.fn(),
+    });
+    try {
+      controller.select('s');
+      await vi.waitFor(() => expect(controller.view.status).toBe('Codex is working…'));
+      sockets[0]!.onclose?.();
+      expect(controller.view.status).toBe('Connection interrupted. Reconnecting…');
+      getHistory.mockReturnValueOnce(pending.promise);
+      controller.refresh();
+      pending.resolve(snapshot);
+      await vi.waitFor(() => expect(controller.view.snapshotting).toBe(false));
+      expect(controller.view.status).toBe('Connection interrupted. Reconnecting…');
+      timers.at(-1)!();
+      sockets[1]!.onopen?.();
+      await vi.waitFor(() => expect(controller.view.status).toBe('Codex is working…'));
+      sockets[1]!.onclose?.();
+      controller.select('other', { history: 'empty' });
+      expect(controller.view.status).toBe('Ready.');
+    } finally {
+      pending.resolve(snapshot);
+      controller.dispose();
+    }
+  });
+
   it('forwards validated efficiency replacement events for the selected session only', async () => {
     const socket = new Socket();
     const forwarded: unknown[] = [];
@@ -1707,42 +1878,52 @@ describe('ChatController', () => {
     ]);
     controller.dispose();
   });
-  it('recovers from a websocket factory throw without an unhandled rejection', async () => {
-    const env = environment();
-    const timers: Array<() => void> = [];
-    let calls = 0;
-    const controller = new ChatController({
-      ...env,
-      relay: {
-        getHistory: vi.fn().mockResolvedValue({
-          baseSequence: 0,
-          items: [],
-          turns: [],
-          interactions: [],
-          activeTurnId: null,
-        }),
-        startTurn: vi.fn(),
-        interruptTurn: vi.fn(),
-        respondInteraction: vi.fn(),
-      },
-      publish: vi.fn(),
-      websocket: () => {
-        if (calls++ === 0) throw new Error('open');
-        return new Socket() as unknown as WebSocket;
-      },
-      setTimeout: (fn) => {
-        timers.push(fn);
-        return timers.length as unknown as ReturnType<typeof setTimeout>;
-      },
-      clearTimeout: vi.fn(),
-    });
-    controller.select('s');
-    await Promise.resolve();
-    expect(timers).toHaveLength(1);
-    timers[0]?.();
-    expect(calls).toBe(2);
-    controller.dispose();
-  });
+  it.each(['hydrate', 'empty'] as const)(
+    'recovers from a websocket factory throw with %s history',
+    async (history) => {
+      const env = environment();
+      const timers: Array<() => void> = [];
+      const socket = new Socket();
+      let calls = 0;
+      const controller = new ChatController({
+        ...env,
+        relay: {
+          getHistory: vi.fn().mockResolvedValue({
+            baseSequence: 0,
+            items: [],
+            turns: [],
+            interactions: [],
+            activeTurnId: null,
+          }),
+          startTurn: vi.fn(),
+          interruptTurn: vi.fn(),
+          respondInteraction: vi.fn(),
+        },
+        publish: vi.fn(),
+        websocket: () => {
+          if (calls++ === 0) throw new Error('open');
+          return socket as unknown as WebSocket;
+        },
+        setTimeout: (fn) => {
+          timers.push(fn);
+          return timers.length as unknown as ReturnType<typeof setTimeout>;
+        },
+        clearTimeout: vi.fn(),
+      });
+      try {
+        controller.select('s', history === 'empty' ? { history: 'empty' } : {});
+        await Promise.resolve();
+        expect(controller.view.status).toBe('Connection interrupted. Reconnecting…');
+        expect(timers).toHaveLength(1);
+        timers[0]?.();
+        expect(calls).toBe(2);
+        socket.onopen?.();
+        await vi.waitFor(() => expect(controller.view.status).toBe('Ready.'));
+      } finally {
+        controller.dispose();
+      }
+    },
+  );
   it('retries hydrated safe approval but requires quiz re-entry', async () => {
     const env = environment();
     const reply = vi.fn().mockResolvedValue(undefined);

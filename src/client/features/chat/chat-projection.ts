@@ -930,8 +930,7 @@ export function replayBuffered(current: ChatProjection): ChatProjection {
 }
 export function deriveStatus(projection: ChatProjection): string {
   if (!projection.sessionId) return 'Choose a workspace and start a session.';
-  if (projection.snapshotting || projection.lifecycle === 'recoverable')
-    return 'Connection interrupted. Reconnecting…';
+  if (projection.lifecycle === 'recoverable') return 'Connection interrupted. Reconnecting…';
   if (projection.lifecycle === 'starting') return 'Starting Codex turn…';
   if (projection.lifecycle === 'working') return 'Codex is working…';
   if (projection.lifecycle === 'interrupted') return 'Codex turn interrupted.';

@@ -41,6 +41,13 @@ const snapshot = (baseSequence = 1) => ({
   ],
 });
 describe('chat projection', () => {
+  it.each([null, 'turn'])(
+    'does not report a connection failure for a history refresh with turn %j',
+    (activeTurnId) => {
+      const current = acceptSnapshot(createChatProjection('s'), { ...snapshot(), activeTurnId });
+      expect(deriveStatus(beginSnapshot(current))).toBe(deriveStatus(current));
+    },
+  );
   it('retains authoritative resolution time through live events, cache and history refresh', () => {
     let projection = acceptSnapshot(createChatProjection('s'), snapshot());
     projection = resolveInteraction(projection, 'r1', 'approved', 3000);
