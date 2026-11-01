@@ -510,6 +510,7 @@ export function acceptSnapshot(current: ChatProjection, snapshot: ChatSnapshot):
       if (prior?.state === 'resolved')
         return {
           ...prior,
+          ...(next.occurredAt !== undefined ? { occurredAt: next.occurredAt } : {}),
           ...(next.resolvedAt !== undefined ? { resolvedAt: next.resolvedAt } : {}),
         };
       return {

@@ -52,6 +52,8 @@ export function createChatCache(
 ): ChatCache {
   if (!database) return { read: async () => null, write: async () => {} };
   const open = openClientDatabase(database);
+  // Opening is eager; storage denial must stay handled even before the first cache operation.
+  void open.catch(() => {});
   return {
     read: async (sessionId) => {
       try {

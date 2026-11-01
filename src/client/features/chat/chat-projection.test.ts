@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { describe, expect, it } from 'vitest';
+import { serializeChatCache } from './chat-cache.js';
 import {
   acceptSnapshot,
   applyProjectionEvent,
@@ -41,6 +42,46 @@ const snapshot = (baseSequence = 1) => ({
   ],
 });
 describe('chat projection', () => {
+  it('restores authoritative interaction timing while preserving a cached resolved operation', () => {
+    const cached = hydrateCache(
+      's',
+      serializeChatCache({
+        ...createChatProjection('s'),
+        interactions: [
+          {
+            requestId: 'quiz',
+            key: 'interaction:quiz',
+            kind: 'quiz',
+            payload: {},
+            state: 'resolved',
+            operationId: 'operation-1',
+            attemptedOutcome: 'answered',
+          },
+        ],
+      }),
+    );
+    expect(cached.interactions[0]?.occurredAt).toBeUndefined();
+    const restored = acceptSnapshot(cached, {
+      ...snapshot(0),
+      interactions: [
+        {
+          requestId: 'quiz',
+          kind: 'quiz',
+          turnId: null,
+          requestedAt: '2026-10-24T08:00:00Z',
+          resolvedAt: '2026-10-24T09:00:00Z',
+          outcome: 'answered',
+        },
+      ],
+    });
+    expect(restored.interactions[0]).toMatchObject({
+      occurredAt: Date.parse('2026-10-24T08:00:00Z'),
+      resolvedAt: Date.parse('2026-10-24T09:00:00Z'),
+      state: 'resolved',
+      operationId: 'operation-1',
+      attemptedOutcome: 'answered',
+    });
+  });
   it.each([null, 'turn'])(
     'does not report a connection failure for a history refresh with turn %j',
     (activeTurnId) => {
