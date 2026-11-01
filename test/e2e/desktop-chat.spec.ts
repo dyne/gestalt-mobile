@@ -8,7 +8,7 @@ import { expect, test, type Page } from '@playwright/test';
 import type { SupervisedPlan } from '../../src/client/features/plans/contracts.js';
 import { THEME_STORAGE_KEY } from '../../src/client/features/theme/theme-registry.js';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
-import { ChatRelayFixture } from './chat-relay-fixture.js';
+import { ChatRelayFixture, deferred } from './chat-relay-fixture.js';
 import { chatSnapshot } from './chat-snapshot-fixture.js';
 import { expectNoHorizontalOverflow } from './theme-evidence.js';
 
@@ -111,6 +111,165 @@ async function install(page: Page) {
     }),
   );
   return { fixture, plans };
+}
+
+test('a slow skills catalog cannot hide open sessions or overwrite a newly created session', async ({
+  page,
+}) => {
+  const { fixture } = await install(page);
+  const profiles = deferred<void>();
+  let profilesRequested = false;
+  await page.route('**/api/skill-profiles', async (route) => {
+    profilesRequested = true;
+    await profiles.promise;
+    await route.fulfill({ json: { profiles: [] } });
+  });
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      json: {
+        workspaces: [
+          {
+            id: 'root',
+            name: 'workspace',
+            relativePath: '.',
+            isGitRepository: false,
+            children: [],
+          },
+        ],
+        profiles: [],
+        sessions: fixture.sessions,
+      },
+    }),
+  );
+  const created = {
+    ...fixture.sessions[0],
+    id: 'created',
+    threadId: 'created',
+    workspacePath: '/workspace/created',
+  };
+  fixture.snapshot('created', chatSnapshot());
+  await page.route('**/api/sessions', async (route) => {
+    if (route.request().method() === 'POST') {
+      fixture.sessions.push(created);
+      return route.fulfill({ status: 201, json: created });
+    }
+    return route.fulfill({ json: fixture.sessions });
+  });
+  try {
+    await page.goto('/');
+    await expect.poll(() => profilesRequested).toBe(true);
+    await expect(page.getByRole('list', { name: 'Open sessions' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Chat', exact: true })).toBeEnabled();
+    await page.getByRole('button', { name: 'Create session', exact: true }).click();
+    await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
+    profiles.resolve();
+    await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+    await expect(page.getByRole('list', { name: 'Open sessions' })).toContainText(
+      '/workspace/created',
+    );
+    await expect(page.locator('.current-session')).toContainText('/workspace/created');
+  } finally {
+    profiles.resolve();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+});
+
+test('a delayed bootstrap cannot replace a refreshed roster or the selected chat', async ({
+  page,
+}) => {
+  const { fixture } = await install(page);
+  const bootstrap = deferred<void>();
+  const originalSessions = fixture.sessions.slice();
+  let bootstrapRequested = false;
+  await page.route('**/api/bootstrap', async (route) => {
+    bootstrapRequested = true;
+    await bootstrap.promise;
+    await route.fulfill({ json: { workspaces: [], profiles: [], sessions: originalSessions } });
+  });
+  fixture.sessions.push({
+    ...fixture.sessions[0],
+    id: 'external',
+    workspacePath: '/workspace/external',
+  });
+  try {
+    await page.goto('/');
+    await expect.poll(() => bootstrapRequested).toBe(true);
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    const roster = page.getByRole('list', { name: 'Open sessions' });
+    await expect(roster).toContainText('/workspace/external');
+    await roster
+      .locator('.managed-session')
+      .filter({ hasText: '/workspace/beta' })
+      .getByRole('button', { name: 'Open', exact: true })
+      .click();
+    await expect(page.getByText('beta conversation', { exact: true })).toBeVisible();
+    const initialized = page.waitForResponse('**/api/sessions/recent-threads');
+    bootstrap.resolve();
+    await initialized;
+    await expect(page.getByText('beta conversation', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+    await expect(roster).toContainText('/workspace/external');
+    await expect(page.locator('.current-session')).toContainText('/workspace/beta');
+  } finally {
+    bootstrap.resolve();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+});
+
+test('a failed refresh cannot discard a successful bootstrap roster', async ({ page }) => {
+  await install(page);
+  const bootstrap = deferred<void>();
+  let bootstrapRequested = false;
+  await page.route('**/api/bootstrap', async (route) => {
+    bootstrapRequested = true;
+    await bootstrap.promise;
+    await route.fallback();
+  });
+  await page.route('**/api/sessions', (route) => route.fulfill({ status: 503, json: {} }));
+  try {
+    await page.goto('/');
+    await expect.poll(() => bootstrapRequested).toBe(true);
+    const failedRefresh = page.waitForResponse('**/api/sessions');
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    expect((await failedRefresh).status()).toBe(503);
+    const initialized = page.waitForResponse('**/api/sessions/recent-threads');
+    bootstrap.resolve();
+    await initialized;
+    await expect(page.getByRole('list', { name: 'Open sessions' })).toContainText(
+      '/workspace/beta',
+    );
+    await expect(page.getByRole('button', { name: 'Chat', exact: true })).toBeEnabled();
+  } finally {
+    bootstrap.resolve();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+});
+
+for (const width of [390, 1440]) {
+  test(`Sessions keeps open sessions visible after returning from Chat at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await install(page);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await page.goto('/');
+    const roster = page.getByRole('list', { name: 'Open sessions' });
+    await expect(roster).toBeVisible();
+    await expect(roster.locator('li.managed-session')).toHaveCount(2);
+    for (const id of ['beta', 'alpha', 'beta']) {
+      await roster
+        .locator('.managed-session')
+        .filter({ hasText: `/workspace/${id}` })
+        .getByRole('button', { name: 'Open', exact: true })
+        .click();
+      await expect(page.getByText(`${id} conversation`, { exact: true })).toBeVisible();
+      await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+      await expect(roster).toBeVisible();
+      await expect(roster.locator('li.managed-session')).toHaveCount(2);
+    }
+    expect(errors).toEqual([]);
+  });
 }
 
 for (const { width, scale, theme } of [
