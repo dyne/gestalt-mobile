@@ -102,16 +102,8 @@ import {
   resolvedServerRequestId,
   toPendingInteraction,
 } from './platform/codex/server-request.js';
-import {
-  parseOrgPlanCheckpoint,
-  toOrgPlanCheckpointToolResponse,
-  type OrgPlanCheckpointRecordStatus,
-} from '../shared/contracts/org-plan-checkpoint.js';
-import {
-  hasActiveL1Writer,
-  resolveOrgPlanCheckpointSignal,
-  validateOrgPlanCheckpoint,
-} from './features/org-plan-checkpoint/application/validate.js';
+import { toOrgPlanCheckpointToolResponse } from '../shared/contracts/org-plan-checkpoint.js';
+import { CheckpointCoordination } from './features/org-plan-checkpoint/application/coordinate.js';
 import {
   isValidInteractionResponse,
   isValidQuizInteractionResponse,
@@ -156,7 +148,6 @@ import type { SafeInteractionOutcome } from '../shared/contracts/chat-snapshot.j
 import type { OrgPlanAttention } from '../shared/contracts/org-plan-attention.js';
 import {
   parseOrgPlanAttention,
-  parseOrgPlanAttentionToolResponse,
   toOrgPlanAttentionAcknowledgement,
 } from '../shared/contracts/org-plan-attention.js';
 import {
@@ -176,6 +167,8 @@ import { ExecutorModelEvidenceReader } from './features/plans/application/execut
 import { ExecutorLaunchValidationReader } from './features/plans/application/executor-launch-validation.js';
 import { requireModelPolicyAdmission } from './features/plans/domain/model-policy-admission.js';
 import { currentExecutableL1Index } from './features/plans/domain/supervised-plan.js';
+import { AttentionResolution } from './features/org-plan-attention/application/resolve.js';
+import { AttentionAcknowledgement } from './features/org-plan-attention/application/acknowledgement.js';
 import type { OrgPlanAttentionTransitions } from './features/org-plan-attention/application/ports.js';
 import type { ComponentVersion } from '../shared/contracts/component-version.js';
 import type { LlmProvider, ProviderAvailability } from '../shared/contracts/llm-provider.js';
@@ -294,32 +287,6 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const idempotency = new SqliteIdempotencyStore(database);
   const autopilotStore = new SqliteAutopilotStore(database);
   const takeoverStore = new SqliteSupervisionTakeoverStore(database, autopilotStore);
-  const attentionResolutionOperations = new Map<
-    string,
-    Promise<
-      | { kind: 'accepted'; resolvedAt: string }
-      | { kind: 'replayed'; resolvedAt: string }
-      | {
-          kind:
-            | 'noActive'
-            | 'staleOperation'
-            | 'writerUnavailable'
-            | 'writerCleared'
-            | 'legacyUnsupported'
-            | 'replacementRejected';
-          resolvedAt?: string;
-        }
-    >
-  >();
-  const checkpointHandoffTimers = new Map<
-    string,
-    { handle: ReturnType<typeof setTimeout>; token: symbol }
-  >();
-  const attentionAcknowledgementTimers = new Map<
-    string,
-    { handle: ReturnType<typeof setTimeout>; token: symbol }
-  >();
-  const checkpointHandoffRecoveries = new Set<string>();
   const supervisedPlans = new SupervisedPlanRegistry();
   const supervisorOwnership = (sessionId: string): 'owned' | 'replaced' | 'transferring' => {
     const identity =
@@ -952,110 +919,85 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         publishInteractionResolved(sessionId, interaction.requestId, occurredAt, outcome);
     }
   };
-  const checkpointTimerKey = (sessionId: string, requestId: string) => `${sessionId}:${requestId}`;
-  const cancelCheckpointHandoffTimer = (sessionId: string, requestId: string) => {
-    const key = checkpointTimerKey(sessionId, requestId);
-    const timer = checkpointHandoffTimers.get(key);
-    if (!timer) return;
-    clearTimeout(timer.handle);
-    checkpointHandoffTimers.delete(key);
-  };
-  /** Fail a held checkpoint exactly once and retain its durable root boundary. */
-  const failCheckpointHandoff = (sessionId: string, requestId: string, turnId: string | null) => {
-    cancelCheckpointHandoffTimer(sessionId, requestId);
-    const occurredAt = new Date().toISOString();
-    if (!interactions.resolve(sessionId, requestId, occurredAt, 'failed')) return false;
-    autopilot.checkpointHandoffFailed(sessionId, turnId);
-    events.publish(
-      journal.append(
-        sessionId,
-        'org-plan.checkpoint-handoff-failed',
-        {
-          requestId,
-          reason: 'checkpointHandoffFailed',
-          ...(autopilotStore.find(sessionId)?.checkpoints?.activeHandoffId
-            ? { traceId: autopilotStore.find(sessionId)!.checkpoints!.activeHandoffId }
-            : {}),
-        },
-        occurredAt,
-      ),
-    );
-    publishAttentionSettlement(sessionId, requestId, occurredAt, 'failed');
-    // Neither this timeout nor a failed transport may schedule continuation.
-    // If a successful response is already blocked in the writable stream, drop
-    // its local ownership so any late write cannot be mistaken for an ack.
-    const rejected = runtime?.rejectServerRequest(
-      sessionId,
-      requestId,
-      new Error('CHECKPOINT_HANDOFF_FAILED'),
-    );
-    if (rejected === false) {
-      const recoveryKey = checkpointTimerKey(sessionId, requestId);
-      const ownedRuntime = runtime;
-      const session = sessions.find(sessionId);
-      if (
-        ownedRuntime &&
-        session?.activeTurnId === turnId &&
-        !checkpointHandoffRecoveries.has(recoveryKey)
-      ) {
-        checkpointHandoffRecoveries.add(recoveryKey);
-        void (async () => {
-          try {
-            // Recycle only the session-local writer.  Its close cancels the
-            // blocked output, and only successful reconstruction releases the
-            // durable checkpoint through the runtime-recovery boundary.
-            if (runtime !== ownedRuntime || sessions.find(sessionId)?.activeTurnId !== turnId)
-              return;
-            const rebuilt = await ownedRuntime.recycle(session, new Date().toISOString());
-            if (runtime !== ownedRuntime) return;
-            const recovered =
-              turnId && rebuilt.activeTurnId === turnId
-                ? RelaySession.rehydrate(rebuilt).completeTurn(turnId, new Date().toISOString())
-                    .snapshot
-                : rebuilt;
-            saveSession(recovered);
-            activity.observe({
-              sessionId,
-              occurredAt: new Date().toISOString(),
-              kind: 'turnCompleted',
-            });
-            autopilot.recoverCheckpointHandoff(sessionId);
-          } catch {
-            // The durable failure remains visible; a later normal recovery can retry.
-          } finally {
-            checkpointHandoffRecoveries.delete(recoveryKey);
-          }
-        })();
-      }
-    }
-    return true;
-  };
-  const armCheckpointHandoffDeadline = (sessionId: string, requestId: string, turnId: string) => {
-    cancelCheckpointHandoffTimer(sessionId, requestId);
-    const key = checkpointTimerKey(sessionId, requestId);
-    const token = Symbol(key);
-    const handle = setTimeout(() => {
-      if (checkpointHandoffTimers.get(key)?.token !== token) return;
-      checkpointHandoffTimers.delete(key);
-      failCheckpointHandoff(sessionId, requestId, turnId);
-    }, options.checkpointHandoffDeadlineMs ?? 5_000);
-    handle.unref?.();
-    checkpointHandoffTimers.set(key, { handle, token });
-  };
-  const cancelAttentionAcknowledgementTimer = (sessionId: string, requestId: string) => {
-    const key = checkpointTimerKey(sessionId, requestId);
-    const timer = attentionAcknowledgementTimers.get(key);
-    if (!timer) return;
-    clearTimeout(timer.handle);
-    attentionAcknowledgementTimers.delete(key);
-  };
-  const armAttentionAcknowledgementDeadline = (sessionId: string, requestId: string) => {
-    cancelAttentionAcknowledgementTimer(sessionId, requestId);
-    const key = checkpointTimerKey(sessionId, requestId);
-    const token = Symbol(key);
-    const handle = setTimeout(() => {
-      if (attentionAcknowledgementTimers.get(key)?.token !== token) return;
-      attentionAcknowledgementTimers.delete(key);
+  const checkpoints = new CheckpointCoordination({
+    plans: {
+      refresh: async (id) => (await planStatusSource.refresh(id))?.kind === 'updated',
+      find: (id) => supervisedPlans.find(id),
+      identity: (id) => supervisedPlans.identity(id),
+      publicationReason: (id) => supervisedPlans.publicationReason(id),
+      completedTargets: (id) =>
+        autopilotStore
+          .find(id)
+          ?.checkpoints?.completionEpochs?.filter((epoch) => epoch.completed && !epoch.reopened)
+          .map((epoch) => epoch.target),
+      pendingTarget: (id) => autopilotStore.find(id)?.checkpoints?.pendingTarget,
+    },
+    activity: (id) => activity.snapshot(id, new Date().toISOString()),
+    pending: {
+      add: (id, interaction) => interactions.add(id, interaction),
+      find: (id, requestId) => interactions.find(id, requestId),
+      list: (id) => interactions.list(id),
+      resolve: (id, requestId, at, outcome) => interactions.resolve(id, requestId, at, outcome),
+    },
+    autopilot: {
+      accept: (id, checkpoint, turnId, at) =>
+        autopilot.checkpointAccepted(id, checkpoint, turnId, at),
+      failed: (id, turnId) => autopilot.checkpointHandoffFailed(id, turnId),
+      recover: (id) => autopilot.recoverCheckpointHandoff(id),
+    },
+    writer: {
+      resolve: (id, requestId, response) =>
+        runtime?.resolveServerRequest(id, requestId, response) === true,
+      reject: (id, requestId, error) => runtime?.rejectServerRequest(id, requestId, error),
+      recovery: (id) => {
+        const ownedRuntime = runtime;
+        const session = sessions.find(id);
+        if (!ownedRuntime || !session) return null;
+        return {
+          activeTurnId: session.activeTurnId,
+          current: () => runtime === ownedRuntime,
+          recycle: (at) => ownedRuntime.recycle(session, at),
+        };
+      },
+    },
+    currentTurn: (id) => sessions.find(id)?.activeTurnId,
+    saveSession: (session) => saveSession(session),
+    turnCompleted: (sessionId, occurredAt) =>
+      activity.observe({ sessionId, occurredAt, kind: 'turnCompleted' }),
+    publishFailure: (sessionId, requestId, occurredAt) => {
+      events.publish(
+        journal.append(
+          sessionId,
+          'org-plan.checkpoint-handoff-failed',
+          {
+            requestId,
+            reason: 'checkpointHandoffFailed',
+            ...(autopilotStore.find(sessionId)?.checkpoints?.activeHandoffId
+              ? { traceId: autopilotStore.find(sessionId)!.checkpoints!.activeHandoffId }
+              : {}),
+          },
+          occurredAt,
+        ),
+      );
+    },
+    publishSettlement: publishAttentionSettlement,
+    failureResponse: checkpointFailureResponse,
+    now: () => new Date().toISOString(),
+    deadlineMs: options.checkpointHandoffDeadlineMs ?? 5_000,
+    schedule: (callback, delayMs) => {
+      const handle = setTimeout(callback, delayMs);
+      handle.unref?.();
+      return () => clearTimeout(handle);
+    },
+  });
+  const attentionAcknowledgement = new AttentionAcknowledgement({
+    deadlineMs: options.attentionAcknowledgementDeadlineMs ?? 5_000,
+    schedule: (callback, delayMs) => {
+      const handle = setTimeout(callback, delayMs);
+      handle.unref?.();
+      return () => clearTimeout(handle);
+    },
+    recoverWriter: (sessionId, requestId) => {
       const ownedRuntime = runtime;
       const session = sessions.find(sessionId);
       if (!ownedRuntime || !session || !ownedRuntime.abandonServerRequest(sessionId, requestId))
@@ -1064,19 +1006,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         .recycle(session, new Date().toISOString())
         .then((recovered) => saveSession(recovered))
         .catch(() => {
-          // The durable attention survives; normal session recovery can reacquire the writer.
+          // Durable attention survives; normal recovery can reacquire the writer.
         });
-    }, options.attentionAcknowledgementDeadlineMs ?? 5_000);
-    handle.unref?.();
-    attentionAcknowledgementTimers.set(key, { handle, token });
-  };
-  const failPendingCheckpointHandoffs = (sessionId: string, recoverBoundary: boolean) => {
-    for (const interaction of interactions.list(sessionId)) {
-      if (interaction.kind !== 'orgPlanCheckpoint') continue;
-      failCheckpointHandoff(sessionId, interaction.requestId, interaction.turnId ?? null);
-    }
-    if (recoverBoundary) autopilot.recoverCheckpointHandoff(sessionId);
-  };
+    },
+  });
   let closing = false;
   let runtime: CodexSessionRuntime | null = null;
   const takeover = new SupervisionTakeover({
@@ -1488,16 +1421,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           let rawInteraction = toPendingInteraction(request);
           const compactCheckpointKind = compactOrgPlanCheckpointKind(request);
           if (compactCheckpointKind || rawInteraction?.kind === 'orgPlanCheckpoint') {
-            // A checkpoint is a read barrier, not a race against the debounced watcher.
-            const refreshed = await planStatusSource.refresh(sessionId);
-            if (refreshed?.kind !== 'updated')
-              return (
-                runtime?.resolveServerRequest(
-                  sessionId,
-                  String(request.id),
-                  checkpointFailureResponse('planProjectionUnavailable'),
-                ) === true
-              );
+            const refreshed = await checkpoints.refresh(sessionId, String(request.id));
+            if (refreshed !== null) return refreshed;
           }
           const session = withPendingInteractions(sessions.find(sessionId));
           if (!session) return false;
@@ -1665,40 +1590,13 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             );
           }
           if (!rawInteraction && compactCheckpointKind) {
-            const retained = supervisedPlans.find(sessionId);
-            const identity = supervisedPlans.identity(sessionId);
-            const checkpoint =
-              retained && identity
-                ? resolveOrgPlanCheckpointSignal(
-                    compactCheckpointKind,
-                    retained,
-                    identity,
-                    supervisedPlans.publicationReason(sessionId),
-                    autopilotStore
-                      .find(sessionId)
-                      ?.checkpoints?.completionEpochs?.filter(
-                        (epoch) => epoch.completed && !epoch.reopened,
-                      )
-                      .map((epoch) => epoch.target),
-                    autopilotStore.find(sessionId)?.checkpoints?.pendingTarget,
-                  )
-                : null;
-            if (checkpoint)
-              rawInteraction = {
-                requestId: String(request.id),
-                kind: 'orgPlanCheckpoint',
-                payload: checkpoint,
-              };
-            else
-              return (
-                runtime?.resolveServerRequest(
-                  sessionId,
-                  String(request.id),
-                  toOrgPlanCheckpointToolResponse('failed', {
-                    reasonCode: 'checkpointBoundaryAmbiguous',
-                  }),
-                ) === true
-              );
+            const expanded = checkpoints.expand(
+              sessionId,
+              String(request.id),
+              compactCheckpointKind,
+            );
+            if ('handled' in expanded) return expanded.handled;
+            rawInteraction = expanded.interaction;
           }
           if (!rawInteraction && isOrgPlanTakeoverCall(request)) {
             const result =
@@ -1798,124 +1696,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               ) === true
             );
           }
-          if (rawInteraction.kind === 'orgPlanCheckpoint') {
-            const checkpoint = parseOrgPlanCheckpoint(rawInteraction.payload);
-            const retained = supervisedPlans.find(sessionId);
-            const identity = supervisedPlans.identity(sessionId);
-            const rootOwned =
-              origin.kind === 'root' && origin.physicalTurnId === session.activeTurnId;
-            if (
-              !checkpoint ||
-              !retained ||
-              !identity ||
-              checkpoint.planIdentity !== identity ||
-              !rootOwned
-            )
-              return (
-                runtime?.resolveServerRequest(
-                  sessionId,
-                  rawInteraction.requestId,
-                  checkpointFailureResponse(
-                    !checkpoint
-                      ? compactCheckpointKind === 'l1Accepted'
-                        ? 'acceptedL1NotResolved'
-                        : 'checkpointPayloadInvalid'
-                      : !retained
-                        ? 'planProjectionUnavailable'
-                        : !identity || checkpoint.planIdentity !== identity
-                          ? 'planIdentityMismatch'
-                          : 'rootNotOwner',
-                  ),
-                ) === true
-              );
-            const validation = validateOrgPlanCheckpoint({
-              checkpoint,
-              plan: retained,
-              planIdentity: identity,
-              rootOwned,
-              hasActiveL1Writer: (position) =>
-                hasActiveL1Writer(activity.snapshot(sessionId, new Date().toISOString()), position),
+          if (rawInteraction.kind === 'orgPlanCheckpoint')
+            return checkpoints.accept(sessionId, rawInteraction, {
+              activeTurnId: session.activeTurnId,
+              rootOwned: origin.kind === 'root' && origin.physicalTurnId === session.activeTurnId,
+              compactKind: compactCheckpointKind,
             });
-            if (!validation.valid || !session.activeTurnId)
-              return (
-                runtime?.resolveServerRequest(
-                  sessionId,
-                  rawInteraction.requestId,
-                  checkpointFailureResponse(
-                    validation.valid ? 'rootTurnNotActive' : validation.reasonCode,
-                    {
-                      ...(!validation.valid && validation.expected
-                        ? { expected: validation.expected }
-                        : {}),
-                      ...(!validation.valid && validation.observed
-                        ? { observed: validation.observed }
-                        : {}),
-                    },
-                  ),
-                ) === true
-              );
-            let recordStatus: OrgPlanCheckpointRecordStatus = 'failed';
-            try {
-              recordStatus = autopilot.checkpointAccepted(
-                sessionId,
-                checkpoint,
-                session.activeTurnId,
-                new Date().toISOString(),
-              );
-            } catch {
-              if (!autopilot.checkpointHandoffFailed(sessionId, session.activeTurnId))
-                return (
-                  runtime?.resolveServerRequest(
-                    sessionId,
-                    rawInteraction.requestId,
-                    checkpointFailureResponse('checkpointPersistenceFailed'),
-                  ) === true
-                );
-              const interaction = {
-                ...rawInteraction,
-                turnId: session.activeTurnId,
-                requestedAt: new Date().toISOString(),
-              };
-              interactions.add(sessionId, interaction);
-              failCheckpointHandoff(sessionId, rawInteraction.requestId, session.activeTurnId);
-              return true;
-            }
-            if (recordStatus === 'failed')
-              return (
-                runtime?.resolveServerRequest(
-                  sessionId,
-                  rawInteraction.requestId,
-                  checkpointFailureResponse('checkpointStateConflict'),
-                ) === true
-              );
-            if (recordStatus === 'alreadyRecorded')
-              return (
-                runtime?.resolveServerRequest(
-                  sessionId,
-                  rawInteraction.requestId,
-                  toOrgPlanCheckpointToolResponse('alreadyRecorded'),
-                ) === true
-              );
-            const interaction = {
-              ...rawInteraction,
-              turnId: session.activeTurnId,
-              requestedAt: new Date().toISOString(),
-            };
-            interactions.add(sessionId, interaction);
-            armCheckpointHandoffDeadline(sessionId, rawInteraction.requestId, session.activeTurnId);
-            try {
-              runtime?.resolveServerRequest(
-                sessionId,
-                rawInteraction.requestId,
-                toOrgPlanCheckpointToolResponse('recorded'),
-              );
-            } catch {
-              // The accepted hold remains owned by the bounded deadline.
-            }
-            // `true` retains the checkpoint-specific held request. Its timer
-            // is cancelled solely by the JSON-RPC write-settlement callback.
-            return true;
-          }
           if (rawInteraction.kind === 'orgPlanAttention') {
             try {
               acceptPendingInteraction(sessionId, rawInteraction, session, true);
@@ -1925,8 +1711,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                   rawInteraction.requestId,
                   toOrgPlanAttentionAcknowledgement(),
                 ) === true;
-              if (acknowledged)
-                armAttentionAcknowledgementDeadline(sessionId, rawInteraction.requestId);
+              if (acknowledged) attentionAcknowledgement.arm(sessionId, rawInteraction.requestId);
               return acknowledged;
             } catch {
               const rejected =
@@ -1938,8 +1723,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                     reason: 'persistenceFailed',
                   }),
                 ) === true;
-              if (rejected)
-                armAttentionAcknowledgementDeadline(sessionId, rawInteraction.requestId);
+              if (rejected) attentionAcknowledgement.arm(sessionId, rawInteraction.requestId);
               return rejected;
             }
           }
@@ -1947,7 +1731,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         },
         (sessionId) => {
           activity.disconnected(sessionId, new Date().toISOString());
-          failPendingCheckpointHandoffs(sessionId, false);
+          checkpoints.failPending(sessionId, false);
           dismissPendingInteractions(sessionId, new Date().toISOString(), 'failed');
           recoverExitedSession(sessionId);
         },
@@ -2129,20 +1913,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       })
     : null;
   runtime?.onServerResponseSettled((sessionId, requestId, outcome) => {
-    if (attentionAcknowledgementTimers.has(checkpointTimerKey(sessionId, requestId))) {
-      cancelAttentionAcknowledgementTimer(sessionId, requestId);
-      return;
-    }
-    const interaction = interactions.find(sessionId, requestId);
-    if (interaction?.kind !== 'orgPlanCheckpoint') return;
-    if (outcome !== 'resultWritten') {
-      failCheckpointHandoff(sessionId, requestId, interaction.turnId ?? null);
-      return;
-    }
-    cancelCheckpointHandoffTimer(sessionId, requestId);
-    const occurredAt = new Date().toISOString();
-    if (interactions.resolve(sessionId, requestId, occurredAt, 'answered'))
-      publishAttentionSettlement(sessionId, requestId, occurredAt, 'answered');
+    if (attentionAcknowledgement.responseSettled(sessionId, requestId)) return;
+    checkpoints.responseSettled(sessionId, requestId, outcome);
   });
   if (runtime && planMeasurementHelperPath) {
     planMeasurementRefresh = new PlanMeasurementRefresh(
@@ -2256,6 +2028,68 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       }
     };
   }
+  const attentionResolution = new AttentionResolution({
+    operations: {
+      find: (id, requestId) => interactions.find(id, requestId),
+      terminalOperation: (id, requestId) => interactions.terminalOperation(id, requestId),
+      claimOperation: (id, requestId, key) => interactions.claimOperation(id, requestId, key),
+      resolved: (id, requestId) => interactions.resolved(id, requestId),
+      resolutionState: (id, requestId) => interactions.resolutionState(id, requestId),
+      beginDelivery: (id, requestId, key) => interactions.beginDelivery(id, requestId, key),
+      retryDelivery: (id, requestId, key, state) =>
+        interactions.retryDelivery(id, requestId, key, state),
+      settleOperation: (id, requestId, key, at, outcome) =>
+        interactions.settleOperation(id, requestId, key, at, outcome),
+    },
+    replay: {
+      find: (scope, key) => idempotency.get(scope, key),
+      remember: (scope, key, body) => idempotency.put(scope, key, 202, body),
+    },
+    writer: {
+      available: () => runtime !== null,
+      capable: (id) => sessions.find(id)?.attentionToolCapability === 'supported',
+      state: (id, requestId) => runtime!.attentionWriterState(id, requestId),
+      resolve: (id, requestId, response) => runtime!.resolveServerRequest(id, requestId, response),
+      guidance: (sessionId) => {
+        const session = sessions.find(sessionId);
+        if (!runtime || !session) return null;
+        return async (text, operationKey) => {
+          const writer = await runtime!.ensureWriter(session, new Date().toISOString());
+          if (writer.session.activeTurnId)
+            await runtime!.queueTurnInput(
+              writer.session,
+              writer.session.activeTurnId,
+              text,
+              operationKey,
+            );
+          else {
+            const started = await runtime!.startTurn(
+              writer.session,
+              text,
+              operationKey,
+              new Date().toISOString(),
+            );
+            sessions.save(started);
+            activity.observe({
+              sessionId,
+              occurredAt: started.updatedAt,
+              kind: 'turnStarted',
+              threadId: started.threadId!,
+              turnId: started.activeTurnId!,
+            });
+          }
+        };
+      },
+    },
+    policy: {
+      authorizeReplacement: (id, taskName) =>
+        autopilot.authorizeExecutorReplacement(id, taskName).accepted,
+      enable: (id) => autopilot.enable(id),
+      disable: (id) => autopilot.disable(id),
+    },
+    publishSettlement: publishAttentionSettlement,
+    now: () => new Date().toISOString(),
+  });
   let authorization: SqliteAuthorizationStore | undefined;
   if (passkeyAuthEnabled) {
     try {
@@ -2804,188 +2638,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               : null;
           },
         },
-        resolver: {
-          resolve: async ({ sessionId, requestId, operationKey, response }) => {
-            const scope = `org-plan-attention:${sessionId}:${requestId}`;
-            const stored = idempotency.get(scope, operationKey);
-            if (stored) return JSON.parse(stored.body) as { kind: 'replayed'; resolvedAt: string };
-            const terminal = interactions.terminalOperation(sessionId, requestId);
-            if (terminal)
-              return terminal.operationKey === operationKey
-                ? terminal.outcome === 'failed'
-                  ? { kind: 'writerCleared' as const, resolvedAt: terminal.resolvedAt }
-                  : { kind: 'replayed' as const, resolvedAt: terminal.resolvedAt }
-                : { kind: 'staleOperation' as const };
-            const key = `${scope}:${operationKey}`;
-            const inFlight = attentionResolutionOperations.get(key);
-            if (inFlight) return inFlight;
-            const operation = (async () => {
-              const interaction = interactions.find(sessionId, requestId);
-              if (!interaction || interaction.kind !== 'orgPlanAttention')
-                return { kind: 'noActive' as const };
-              const decision = parseOrgPlanAttentionToolResponse(response);
-              const attention = parseOrgPlanAttention(interaction.payload);
-              if (!decision || !attention) return { kind: 'staleOperation' as const };
-              const claim = interactions.claimOperation(sessionId, requestId, operationKey);
-              if (claim === 'resolved') {
-                const resolved = interactions.resolved(sessionId, requestId);
-                return resolved
-                  ? { kind: 'replayed' as const, resolvedAt: resolved.resolvedAt }
-                  : { kind: 'staleOperation' as const };
-              }
-              if (claim === 'stale') return { kind: 'staleOperation' as const };
-              if (claim === 'missing') return { kind: 'noActive' as const };
-              const acknowledged =
-                interactions.resolutionState(sessionId, requestId) === 'acknowledged';
-              if (acknowledged) {
-                if (!interactions.beginDelivery(sessionId, requestId, operationKey))
-                  return { kind: 'staleOperation' as const };
-                if (decision.action === 'resume' && attention.executorReplacement) {
-                  const authorization = autopilot.authorizeExecutorReplacement(
-                    sessionId,
-                    attention.executorReplacement.canonicalTaskName,
-                  );
-                  if (!authorization.accepted) {
-                    interactions.retryDelivery(sessionId, requestId, operationKey, 'acknowledged');
-                    return { kind: 'replacementRejected' as const };
-                  }
-                }
-                // The dynamic tool already returned its acknowledgement. The
-                // later human response must reach the supervisor as new input.
-                if (decision.action === 'resume' && decision.guidance) {
-                  const session = sessions.find(sessionId);
-                  if (!runtime || !session) {
-                    interactions.retryDelivery(sessionId, requestId, operationKey, 'acknowledged');
-                    return { kind: 'writerUnavailable' as const };
-                  }
-                  try {
-                    const writer = await runtime.ensureWriter(session, new Date().toISOString());
-                    const text = `The user resolved the Autopilot attention request. Guidance:\n${decision.guidance}`;
-                    if (writer.session.activeTurnId)
-                      await runtime.queueTurnInput(
-                        writer.session,
-                        writer.session.activeTurnId,
-                        text,
-                        operationKey,
-                      );
-                    else {
-                      const started = await runtime.startTurn(
-                        writer.session,
-                        text,
-                        operationKey,
-                        new Date().toISOString(),
-                      );
-                      sessions.save(started);
-                      activity.observe({
-                        sessionId,
-                        occurredAt: started.updatedAt,
-                        kind: 'turnStarted',
-                        threadId: started.threadId!,
-                        turnId: started.activeTurnId!,
-                      });
-                    }
-                  } catch {
-                    interactions.retryDelivery(sessionId, requestId, operationKey, 'acknowledged');
-                    return { kind: 'writerUnavailable' as const };
-                  }
-                }
-                const resolvedAt = new Date().toISOString();
-                if (
-                  !interactions.settleOperation(
-                    sessionId,
-                    requestId,
-                    operationKey,
-                    resolvedAt,
-                    'answered',
-                  )
-                )
-                  return { kind: 'staleOperation' as const };
-                const accepted = { kind: 'accepted' as const, resolvedAt };
-                idempotency.put(
-                  scope,
-                  operationKey,
-                  202,
-                  JSON.stringify({ kind: 'replayed', resolvedAt }),
-                );
-                publishAttentionSettlement(sessionId, requestId, resolvedAt, 'answered');
-                if (decision.action === 'disableAutopilot') autopilot.disable(sessionId);
-                else autopilot.enable(sessionId);
-                return accepted;
-              }
-              // A durable capability belongs to the session/thread, not the
-              // relay process.  A supported stopped writer is retryable;
-              // missing capability identifies a pre-rollout legacy thread.
-              if (sessions.find(sessionId)?.attentionToolCapability !== 'supported')
-                return { kind: 'legacyUnsupported' as const };
-              if (!runtime) return { kind: 'writerUnavailable' as const };
-              if (!interactions.beginDelivery(sessionId, requestId, operationKey))
-                return { kind: 'staleOperation' as const };
-              if (decision.action === 'resume' && attention.executorReplacement) {
-                const authorization = autopilot.authorizeExecutorReplacement(
-                  sessionId,
-                  attention.executorReplacement.canonicalTaskName,
-                );
-                if (!authorization.accepted) {
-                  interactions.retryDelivery(sessionId, requestId, operationKey);
-                  return { kind: 'replacementRejected' as const };
-                }
-              }
-              const writer = runtime.attentionWriterState(sessionId, requestId);
-              if (writer === 'unavailable') {
-                interactions.retryDelivery(sessionId, requestId, operationKey);
-                return { kind: 'writerUnavailable' as const };
-              }
-              const resolvedAt = new Date().toISOString();
-              if (writer === 'cleared') {
-                if (
-                  !interactions.settleOperation(
-                    sessionId,
-                    requestId,
-                    operationKey,
-                    resolvedAt,
-                    'failed',
-                  )
-                )
-                  return { kind: 'staleOperation' as const };
-                publishAttentionSettlement(sessionId, requestId, resolvedAt, 'failed');
-                return { kind: 'writerCleared' as const, resolvedAt };
-              }
-              if (!runtime.resolveServerRequest(sessionId, requestId, response)) {
-                // The state check and delivery are synchronous, but retain a
-                // defensive retry path for a future runtime implementation.
-                interactions.retryDelivery(sessionId, requestId, operationKey);
-                return { kind: 'writerUnavailable' as const };
-              }
-              if (
-                !interactions.settleOperation(
-                  sessionId,
-                  requestId,
-                  operationKey,
-                  resolvedAt,
-                  'answered',
-                )
-              )
-                return { kind: 'staleOperation' as const };
-              const accepted = { kind: 'accepted' as const, resolvedAt };
-              idempotency.put(
-                scope,
-                operationKey,
-                202,
-                JSON.stringify({ kind: 'replayed', resolvedAt }),
-              );
-              publishAttentionSettlement(sessionId, requestId, resolvedAt, 'answered');
-              if (decision.action === 'disableAutopilot') autopilot.disable(sessionId);
-              else autopilot.enable(sessionId);
-              return accepted;
-            })();
-            attentionResolutionOperations.set(key, operation);
-            try {
-              return await operation;
-            } finally {
-              attentionResolutionOperations.delete(key);
-            }
-          },
-        },
+        resolver: attentionResolution,
         transitions: attentionTransitions,
       },
       gitSummary: {
@@ -3042,7 +2695,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         // A prior process cannot resolve its original JSON-RPC request.  Turn
         // that bounded handoff into one durable failure and release the
         // checkpoint only through the explicit runtime-recovery boundary.
-        failPendingCheckpointHandoffs(session.id, true);
+        checkpoints.failPending(session.id, true);
       },
     );
   };
@@ -3095,20 +2748,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     for (const session of sessions.list()) {
       autopilot.dispose(session.id);
       activity.dispose(session.id);
-      for (const key of [...checkpointHandoffTimers.keys()]) {
-        if (key.startsWith(`${session.id}:`)) {
-          const timer = checkpointHandoffTimers.get(key);
-          if (timer) clearTimeout(timer.handle);
-          checkpointHandoffTimers.delete(key);
-        }
-      }
-      for (const key of [...attentionAcknowledgementTimers.keys()]) {
-        if (key.startsWith(`${session.id}:`)) {
-          const timer = attentionAcknowledgementTimers.get(key);
-          if (timer) clearTimeout(timer.handle);
-          attentionAcknowledgementTimers.delete(key);
-        }
-      }
+      checkpoints.disposeSession(session.id);
+      attentionAcknowledgement.disposeSession(session.id);
       // Relay shutdown only releases this process's writer.  A typed attention
       // request remains a durable human-visible blocker for the next relay
       // instance; only an app-server-cleared request is a failed audit outcome.
