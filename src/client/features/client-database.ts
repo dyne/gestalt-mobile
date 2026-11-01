@@ -5,8 +5,8 @@
  */
 
 const databaseName = 'gestalt-mobile';
-const databaseVersion = 2;
-const storeNames = ['settings', 'drafts', 'cursors', 'messages'] as const;
+const databaseVersion = 3;
+const storeNames = ['settings', 'drafts', 'cursors', 'messages', 'chat-projections'] as const;
 
 export function openClientDatabase(database: IDBFactory): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {

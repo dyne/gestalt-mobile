@@ -96,6 +96,128 @@ const environment = () => ({
   window: { addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as Window,
 });
 describe('ChatController', () => {
+  it('accepts authoritative history below a provisional cached cursor', async () => {
+    const history = deferred<unknown>();
+    const controller = new ChatController({
+      ...environment(),
+      relay: {
+        getHistory: () => history.promise,
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: () => new Socket() as unknown as WebSocket,
+      cache: {
+        read: async () => ({
+          cursor: 12,
+          messages: [{ id: 'u', role: 'user', text: 'cached' }],
+          prompts: [],
+          interactions: [],
+        }),
+        write: async () => {},
+      },
+    });
+    const snapshot = {
+      baseSequence: 0,
+      currentSequence: 12,
+      items: [
+        { id: 'u', kind: 'user', text: 'canonical' },
+        { id: 'a', kind: 'agent', text: 'server answer', phase: 'final_answer' },
+      ],
+      turns: [],
+      interactions: [],
+      activeTurnId: null,
+    };
+    try {
+      controller.select('s');
+      await vi.waitFor(() => expect(controller.view.messages[0]?.text).toBe('cached'));
+      expect(controller.view.cursor).toBe(0);
+      history.resolve(snapshot);
+      await vi.waitFor(() =>
+        expect(controller.view.messages.map((item) => item.text)).toEqual([
+          'canonical',
+          'server answer',
+        ]),
+      );
+    } finally {
+      history.resolve(snapshot);
+      controller.dispose();
+    }
+  });
+  it.each(['cache-first', 'event-first'] as const)(
+    'preserves in-flight history and live replay when %s',
+    async (order) => {
+      const history = deferred<unknown>();
+      const cache = deferred<unknown>();
+      const socket = new Socket();
+      const snapshot = {
+        baseSequence: 0,
+        items: [{ id: 'u', kind: 'user', text: 'canonical' }],
+        turns: [],
+        interactions: [],
+        activeTurnId: null,
+      };
+      const controller = new ChatController({
+        ...environment(),
+        relay: {
+          getHistory: () => history.promise,
+          startTurn: vi.fn(),
+          interruptTurn: vi.fn(),
+          respondInteraction: vi.fn(),
+        },
+        publish: vi.fn(),
+        websocket: () => socket as unknown as WebSocket,
+        cache: { read: () => cache.promise, write: async () => {} },
+      });
+      const cached = {
+        cursor: 12,
+        messages: [{ id: 'u', role: 'user', text: 'cached' }],
+        prompts: [],
+        interactions: [],
+      };
+      const event = (sequence: number) =>
+        socket.emit({
+          type: 'relay.event',
+          event: {
+            sequence,
+            type: 'agentMessageDelta',
+            payload: { itemId: `a-${sequence}`, text: `live-${sequence}`, phase: 'final_answer' },
+          },
+        });
+      try {
+        controller.select('s');
+        if (order === 'event-first') event(1);
+        cache.resolve(cached);
+        await vi.waitFor(() => expect(controller.view.messages[0]?.text).toBe('cached'));
+        expect(controller.view.snapshotting).toBe(true);
+        expect(controller.view.cursor).toBe(0);
+        if (order === 'cache-first') event(1);
+        expect(controller.view.buffered.has(1)).toBe(true);
+        history.resolve(snapshot);
+        await vi.waitFor(() =>
+          expect(controller.view.messages.map((item) => item.text)).toEqual([
+            'canonical',
+            'live-1',
+          ]),
+        );
+        expect(controller.view.cursor).toBe(1);
+        event(2);
+        expect(controller.view.cursor).toBe(2);
+        controller.refresh();
+        await vi.waitFor(() => expect(controller.view.snapshotting).toBe(false));
+        expect(controller.view.messages.map((item) => item.text)).toEqual([
+          'canonical',
+          'live-1',
+          'live-2',
+        ]);
+      } finally {
+        cache.resolve(cached);
+        history.resolve(snapshot);
+        controller.dispose();
+      }
+    },
+  );
   it.each([null, 'turn'])(
     'keeps normal background refreshes quiet with active turn %j',
     async (activeTurnId) => {

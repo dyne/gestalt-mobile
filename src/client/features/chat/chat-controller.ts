@@ -435,7 +435,13 @@ export class ChatController {
     const cached = await this.#options.cache.read(id).catch(() => null);
     if (!this.#current(id, generation) || this.#authoritativeGeneration === generation || !cached)
       return;
-    this.#projection = hydrateCache(id, cached);
+    this.#projection = {
+      ...hydrateCache(id, cached),
+      // Cached content is provisional: only this transport owns replay progress.
+      cursor: this.#projection.cursor,
+      snapshotting: this.#projection.snapshotting,
+      buffered: this.#projection.buffered,
+    };
     this.#publish();
   }
   #open(id: string, generation: number, snapshotOnOpen = true): void {

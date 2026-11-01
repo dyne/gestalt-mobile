@@ -124,11 +124,27 @@ for (const width of [390, 1280]) {
     await expect(history.locator(':scope > li').nth(0)).toContainText('After resolution');
     await expect(history.locator(':scope > li').nth(1)).toContainText('Answers sent');
     await expect(history.locator(':scope > li').nth(2)).toContainText('Later message 19');
+    await expect
+      .poll(() => fixture.commands.filter((command) => command.kind === 'turn').length)
+      .toBe(1);
+    const followup = fixture.commands.find((command) => command.kind === 'turn')!;
+    const followupText = (followup.body as { text: string }).text;
     fixture.snapshot(
       's',
       chatSnapshot({
         baseSequence: 1,
-        items,
+        // The accepted quiz follow-up is durable server history, including its operation key.
+        items: [
+          ...items,
+          {
+            id: 'quiz-answer-prompt',
+            kind: 'user',
+            turnId: 'answer-turn',
+            operationId: followup.idempotencyKey ?? undefined,
+            text: followupText,
+            occurredAt: Date.parse(resolvedAt),
+          },
+        ],
         interactions: [
           {
             requestId: 'q',
@@ -144,7 +160,24 @@ for (const width of [390, 1280]) {
     await page.reload();
     await page.getByRole('button', { name: 'Chat', exact: true }).click();
     await expect(panel).toHaveCount(0);
-    await expect(history.locator(':scope > li').nth(1)).toContainText('Answers sent');
+    const entries = history.locator(':scope > li');
+    await expect(entries.filter({ hasText: 'Answers sent' })).toHaveCount(1);
+    await expect(history.locator('[data-interaction-state="resolved"]')).toHaveCount(1);
+    await expect(entries.filter({ hasText: 'Submitted quiz answers:' })).toHaveCount(1);
+    await expect(entries.filter({ hasText: 'Submitted quiz answers:' })).toContainText('Yes');
+    await expect
+      .poll(async () => {
+        const labels = await entries.allTextContents();
+        const after = labels.findIndex((label) => label.includes('After resolution'));
+        const answer = labels.findIndex((label) => label.includes('Answers sent'));
+        const later = labels.findIndex((label) => label.includes('Later message 19'));
+        return after >= 0 && after < answer && answer < later;
+      })
+      .toBe(true);
+    await expect(entries.filter({ hasText: 'After resolution' })).toHaveCount(1);
+    await expect(entries.filter({ hasText: 'Later message 19' })).toHaveCount(1);
+    const labels = await entries.allTextContents();
+    expect(new Set(labels).size).toBe(labels.length);
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
