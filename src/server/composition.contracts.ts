@@ -22,6 +22,8 @@ import { CodexJsonRpcError } from './platform/codex/json-rpc-client.js';
 import { CodexSessionRuntime } from './platform/codex/session-runtime.js';
 import { SqliteAuthorizationStore } from './platform/auth/sqlite-authorization-store.js';
 import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
+import { SqliteAutopilotStore } from './platform/persistence/sqlite-autopilot-store.js';
+import { startSupervisionProtocol } from './features/autopilot/domain/supervision-protocol.js';
 import { exportControlPlaneTrace } from './features/control-plane-trace/export-trace.js';
 import type { McpStartupStatus } from '../shared/contracts/mcp-startup-failure.js';
 import type { ToolEfficiencySnapshot } from '../shared/contracts/tool-efficiency.js';
@@ -612,6 +614,91 @@ describe('production composition', () => {
           .get(fixture.sessionId),
       ).toMatchObject({ count: 0 });
     });
+    it.each([1, 2] as const)(
+      'keeps a version %s wait validation error recoverable during a probe',
+      async (version) => {
+        const fixture = await createProductionAutopilotFixture({
+          autopilotSchedule: () => () => {},
+        });
+        onTestFinished(() => fixture.app.close());
+        const started = await fixture.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${fixture.sessionId}/turns`,
+          payload: { text: 'Synthetic wait validation fixture' },
+        });
+        expect(started.statusCode).toBe(202);
+        const session = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+        const handle = fixture.handles.find((candidate) => candidate.calls.includes('turn/start'))!;
+        handle.notify!({
+          method: 'turn/started',
+          params: { threadId: session.threadId, turn: { id: session.activeTurnId } },
+        });
+        const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+        onTestFinished(() => database.close());
+        const store = new SqliteAutopilotStore(database);
+        const state = store.find(fixture.sessionId)!;
+        store.save({
+          ...state,
+          requestedEnabled: true,
+          state: 'monitoring',
+          supervision: {
+            ...startSupervisionProtocol('probe-progress'),
+            outcome: 'probeRequired',
+            probeKey: 'probe-progress',
+            unchangedContinuations: 3,
+          },
+        });
+        let requestId = 9000;
+        const call = async (wakeConditions: readonly string[]) => {
+          const response = (await handle.request!({
+            id: ++requestId,
+            method: 'item/tool/call',
+            params: {
+              threadId: session.threadId,
+              turnId: session.activeTurnId,
+              tool: 'gestalt_autopilot_wait_lease',
+              arguments: {
+                version,
+                reportId: 'wait-validation-report',
+                leaseId: 'wait-validation-lease',
+                wakeConditions,
+                ...(version === 2 ? { maxWaitMs: 180_000 } : {}),
+              },
+            },
+          })) as { contentItems: Array<{ text: string }> };
+          return JSON.parse(response.contentItems[0]!.text);
+        };
+        expect(await call(['unsupported'])).toEqual({
+          accepted: false,
+          reason: 'invalidWaitLease',
+          next: 'continueSameTurn',
+        });
+        expect(store.find(fixture.sessionId)).toMatchObject({
+          requestedEnabled: true,
+          state: 'monitoring',
+          supervision: { outcome: 'probeRequired' },
+        });
+        const wakeConditions = [
+          'processExited',
+          'processResultAvailable',
+          'planChanged',
+          'interactionChanged',
+          'executorChanged',
+        ];
+        expect(await call(wakeConditions)).toEqual({ accepted: true });
+        expect(store.find(fixture.sessionId)).toMatchObject({
+          requestedEnabled: true,
+          supervision: { outcome: 'parked', waitLease: { wakeConditions } },
+        });
+        expect(
+          database
+            .prepare(
+              "SELECT COUNT(*) AS count FROM session_events WHERE session_id = ? AND type = 'autopilot.safety-paused'",
+            )
+            .get(fixture.sessionId)?.count,
+        ).toBe(0);
+      },
+    );
 
     it('serves compact supervision deltas and wakes only for the selected host run', async () => {
       let coordinator: import('./features/autopilot/application/service.js').AutopilotCoordinator;

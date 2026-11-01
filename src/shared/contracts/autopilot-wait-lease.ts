@@ -46,7 +46,7 @@ export const gestaltAutopilotWaitLeaseDynamicTool = {
       wakeConditions: {
         type: 'array',
         minItems: 1,
-        maxItems: 4,
+        maxItems: autopilotWaitWakeConditions.length,
         uniqueItems: true,
         items: { type: 'string', enum: autopilotWaitWakeConditions },
       },
@@ -70,7 +70,7 @@ export function parseAutopilotWaitLease(value: unknown): AutopilotWaitLease | nu
   const wakeConditions = value.wakeConditions;
   if (
     wakeConditions.length < 1 ||
-    wakeConditions.length > 4 ||
+    wakeConditions.length > autopilotWaitWakeConditions.length ||
     new Set(wakeConditions).size !== wakeConditions.length ||
     !wakeConditions.every(
       (condition): condition is AutopilotWaitWakeCondition =>
@@ -97,7 +97,7 @@ export function parseAutopilotWaitLease(value: unknown): AutopilotWaitLease | nu
 }
 
 export type AutopilotWaitLeaseRejectionReason =
-  'automaticContinuationUnavailable' | 'wakeAlreadySatisfied';
+  'automaticContinuationUnavailable' | 'wakeAlreadySatisfied' | 'invalidWaitLease';
 
 export function autopilotWaitLeaseToolResponse(
   accepted = true,

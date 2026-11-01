@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME,
+  autopilotWaitWakeConditions,
   autopilotWaitLeaseToolResponse,
   gestaltAutopilotWaitLeaseDynamicTool,
   parseAutopilotWaitLease,
@@ -21,6 +22,29 @@ const lease = {
 } as const;
 
 describe('Autopilot wait lease contract', () => {
+  it.each([1, 2] as const)('accepts every supported wake combination for version %s', (version) => {
+    for (let count = 1; count <= autopilotWaitWakeConditions.length; count++) {
+      const report = {
+        ...lease,
+        version,
+        wakeConditions: autopilotWaitWakeConditions.slice(0, count),
+        ...(version === 2 ? { maxWaitMs: 180_000 } : {}),
+      };
+      expect(parseAutopilotWaitLease(report)).toEqual(report);
+    }
+    expect(
+      gestaltAutopilotWaitLeaseDynamicTool.inputSchema.properties.wakeConditions.maxItems,
+    ).toBe(autopilotWaitWakeConditions.length);
+    expect(
+      parseAutopilotWaitLease({ ...lease, wakeConditions: ['planChanged', 'planChanged'] }),
+    ).toBeNull();
+    expect(
+      parseAutopilotWaitLease({
+        ...lease,
+        wakeConditions: [...autopilotWaitWakeConditions, 'unknown'],
+      }),
+    ).toBeNull();
+  });
   it('exposes one closed, bounded dynamic-tool schema', () => {
     expect(gestaltAutopilotWaitLeaseDynamicTool.name).toBe(GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME);
     expect(gestaltAutopilotWaitLeaseDynamicTool.inputSchema.additionalProperties).toBe(false);
