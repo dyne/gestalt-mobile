@@ -58,6 +58,7 @@
     "test:package": "node scripts/smoke-packed-cli.mjs",
     "test:e2e": "playwright test",
     "test:e2e:functional": "playwright test --config playwright.functional.config.ts",
+    "test:e2e:smoke": "node scripts/run-browser-smoke.mjs",
     "test:e2e:shards": "node scripts/verify-browser-shards.mjs",
     "test:e2e:evidence": "PLAYWRIGHT_EVIDENCE=1 playwright test --config playwright.evidence.config.ts",
     "test:e2e:real-auth": "playwright test --config playwright.auth.config.ts",

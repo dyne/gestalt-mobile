@@ -6,6 +6,7 @@
 
 import { readdir } from 'node:fs/promises';
 import { relative, join } from 'node:path';
+import { browserSmokeSpecs } from './browser-smoke-contract.mjs';
 
 import {
   authorizationStressVitestSpecs,
@@ -50,15 +51,17 @@ const lanes = {
   vitest: vitestFiles,
   'authorization-stress': authorizationStressVitestSpecs,
   'browser-functional': browserFunctional,
+  'browser-smoke': browserSmokeSpecs,
   'browser-evidence': browserEvidenceSpecs,
   'real-auth': browserRealAuthSpecs,
 };
 
-const configured = [...browserEvidenceSpecs, ...browserRealAuthSpecs];
+const configured = [...browserSmokeSpecs, ...browserEvidenceSpecs, ...browserRealAuthSpecs];
 const unknown = configured.filter((file) => !browserFiles.includes(file));
 const duplicateEvidence = browserEvidenceSpecs.filter(
   (file, index) => browserEvidenceSpecs.indexOf(file) !== index,
 );
+const invalidSmoke = browserSmokeSpecs.filter((file) => !browserFunctional.includes(file));
 const unassignedVitest = vitestFiles.filter((file) => !lanes.vitest.includes(file));
 const unassignedBrowser = browserFiles.filter(
   (file) => !browserFunctional.includes(file) && !configured.includes(file),
@@ -67,12 +70,19 @@ const unassignedBrowser = browserFiles.filter(
 for (const [name, members] of Object.entries(lanes)) laneReport(name, members);
 if (
   unknown.length ||
+  invalidSmoke.length ||
   duplicateEvidence.length ||
   unassignedVitest.length ||
   unassignedBrowser.length
 ) {
   console.error(
-    JSON.stringify({ unknown, duplicateEvidence, unassignedVitest, unassignedBrowser }),
+    JSON.stringify({
+      unknown,
+      invalidSmoke,
+      duplicateEvidence,
+      unassignedVitest,
+      unassignedBrowser,
+    }),
   );
   process.exitCode = 1;
 }

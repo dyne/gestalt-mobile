@@ -30,6 +30,8 @@ const missing = complete.filter((test) => !shardSet.has(test));
 const unexpected = flattened.filter((test) => !completeSet.has(test));
 
 if (
+  complete.length === 0 ||
+  completeSet.size !== complete.length ||
   duplicates.length ||
   missing.length ||
   unexpected.length ||

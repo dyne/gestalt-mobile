@@ -97,74 +97,90 @@ test('shows file targets and separately tappable approval controls at a compact 
   expect(await approve.boundingBox()).not.toEqual(await deny.boundingBox());
 });
 
-test('retries a failed quiz once and suppresses a duplicate accepted request', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await openChat(page, [
-    {
-      requestId: 'quiz-1',
-      kind: 'quiz',
-      payload: {
-        questions: [
-          {
-            id: 'execution_mode',
-            header: 'Execution mode',
-            question: 'How should this plan run?',
-            choices: [
-              { label: 'Solo', description: 'One agent executes the plan.' },
-              { label: 'Supervised multi-agent', description: 'A supervisor coordinates agents.' },
+for (const viewport of [
+  { name: 'mobile', width: 390, height: 844 },
+  { name: 'desktop', width: 1280, height: 800 },
+]) {
+  test(
+    `retries a failed quiz once and suppresses a duplicate accepted request (${viewport.name})`,
+    { tag: '@smoke' },
+    async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await openChat(page, [
+        {
+          requestId: 'quiz-1',
+          kind: 'quiz',
+          payload: {
+            questions: [
+              {
+                id: 'execution_mode',
+                header: 'Execution mode',
+                question: 'How should this plan run?',
+                choices: [
+                  { label: 'Solo', description: 'One agent executes the plan.' },
+                  {
+                    label: 'Supervised multi-agent',
+                    description: 'A supervisor coordinates agents.',
+                  },
+                ],
+                allowCustom: false,
+                isSecret: false,
+              },
             ],
-            allowCustom: false,
-            isSecret: false,
           },
-        ],
-      },
+        },
+      ]);
+      let attempts = 0;
+      const deliveries: string[] = [];
+      await page.route('**/api/sessions/session-1/turns/turn-1/queue', async (route) => {
+        deliveries.push('prompt');
+        expect(route.request().postDataJSON()).toEqual({
+          text: 'Submitted quiz answers:\n- Execution mode — How should this plan run?\n  Solo',
+        });
+        await route.fulfill({
+          status: 202,
+          contentType: 'application/json',
+          body: JSON.stringify({ accepted: true, activeTurnId: 'turn-1' }),
+        });
+      });
+      await page.route('**/api/sessions/session-1/interactions/quiz-1', async (route) => {
+        deliveries.push('interaction');
+        attempts += 1;
+        expect(route.request().postDataJSON()).toEqual({
+          success: true,
+          contentItems: [{ type: 'inputText', text: '{"answers":{"execution_mode":"Solo"}}' }],
+        });
+        await route.fulfill({
+          status: attempts === 1 ? 409 : 202,
+          contentType: 'application/json',
+          body: JSON.stringify(
+            attempts === 1 ? { title: 'Relay unavailable' } : { accepted: true },
+          ),
+        });
+      });
+
+      await page.getByRole('radio', { name: /Solo/ }).click();
+      await page.getByRole('button', { name: 'Send answers' }).click();
+      const submitted = page.getByRole('region', { name: 'Submitted answers' });
+      const retry = page.getByRole('button', { name: 'Retry' });
+      await expect(retry).toBeVisible();
+      await expect(submitted).toHaveCount(0);
+      await expect(
+        page.getByRole('complementary', { name: 'Pending chat requests' }),
+      ).toContainText('How should this plan run?');
+      await expect(page.getByRole('radio', { name: /Solo/ })).toBeChecked();
+
+      await retry.click();
+      await expect(page.locator('[data-interaction-state="resolved"]')).toContainText(
+        'Answers sent',
+      );
+      await expect(submitted).toContainText('Solo');
+      await expect(page.getByRole('button', { name: 'Send answers' })).toHaveCount(0);
+      expect(attempts).toBe(2);
+      expect(deliveries).toEqual(['prompt', 'interaction', 'interaction']);
     },
-  ]);
-  let attempts = 0;
-  const deliveries: string[] = [];
-  await page.route('**/api/sessions/session-1/turns/turn-1/queue', async (route) => {
-    deliveries.push('prompt');
-    expect(route.request().postDataJSON()).toEqual({
-      text: 'Submitted quiz answers:\n- Execution mode — How should this plan run?\n  Solo',
-    });
-    await route.fulfill({
-      status: 202,
-      contentType: 'application/json',
-      body: JSON.stringify({ accepted: true, activeTurnId: 'turn-1' }),
-    });
-  });
-  await page.route('**/api/sessions/session-1/interactions/quiz-1', async (route) => {
-    deliveries.push('interaction');
-    attempts += 1;
-    expect(route.request().postDataJSON()).toEqual({
-      success: true,
-      contentItems: [{ type: 'inputText', text: '{"answers":{"execution_mode":"Solo"}}' }],
-    });
-    await route.fulfill({
-      status: attempts === 1 ? 409 : 202,
-      contentType: 'application/json',
-      body: JSON.stringify(attempts === 1 ? { title: 'Relay unavailable' } : { accepted: true }),
-    });
-  });
-
-  await page.getByRole('radio', { name: /Solo/ }).click();
-  await page.getByRole('button', { name: 'Send answers' }).click();
-  const submitted = page.getByRole('region', { name: 'Submitted answers' });
-  const retry = page.getByRole('button', { name: 'Retry' });
-  await expect(retry).toBeVisible();
-  await expect(submitted).toHaveCount(0);
-  await expect(page.getByRole('complementary', { name: 'Pending chat requests' })).toContainText(
-    'How should this plan run?',
   );
-  await expect(page.getByRole('radio', { name: /Solo/ })).toBeChecked();
-
-  await retry.click();
-  await expect(page.locator('[data-interaction-state="resolved"]')).toContainText('Answers sent');
-  await expect(submitted).toContainText('Solo');
-  await expect(page.getByRole('button', { name: 'Send answers' })).toHaveCount(0);
-  expect(attempts).toBe(2);
-  expect(deliveries).toEqual(['prompt', 'interaction', 'interaction']);
-});
+}
 
 test('marks an interaction already cleared upstream as no longer pending', async ({ page }) => {
   await openChat(page, [

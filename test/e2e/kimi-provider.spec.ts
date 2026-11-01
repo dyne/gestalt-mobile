@@ -146,48 +146,50 @@ test('explains why kimi cannot be selected when it is not installed', async ({ p
   );
 });
 
-test('restricts chat model switching to the session provider and badges kimi sessions', async ({
-  page,
-}) => {
-  const kimiSession = {
-    id: 'kimi-session-1',
-    state: 'ready',
-    workspacePath: '/project',
-    provider: 'kimi',
-    model: 'k2-thinking',
-    activeTurnId: null,
-  };
-  await page.route('**/api/bootstrap', (route) =>
-    route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(bootstrap([kimiSession], kimiProviders)),
-    }),
-  );
-  await page.route('**/api/sessions/kimi-session-1/history', (route) =>
-    route.fulfill({ contentType: 'application/json', body: JSON.stringify(chatSnapshot()) }),
-  );
-  await page.routeWebSocket(
-    /ws:\/\/127\.0\.0\.1:\d+\/api\/sessions\/kimi-session-1\/events\?after=\d+/,
-    () => {},
-  );
+test(
+  'restricts chat model switching to the session provider and badges kimi sessions',
+  { tag: '@smoke' },
+  async ({ page }) => {
+    const kimiSession = {
+      id: 'kimi-session-1',
+      state: 'ready',
+      workspacePath: '/project',
+      provider: 'kimi',
+      model: 'k2-thinking',
+      activeTurnId: null,
+    };
+    await page.route('**/api/bootstrap', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(bootstrap([kimiSession], kimiProviders)),
+      }),
+    );
+    await page.route('**/api/sessions/kimi-session-1/history', (route) =>
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify(chatSnapshot()) }),
+    );
+    await page.routeWebSocket(
+      /ws:\/\/127\.0\.0\.1:\d+\/api\/sessions\/kimi-session-1\/events\?after=\d+/,
+      () => {},
+    );
 
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Sessions' }).click();
-  const openSessions = page.getByLabel('Open sessions');
-  await expect(openSessions.getByText('Kimi')).toBeVisible();
-  await expect(openSessions.getByText('Model: k2-thinking', { exact: true })).toBeVisible();
-  await expect(openSessions.getByRole('button', { name: /^Autopilot/ })).toHaveCount(0);
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Sessions' }).click();
+    const openSessions = page.getByLabel('Open sessions');
+    await expect(openSessions.getByText('Kimi')).toBeVisible();
+    await expect(openSessions.getByText('Model: k2-thinking', { exact: true })).toBeVisible();
+    await expect(openSessions.getByRole('button', { name: /^Autopilot/ })).toHaveCount(0);
 
-  await openChat(page);
-  await expect(page.getByRole('status', { name: /^Ready since / })).toBeVisible();
-  await page.getByRole('textbox', { name: 'Prompt' }).fill('/model ');
-  const modelsMenu = page.getByRole('list', { name: 'Available models' });
-  await expect(modelsMenu).toBeVisible();
-  await expect(modelsMenu.getByText('k2-thinking')).toBeVisible();
-  await expect(modelsMenu.getByText('k2-fast')).toBeVisible();
-  await expect(modelsMenu.getByText('gpt-5.6-terra')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: /^Autopilot/ })).toHaveCount(0);
-});
+    await openChat(page);
+    await expect(page.getByRole('status', { name: /^Ready since / })).toBeVisible();
+    await page.getByRole('textbox', { name: 'Prompt' }).fill('/model ');
+    const modelsMenu = page.getByRole('list', { name: 'Available models' });
+    await expect(modelsMenu).toBeVisible();
+    await expect(modelsMenu.getByText('k2-thinking')).toBeVisible();
+    await expect(modelsMenu.getByText('k2-fast')).toBeVisible();
+    await expect(modelsMenu.getByText('gpt-5.6-terra')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^Autopilot/ })).toHaveCount(0);
+  },
+);
 
 test('hides the resume Copy action for kimi recent threads', async ({ page }) => {
   let recentOpenBody: unknown;
