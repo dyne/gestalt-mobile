@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { PassThrough } from 'node:stream';
+import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import {
   CODEX_JSON_RPC_ERROR,
@@ -66,6 +66,105 @@ describe('JsonRpcClient', () => {
     await expect(written).resolves.toContain('"id":41');
   });
 
+  it.each([
+    [
+      'synchronous throw',
+      () => {
+        throw new Error('HANDLER_FAILED');
+      },
+    ],
+    ['rejected promise', () => Promise.reject(new Error('HANDLER_FAILED'))],
+  ] as const)('writes exactly one associated error response for a %s', async (_kind, handler) => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const client = new JsonRpcClient(input, output);
+    const replies: unknown[] = [];
+    const settlements: unknown[] = [];
+    output.on('data', (line) => replies.push(JSON.parse(line.toString())));
+    client.onServerResponseSettled((settlement) => settlements.push(settlement));
+    client.onServerRequest(handler);
+    try {
+      input.write(
+        `${JSON.stringify({ jsonrpc: '2.0', id: 51, method: 'item/tool/call', params: {} })}\n`,
+      );
+      // Drain dispatch microtasks and stream write callbacks without waiting for a reply
+      // that the broken synchronous dispatch never produces.
+      await new Promise((resolve) => setImmediate(resolve));
+      expect({ replies, settlements }).toEqual({
+        replies: [{ jsonrpc: '2.0', id: 51, error: { message: 'HANDLER_FAILED' } }],
+        settlements: [{ id: 51, outcome: 'errorWritten' }],
+      });
+    } finally {
+      input.destroy();
+      output.destroy();
+    }
+  });
+
+  it('writes exactly one associated successful server response', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const client = new JsonRpcClient(input, output);
+    const replies: unknown[] = [];
+    const settlements: unknown[] = [];
+    const requests: unknown[] = [];
+    output.on('data', (line) => replies.push(JSON.parse(line.toString())));
+    client.onServerResponseSettled((settlement) => settlements.push(settlement));
+    client.onServerRequest((request) => {
+      requests.push(request);
+      return { acknowledged: true };
+    });
+    try {
+      input.write(
+        `${JSON.stringify({ jsonrpc: '2.0', id: 52, method: 'item/tool/call', params: { name: 'tool' } })}\n`,
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(requests).toEqual([{ id: 52, method: 'item/tool/call', params: { name: 'tool' } }]);
+      expect({ replies, settlements }).toEqual({
+        replies: [{ jsonrpc: '2.0', id: 52, result: { acknowledged: true } }],
+        settlements: [{ id: 52, outcome: 'resultWritten' }],
+      });
+    } finally {
+      input.destroy();
+      output.destroy();
+    }
+  });
+
+  it('ignores malformed input and still handles the next valid server request', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const client = new JsonRpcClient(input, output);
+    const replies: unknown[] = [];
+    const settlements: unknown[] = [];
+    const requests: unknown[] = [];
+    output.on('data', (line) => replies.push(JSON.parse(line.toString())));
+    client.onServerResponseSettled((settlement) => settlements.push(settlement));
+    client.onServerRequest((request) => {
+      requests.push(request);
+      return { acknowledged: true };
+    });
+    try {
+      input.write('{"jsonrpc":"2.0","id":53,"method":\n');
+      await new Promise((resolve) => setImmediate(resolve));
+      expect({ requests, replies, settlements }).toEqual({
+        requests: [],
+        replies: [],
+        settlements: [],
+      });
+      input.write(
+        `${JSON.stringify({ jsonrpc: '2.0', id: 54, method: 'item/tool/call', params: {} })}\n`,
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(requests).toEqual([{ id: 54, method: 'item/tool/call', params: {} }]);
+      expect({ replies, settlements }).toEqual({
+        replies: [{ jsonrpc: '2.0', id: 54, result: { acknowledged: true } }],
+        settlements: [{ id: 54, outcome: 'resultWritten' }],
+      });
+    } finally {
+      input.destroy();
+      output.destroy();
+    }
+  });
+
   it('reports server-response settlement only after the response write completes', async () => {
     const input = new PassThrough();
     const output = new PassThrough();
@@ -81,6 +180,83 @@ describe('JsonRpcClient', () => {
     await written;
     await new Promise((resolve) => setImmediate(resolve));
     expect(settlements).toEqual([{ id: 42, outcome: 'resultWritten' }]);
+  });
+
+  it.each([
+    ['synchronous write throw', 'success'],
+    ['synchronous write throw', 'handler failure'],
+    ['write callback failure', 'success'],
+    ['write callback failure', 'handler failure'],
+  ] as const)(
+    'settles a %s once after %s without retrying',
+    async (writeFailure, handlerOutcome) => {
+      const input = new PassThrough();
+      const attempts: unknown[] = [];
+      const writeError = new Error('OUTPUT_FAILED');
+      const output = new Writable({
+        write(chunk, _encoding, callback) {
+          attempts.push(JSON.parse(chunk.toString()));
+          if (writeFailure === 'synchronous write throw') throw writeError;
+          callback(writeError);
+        },
+      });
+      const streamErrors: unknown[] = [];
+      // Writable emits callback errors separately; its owner observes that event.
+      output.on('error', (error) => streamErrors.push(error));
+      const client = new JsonRpcClient(input, output);
+      const settlements: unknown[] = [];
+      client.onServerResponseSettled((settlement) => settlements.push(settlement));
+      client.onServerRequest(() => {
+        if (handlerOutcome === 'handler failure') throw new Error('HANDLER_FAILED');
+        return { acknowledged: true };
+      });
+      try {
+        input.write(
+          `${JSON.stringify({ jsonrpc: '2.0', id: 55, method: 'item/tool/call', params: {} })}\n`,
+        );
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(attempts).toEqual([
+          {
+            jsonrpc: '2.0',
+            id: 55,
+            ...(handlerOutcome === 'handler failure'
+              ? { error: { message: 'HANDLER_FAILED' } }
+              : { result: { acknowledged: true } }),
+          },
+        ]);
+        expect(settlements).toEqual([{ id: 55, outcome: 'writeFailed' }]);
+        expect(streamErrors).toEqual(writeFailure === 'write callback failure' ? [writeError] : []);
+      } finally {
+        input.destroy();
+        output.destroy();
+      }
+    },
+  );
+
+  it('settles an unserializable result as a write failure without a second response', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const client = new JsonRpcClient(input, output);
+    const replies: unknown[] = [];
+    const settlements: unknown[] = [];
+    const result: { self?: unknown } = {};
+    result.self = result;
+    output.on('data', (line) => replies.push(JSON.parse(line.toString())));
+    client.onServerResponseSettled((settlement) => settlements.push(settlement));
+    client.onServerRequest(() => result);
+    try {
+      input.write(
+        `${JSON.stringify({ jsonrpc: '2.0', id: 56, method: 'item/tool/call', params: {} })}\n`,
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      expect({ replies, settlements }).toEqual({
+        replies: [],
+        settlements: [{ id: 56, outcome: 'writeFailed' }],
+      });
+    } finally {
+      input.destroy();
+      output.destroy();
+    }
   });
 
   it('rejects pending and later requests after the app-server process fails', async () => {

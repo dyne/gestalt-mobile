@@ -122,8 +122,8 @@ export class JsonRpcClient {
     response: Readonly<{ result?: unknown; error?: unknown }>,
     outcome: 'resultWritten' | 'errorWritten',
   ): void {
-    const line = `${JSON.stringify({ jsonrpc: '2.0', id, ...response })}\n`;
     try {
+      const line = `${JSON.stringify({ jsonrpc: '2.0', id, ...response })}\n`;
       this.output.write(line, (error) => {
         const settled = error ? 'writeFailed' : outcome;
         this.serverResponseSettlements.forEach((listener) => listener({ id, outcome: settled }));
@@ -159,16 +159,18 @@ export class JsonRpcClient {
             }) => Promise<unknown> | unknown)
           | undefined;
         if (!listener) return;
-        void Promise.resolve(
-          listener({ id: message.id, method: message.method, params: message.params }),
-        )
-          .then((result) => this.writeServerResponse(message.id!, { result }, 'resultWritten'))
-          .catch((error: unknown) =>
-            this.writeServerResponse(
-              message.id!,
-              { error: { message: error instanceof Error ? error.message : 'REQUEST_FAILED' } },
-              'errorWritten',
-            ),
+        void Promise.resolve()
+          .then(() =>
+            listener({ id: message.id!, method: message.method!, params: message.params }),
+          )
+          .then(
+            (result) => this.writeServerResponse(message.id!, { result }, 'resultWritten'),
+            (error: unknown) =>
+              this.writeServerResponse(
+                message.id!,
+                { error: { message: error instanceof Error ? error.message : 'REQUEST_FAILED' } },
+                'errorWritten',
+              ),
           );
         return;
       }
