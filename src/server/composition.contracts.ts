@@ -6070,6 +6070,119 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('attention', () => {
+    it('coalesces concurrent attention guidance and rejects a competing operation before replaying settlement', async () => {
+      const fixture = await createProductionAutopilotFixture({
+        autopilotSchedule: () => () => {},
+      });
+      const handle = fixture.handles.find((candidate) => candidate.request)!;
+      let releaseGuidance!: () => void;
+      const guidanceGate = new Promise<void>((resolve) => {
+        releaseGuidance = resolve;
+      });
+      let guidanceStarted = false;
+      handle.respond = async (method) => {
+        if (method !== 'turn/start') return;
+        guidanceStarted = true;
+        await guidanceGate;
+        return { turn: { id: 'attention-guidance-turn' } };
+      };
+      const submit = (operationKey: string) =>
+        Promise.resolve(
+          fixture.app.inject({
+            method: 'POST',
+            url: `/api/sessions/${fixture.sessionId}/attention/690/resolve`,
+            payload: { operationKey, action: 'resume', guidance: 'Continue the bounded task.' },
+          }),
+        );
+      const resolutions: Array<ReturnType<typeof submit>> = [];
+      try {
+        await expect(handle.request!(attentionCall(690))).resolves.toEqual(
+          toOrgPlanAttentionAcknowledgement(),
+        );
+        resolutions.push(submit('shared-guidance'));
+        await vi.waitFor(() => expect(guidanceStarted).toBe(true));
+        resolutions.push(submit('shared-guidance'));
+        const competing = await submit('competing-guidance');
+        expect(competing.statusCode).toBe(409);
+        expect(competing.json()).toEqual({ code: 'ATTENTION_OPERATION_STALE' });
+        expect(
+          (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/attention`)).json(),
+        ).toMatchObject({ requestId: '690' });
+        releaseGuidance();
+        const [first, duplicate] = await Promise.all(resolutions);
+        expect(first!.statusCode).toBe(202);
+        expect(duplicate!.statusCode).toBe(202);
+        expect(duplicate!.json()).toEqual(first!.json());
+        expect(first!.json()).toMatchObject({ accepted: true, replayed: false });
+        const replay = await submit('shared-guidance');
+        expect(replay.statusCode).toBe(202);
+        expect(replay.json()).toEqual({ ...first!.json(), replayed: true });
+        const delivered = handle.requests.filter((request) => request.method === 'turn/start');
+        expect(delivered).toHaveLength(1);
+        expect(JSON.stringify(delivered[0]!.params)).toContain('Continue the bounded task.');
+        const history = (
+          await fixture.app.inject(`/api/sessions/${fixture.sessionId}/history`)
+        ).json();
+        expect(
+          history.interactions.filter((item: { requestId: string }) => item.requestId === '690'),
+        ).toEqual([
+          expect.objectContaining({ outcome: 'answered', resolvedAt: first!.json().resolvedAt }),
+        ]);
+      } finally {
+        releaseGuidance();
+        await Promise.allSettled(resolutions);
+        await fixture.app.close();
+        expect(handle.pendingResponses.size).toBe(0);
+      }
+    });
+
+    it.each(['response settlement', 'relay shutdown'] as const)(
+      'cancels the attention acknowledgement deadline after %s while retaining durable attention',
+      async (boundary) => {
+        const fixture = await createProductionAutopilotFixture({
+          attentionAcknowledgementDeadlineMs: 300,
+          autopilotSchedule: () => () => {},
+        });
+        const handle = fixture.handles.find((candidate) => candidate.request)!;
+        handle.deferResponseSettlement = true;
+        const response = handle.request!(attentionCall(692));
+        void response.catch(() => {});
+        try {
+          await vi.waitFor(() => expect(handle.pendingResponses.has(692)).toBe(true));
+          const writersBefore = fixture.handles.length;
+          if (boundary === 'response settlement') {
+            handle.responseSettled!({ id: 692, outcome: 'resultWritten' });
+            await expect(response).resolves.toEqual(toOrgPlanAttentionAcknowledgement());
+          } else {
+            await fixture.app.close();
+            await expect(response).rejects.toThrow('CODEX_SERVER_REQUEST_CANCELLED');
+          }
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          expect(fixture.handles).toHaveLength(writersBefore);
+          const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+          try {
+            expect(
+              database
+                .prepare(
+                  'SELECT resolution_state, resolved_at, outcome FROM pending_interactions WHERE session_id = ? AND request_id = ?',
+                )
+                .get(fixture.sessionId, '692'),
+            ).toMatchObject({
+              resolution_state: 'acknowledged',
+              resolved_at: null,
+              outcome: null,
+            });
+          } finally {
+            database.close();
+          }
+        } finally {
+          await fixture.app.close();
+          await Promise.allSettled([response]);
+          expect(handle.pendingResponses.size).toBe(0);
+        }
+      },
+    );
+
     it('includes the same blocked root turn explanation in attention and session reloads', async () => {
       const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
       const fixture = await createProductionAutopilotFixture({
