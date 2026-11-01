@@ -636,6 +636,20 @@ describe('RelayApp chat controller composition', () => {
       },
     );
     Element.prototype.scrollIntoView = vi.fn();
+    const sessions = [
+      {
+        id: 'a',
+        state: 'ready',
+        workspacePath: '/a',
+        lastOrgPlan: { filename: 'a.org', title: 'Plan A', attached: true },
+      },
+      {
+        id: 'b',
+        state: 'ready',
+        workspacePath: '/b',
+        lastOrgPlan: { filename: 'b.org', title: 'Plan B', attached: true },
+      },
+    ];
     const fetcher = vi.fn(
       async (input: RequestInfo | URL) =>
         new Response(
@@ -645,24 +659,13 @@ describe('RelayApp chat controller composition', () => {
                   workspaces: [],
                   profiles: [],
                   models: { codex: [], kimi: [] },
-                  sessions: [
-                    {
-                      id: 'a',
-                      state: 'ready',
-                      workspacePath: '/a',
-                      lastOrgPlan: { filename: 'a.org', title: 'Plan A', attached: true },
-                    },
-                    {
-                      id: 'b',
-                      state: 'ready',
-                      workspacePath: '/b',
-                      lastOrgPlan: { filename: 'b.org', title: 'Plan B', attached: true },
-                    },
-                  ],
+                  sessions,
                 }
-              : String(input) === '/api/skill-profiles'
-                ? { profiles: [] }
-                : [],
+              : String(input) === '/api/sessions'
+                ? sessions
+                : String(input) === '/api/skill-profiles'
+                  ? { profiles: [] }
+                  : [],
           ),
         ),
     );

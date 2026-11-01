@@ -296,6 +296,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   // Keep the exact owning-session plan until the next socket event supersedes it.
   let latestSessionPlans = $state.raw<ReadonlyMap<string, SupervisedPlan | undefined>>(new Map());
   let sessionListEpoch = 0;
+  let sessionRosterRevision = 0;
   let sessionListAbort: AbortController | null = null;
   let chatEnabled = $derived(sessions.some((session) => session.id === sessionId));
   let recentSessions = $state<RecentSession[]>([]);
@@ -623,8 +624,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       toastEvidence === 'stacked'
     )
       return;
+    const bootstrapRevision = sessionRosterRevision;
     try {
       const bootstrap = await loadBootstrap(authorizedFetch);
+      // Publish the roster before optional catalogs or local storage can delay it.
+      // Preserve a roster updated since bootstrap began, even if another refresh fails.
+      if (sessionRosterRevision === bootstrapRevision) sessions = bootstrap.sessions;
       sessionWorkspaceId =
         refreshSelection(
           sessionWorkspaceId || null,
@@ -670,24 +675,27 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       componentVersions = bootstrap.versions ?? [];
       acceptXerjStatus(bootstrap.xerj);
       headerIconUrl = bootstrap.branding?.headerIconUrl ?? null;
-      if (!detachedSessionId) await refreshSkillProfiles();
+      if (!detachedSessionId) void refreshSkillProfiles();
       sessionExpandedIds = defaultExpandedIds(workspaceTree);
       gitExpandedIds = defaultExpandedIds(workspaceTree);
       const remembered = detachedSessionId ? null : await sessionCache.readSelectedSession();
-      sessionId = detachedSessionId
-        ? (bootstrap.sessions.find((session) => session.id === detachedSessionId)?.id ?? null)
-        : bootstrap.sessions.some((session) => session.id === remembered)
-          ? remembered
-          : (bootstrap.sessions[0]?.id ?? null);
-      if (sessionId) {
-        const envelope = await sessionCache.readDraftEnvelope(sessionId);
-        message = envelope.text;
-        draftRevision = envelope.revision;
-        restorePendingDrafts(sessionId, envelope.pending);
+      if (!sessionId)
+        sessionId = detachedSessionId
+          ? (sessions.find((session) => session.id === detachedSessionId)?.id ?? null)
+          : sessions.some((session) => session.id === remembered)
+            ? remembered
+            : (sessions[0]?.id ?? null);
+      const selectedAtBootstrap = sessionId;
+      if (selectedAtBootstrap) {
+        const envelope = await sessionCache.readDraftEnvelope(selectedAtBootstrap);
+        if (sessionId === selectedAtBootstrap) {
+          message = envelope.text;
+          draftRevision = envelope.revision;
+          restorePendingDrafts(selectedAtBootstrap, envelope.pending);
+        }
       }
-      sessions = bootstrap.sessions;
       const active = observedSessions(
-        bootstrap.sessions.filter((session) => ['ready', 'turnActive'].includes(session.state)),
+        sessions.filter((session) => ['ready', 'turnActive'].includes(session.state)),
       );
       activityController.bootstrap(active, sessionId);
       autopilotController.bootstrap(active);
@@ -894,6 +902,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         if (!latestSessionPlans.has(session.id)) return session;
         return { ...session, plan: latestSessionPlans.get(session.id) };
       });
+      sessionRosterRevision += 1;
       const active = observedSessions(
         sessions.filter((session) => ['ready', 'turnActive'].includes(session.state)),
       );
@@ -978,7 +987,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         recent.cwd,
         recent.provider ?? 'codex',
       );
-      if (!sessions.some((item) => item.id === session.id)) sessions = [...sessions, session];
+      if (!sessions.some((item) => item.id === session.id)) {
+        sessions = [...sessions, session];
+        sessionRosterRevision += 1;
+      }
       void refreshSessionLists();
       await openSession(session.id);
     } catch (error) {
