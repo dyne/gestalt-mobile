@@ -230,6 +230,74 @@ describe('canonical executor handoff observations', () => {
       f.close();
     }
   });
+
+  it('contains rejected plan-callback state and records recovery without replacing the valid executor', () => {
+    const f = fixture();
+    try {
+      const previous = f.store.find('s')!;
+      f.setActivity({
+        ...f.getActivity(),
+        subagents: [
+          {
+            ...child(2),
+            ownedProcesses: Array.from({ length: 65 }, (_, n) => ({
+              processId: `process-${n}`,
+              itemId: `item-${n}`,
+              ownerThreadId: 'child-2',
+              ownerTaskPath: '/root/l2',
+              state: 'running' as const,
+              ownership: 'executor' as const,
+              observedAt: now,
+              elapsedMs: 0,
+              cpuPercent: null,
+              rssBytes: null,
+            })),
+          },
+        ],
+      });
+      expect(() => f.coordinator.planStatusChanged('s')).not.toThrow();
+      expect(f.store.find('s')).toMatchObject({
+        executor: previous.executor,
+        stopReason: 'reconcileFailed',
+        generation: previous.generation + 1,
+      });
+      const event = f.db
+        .prepare(
+          "SELECT payload_json FROM autopilot_outbox WHERE session_id = 's' AND type = 'autopilot.operation-failed'",
+        )
+        .get() as { payload_json: string };
+      expect(JSON.parse(event.payload_json)).toMatchObject({
+        code: 'PERSISTENCE',
+        reason: 'AUTOPILOT_STATE_INVALID',
+      });
+      expect(f.start).not.toHaveBeenCalled();
+      expect(f.resume).not.toHaveBeenCalled();
+    } finally {
+      f.close();
+    }
+  });
+
+  it('contains a persisted invalid row on plan callbacks and leaves explicit Off recovery authoritative', () => {
+    const f = fixture();
+    try {
+      f.db
+        .prepare("UPDATE autopilot_sessions SET lifecycle_json = ? WHERE session_id = 's'")
+        .run('{"executor":{}}');
+      expect(() => f.coordinator.planStatusChanged('s')).not.toThrow();
+      expect(f.coordinator.snapshot('s')).toMatchObject({
+        health: { degradationReason: 'controllerUnavailable' },
+      });
+      expect(
+        f.db.prepare("SELECT lifecycle_json FROM autopilot_sessions WHERE session_id = 's'").get(),
+      ).toMatchObject({ lifecycle_json: '{"executor":{}}' });
+      expect(f.start).not.toHaveBeenCalled();
+      expect(f.resume).not.toHaveBeenCalled();
+    } finally {
+      f.db.prepare("DELETE FROM autopilot_sessions WHERE session_id = 's'").run();
+      f.close();
+    }
+  });
+
   it.each([false, true])(
     'adopts the existing new executor while root is active (attention=%s)',
     async (pending) => {

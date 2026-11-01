@@ -1002,6 +1002,103 @@ describe('CodexSessionRuntime', () => {
       params: { threadId: 'child-1', processId: 'process-1' },
     });
   });
+  it.each([1, 64])(
+    'keeps %i new active processes visible while batching an exited-result backlog without losing results',
+    async (activeCount) => {
+      const old = Array.from({ length: 64 }, (_, n) => ({
+        itemId: `old-item-${n}`,
+        processId: `old-${n}`,
+      }));
+      const added = Array.from({ length: activeCount }, (_, n) => ({
+        itemId: `new-item-${n}`,
+        processId: `new-${n}`,
+      }));
+      let active = old;
+      let unloaded = false;
+      const runtime = new CodexSessionRuntime(() => ({
+        rpc: {
+          request: async (method) => {
+            if (method === 'thread/backgroundTerminals/list') {
+              if (unloaded) throw new CodexJsonRpcError(-32600, 'thread not found: child');
+              return { data: active, nextCursor: null };
+            }
+            if (method === 'thread/read')
+              return {
+                thread: {
+                  turns: [
+                    {
+                      items: [...old, ...added].map((item) => ({
+                        id: item.itemId,
+                        type: 'commandExecution',
+                        status: 'completed',
+                        exitCode: 0,
+                      })),
+                    },
+                  ],
+                },
+              };
+            return {};
+          },
+          onNotification: () => () => {},
+          onServerRequest: () => () => {},
+        },
+        close: () => {},
+      }));
+      const session = {
+        ...RelaySession.create({
+          id: 'batch',
+          provider: 'codex',
+          effectiveSkillSelection: { skills: [] },
+          workspaceId: 'w',
+          workspacePath: '/workspace',
+          profile: 'default',
+          now: '2026-10-31T20:00:00Z',
+        }).snapshot,
+        threadId: 'root',
+      };
+      try {
+        await runtime.restore(session, '2026-10-31T20:00:00Z');
+        const child = { id: 'child', taskPath: '/root/l1', status: 'idle' };
+        expect(await runtime.inspectChildProcesses(session, child)).toHaveLength(64);
+        active = [];
+        expect(await runtime.inspectChildProcesses(session, child)).toEqual(
+          old.map((item) =>
+            expect.objectContaining({ processId: item.processId, state: 'exited-awaiting-result' }),
+          ),
+        );
+        active = added;
+        const batch = await runtime.inspectChildProcesses(session, child);
+        expect(batch).toHaveLength(64);
+        expect(batch.slice(0, activeCount)).toEqual(
+          added.map((item) =>
+            expect.objectContaining({ processId: item.processId, state: 'running' }),
+          ),
+        );
+        unloaded = true;
+        expect(
+          await runtime.inspectChildProcesses(session, { ...child, status: 'notLoaded' }),
+        ).toEqual(batch);
+        unloaded = false;
+        active = [];
+        const consumed = new Set<string>();
+        for (let round = 0; round < 3; round++) {
+          const pending = await runtime.inspectChildProcesses(session, child);
+          expect(pending.length).toBeLessThanOrEqual(64);
+          for (const process of pending) {
+            expect(process.state).toBe('exited-awaiting-result');
+            expect(consumed.has(process.processId)).toBe(false);
+            consumed.add(process.processId);
+            runtime.consumeChildProcessResult(session.id, child.id, process.processId);
+          }
+        }
+        expect(consumed).toEqual(new Set([...old, ...added].map((item) => item.processId)));
+        expect(await runtime.inspectChildProcesses(session, child)).toEqual([]);
+      } finally {
+        runtime.stopAll();
+      }
+    },
+  );
+
   it('reconciles a lost terminate acknowledgement after runtime restart without killing a reused process id', async () => {
     let current: { itemId: string; processId: string; osPid: number } | null = {
       itemId: 'old-command',

@@ -1623,6 +1623,16 @@ export class AutopilotCoordinator {
   }
   /** Handles only plan lifecycle safety; ordinary plan mutations are ignored. */
   planStatusChanged(sessionId: string): void {
+    try {
+      this.applyPlanStatusChanged(sessionId);
+    } catch (error) {
+      // Filesystem watchers invoke this synchronous boundary without a caller
+      // that can handle rejection. Use the same durable recovery as queued work.
+      this.containOperationFailure(sessionId, error);
+    }
+  }
+
+  private applyPlanStatusChanged(sessionId: string): void {
     this.reconcileExecutorBinding(sessionId);
     const prior = this.deps.store.find(sessionId);
     if (!prior) return;
@@ -4279,6 +4289,7 @@ function startFailureCode(error: unknown): AutopilotControl['failureCode'] {
 
 /** Keep failure telemetry bounded and free of prompts, paths, and error prose. */
 function operationFailureCode(error: unknown): 'PERSISTENCE' | 'PUBLICATION' | 'OPERATION' {
+  if (error instanceof AutopilotStateError) return 'PERSISTENCE';
   const code =
     error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
       ? error.code
@@ -4304,6 +4315,7 @@ function operationRpcCode(error: unknown): number | undefined {
 }
 
 function operationErrorKind(error: unknown): string {
+  if (error instanceof AutopilotStateError) return 'AUTOPILOT_STATE_INVALID';
   if (
     error &&
     typeof error === 'object' &&

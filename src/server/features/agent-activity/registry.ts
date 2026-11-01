@@ -14,6 +14,12 @@ import {
   type AgentOwnedProcess,
 } from './model.js';
 
+export type ActivityReconcileDiagnostic = Readonly<{
+  rpcCode?: number;
+  errorCode?: 'AUTOPILOT_STATE_INVALID';
+  attempt: number;
+}>;
+
 /** Session-local read model. Scheduling and reconciliation are injected ports. */
 export class AgentActivityRegistry {
   readonly #snapshots = new Map<string, AgentActivitySnapshot>();
@@ -35,7 +41,7 @@ export class AgentActivityRegistry {
       diagnostic?: (
         sessionId: string,
         code: 'reconcileExhausted',
-        detail?: { rpcCode?: number; attempt: number },
+        detail?: ActivityReconcileDiagnostic,
       ) => void;
       /** True only when an authoritative runtime read published actor evidence. */
       reconcile?: (sessionId: string) => Promise<boolean>;
@@ -267,6 +273,13 @@ export class AgentActivityRegistry {
         this.options.diagnostic?.(sessionId, 'reconcileExhausted', {
           attempt,
           ...(rpcCode !== undefined ? { rpcCode } : {}),
+          // Fixed controller code only; arbitrary exception text stays private.
+          ...(error &&
+          typeof error === 'object' &&
+          'code' in error &&
+          error.code === 'AUTOPILOT_STATE_INVALID'
+            ? { errorCode: 'AUTOPILOT_STATE_INVALID' as const }
+            : {}),
         });
         this.disconnected(sessionId, this.options.now?.() ?? now);
         return;
