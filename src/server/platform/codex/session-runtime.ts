@@ -1204,12 +1204,7 @@ export class CodexSessionRuntime {
         error.message !== `thread not found: ${child.id}`
       )
         throw error;
-      return [...owned.ownedChildProcesses.values()].filter(
-        (process) =>
-          process.ownerThreadId === child.id &&
-          process.state !== 'result-consumed' &&
-          process.state !== 'terminated-for-budget',
-      );
+      return this.childProcessBatch(owned, child.id);
     }
     const activeIds = new Set(active.map((process) => process.processId));
     for (const process of active)
@@ -1235,12 +1230,29 @@ export class CodexSessionRuntime {
         });
       }
     }
-    return [...owned.ownedChildProcesses.values()].filter(
-      (process) =>
-        process.ownerThreadId === child.id &&
-        process.state !== 'result-consumed' &&
-        process.state !== 'terminated-for-budget',
-    );
+    return this.childProcessBatch(owned, child.id);
+  }
+
+  private childProcessBatch(
+    owned: SessionResource,
+    childThreadId: string,
+  ): readonly OwnedChildProcess[] {
+    // The active RPC is bounded, but exited results accumulate across reads.
+    // Keep that backlog until explicit consumption; only the lifecycle batch is
+    // bounded. Active work must remain visible even when older results fill it.
+    return [...owned.ownedChildProcesses.values()]
+      .filter(
+        (process) =>
+          process.ownerThreadId === childThreadId &&
+          process.state !== 'result-consumed' &&
+          process.state !== 'terminated-for-budget',
+      )
+      .sort(
+        (left, right) =>
+          Number(right.state === 'running' || right.state === 'detached-active') -
+          Number(left.state === 'running' || left.state === 'detached-active'),
+      )
+      .slice(0, 64);
   }
 
   consumeChildProcessResult(

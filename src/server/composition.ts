@@ -79,7 +79,10 @@ import {
   type PendingInteraction,
   type RelaySessionSnapshot,
 } from './features/sessions/model/relay-session.js';
-import { AgentActivityRegistry } from './features/agent-activity/registry.js';
+import {
+  AgentActivityRegistry,
+  type ActivityReconcileDiagnostic,
+} from './features/agent-activity/registry.js';
 import { SupervisionTakeover } from './features/autopilot/application/takeover-supervision.js';
 import { SqliteSupervisionTakeoverStore } from './platform/persistence/sqlite-supervision-takeover-store.js';
 import { isOrgPlanTakeoverCall } from '../shared/contracts/org-plan-takeover.js';
@@ -197,7 +200,11 @@ export type ComposeRelayAppOptions = {
   componentVersions?: readonly ComponentVersion[];
   startAppServers?: boolean;
   xerj?: XerjStatus['mode'];
-  activityDiagnostic?: (sessionId: string, code: 'reconcileExhausted') => void;
+  activityDiagnostic?: (
+    sessionId: string,
+    code: 'reconcileExhausted',
+    detail?: ActivityReconcileDiagnostic,
+  ) => void;
   activitySchedule?: (callback: () => void, delayMs: number) => () => void;
   /** Test-only deterministic seam around the production coordinator timer. */
   autopilotSchedule?: (callback: () => void, delayMs: number) => () => void;
@@ -425,7 +432,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         options.activityDiagnostic ??
         ((sessionId, code, detail) =>
           console.warn(
-            `agent activity ${code} session=${sessionId} attempt=${detail?.attempt ?? 0} rpcCode=${detail?.rpcCode ?? 'none'}`,
+            `agent activity ${code} session=${sessionId} attempt=${detail?.attempt ?? 0} rpcCode=${detail?.rpcCode ?? 'none'} errorCode=${detail?.errorCode ?? 'none'}`,
           )),
       reconcile: async (sessionId) => {
         const session = sessions.find(sessionId);

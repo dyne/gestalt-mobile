@@ -29,6 +29,24 @@ describe('agent activity registry', () => {
     registry.observe({ sessionId: 's', occurredAt: at, kind: 'turnStarted', threadId: 'root' });
     expect(registry.snapshot('s', at).root.state).toBe('working');
   });
+
+  it('distinguishes controller-state rejection from RPC failures without exposing exception prose', async () => {
+    const diagnostic = vi.fn();
+    const registry = new AgentActivityRegistry(() => {}, {
+      maxReconcileAttempts: 1,
+      reconcile: async () => {
+        throw Object.assign(new Error('private details'), { code: 'AUTOPILOT_STATE_INVALID' });
+      },
+      diagnostic,
+    });
+    await registry.refresh('s');
+    expect(diagnostic).toHaveBeenCalledWith('s', 'reconcileExhausted', {
+      attempt: 1,
+      errorCode: 'AUTOPILOT_STATE_INVALID',
+    });
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('private');
+    registry.dispose('s');
+  });
   it('publishes only semantic changes and disposes session state', () => {
     const published: string[] = [];
     const registry = new AgentActivityRegistry((snapshot) => published.push(snapshot.root.state));

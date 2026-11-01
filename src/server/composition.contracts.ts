@@ -481,6 +481,138 @@ async function createUnauthorizedProductionApp(root: string, dataDir: string) {
 
 describe('production composition', () => {
   describeCompositionConcern('autopilot', () => {
+    it('persists a bounded executor after 64 exited results and new active work, including a plan watcher update', async () => {
+      const handles: LiveServerHandle[] = [];
+      const launch = liveAppServer(handles);
+      const diagnostic = vi.fn();
+      let coordinator: import('./features/autopilot/application/service.js').AutopilotCoordinator;
+      const old = Array.from({ length: 64 }, (_, n) => ({
+        itemId: `old-item-${n}`,
+        processId: `old-${n}`,
+      }));
+      let active = old;
+      const fixture = await createProductionAutopilotFixture({
+        activitySchedule: () => () => {},
+        autopilotSchedule: () => () => {},
+        activityDiagnostic: diagnostic,
+        onAutopilotCoordinator: (value) => {
+          coordinator = value;
+        },
+        launchAppServer: () => {
+          const server = launch();
+          handles.at(-1)!.respond = (method, params) => {
+            if (method === 'thread/list')
+              return {
+                data: [
+                  {
+                    id: 'child-1',
+                    status: { type: 'idle' },
+                    source: { subAgent: { thread_spawn: { agent_path: '/root/l1' } } },
+                  },
+                ],
+              };
+            if (method === 'thread/backgroundTerminals/list')
+              return { data: active, nextCursor: null };
+            if (method === 'thread/read' && (params as { threadId: string }).threadId === 'child-1')
+              return {
+                thread: {
+                  id: 'child-1',
+                  turns: [
+                    {
+                      items: old.map((item) => ({
+                        id: item.itemId,
+                        type: 'commandExecution',
+                        status: 'completed',
+                        exitCode: 0,
+                      })),
+                    },
+                  ],
+                },
+              };
+            return undefined;
+          };
+          return server;
+        },
+      });
+      onTestFinished(() => fixture.app.close());
+      const rootThreadId = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()
+        .threadId;
+      handles.find((handle) => handle.calls.includes('thread/start'))!.notify!({
+        method: 'thread/started',
+        params: { thread: { id: rootThreadId, status: { type: 'idle' } } },
+      });
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      onTestFinished(() => database.close());
+      const executor = () => {
+        const row = database
+          .prepare('SELECT lifecycle_json FROM autopilot_sessions WHERE session_id = ?')
+          .get(fixture.sessionId) as { lifecycle_json: string };
+        return JSON.parse(row.lifecycle_json).executor as {
+          ownedProcesses: Array<{ processId: string; state: string }>;
+        };
+      };
+      const refresh = async () => {
+        const response = await fixture.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${fixture.sessionId}/activity/refresh`,
+        });
+        expect(response.statusCode).toBe(202);
+        await vi.waitFor(async () =>
+          expect(
+            (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json(),
+          ).toMatchObject({
+            agentActivity: { confidence: 'fresh' },
+            autopilot: { enabled: true },
+          }),
+        );
+      };
+      await refresh();
+      expect(executor().ownedProcesses).toHaveLength(64);
+      active = [];
+      await refresh();
+      await vi.waitFor(() => {
+        expect(coordinator.reconcileExecutorBinding(fixture.sessionId)).toMatchObject({
+          status: 'ready',
+        });
+        expect(executor().ownedProcesses.some((process) => process.state === 'running')).toBe(
+          false,
+        );
+        expect(
+          executor().ownedProcesses.some((process) => process.state === 'exited-awaiting-result'),
+        ).toBe(true);
+      });
+      active = Array.from({ length: 64 }, (_, n) => ({
+        itemId: `new-item-${n}`,
+        processId: `new-active-${n}`,
+      }));
+      await refresh();
+      await vi.waitFor(() =>
+        expect(executor().ownedProcesses[0]).toMatchObject({
+          processId: 'new-active-0',
+          state: expect.stringMatching(/^(running|detached-active)$/),
+        }),
+      );
+      expect(executor().ownedProcesses).toHaveLength(64);
+      await writeFile(
+        join(fixture.workspacePath, 'autopilot.org'),
+        autopilotPlanText('TODO').replace('Parent', 'Updated parent'),
+      );
+      await vi.waitFor(async () => {
+        expect(
+          (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/plan`)).json(),
+        ).toMatchObject({ steps: [{ title: 'Updated parent' }] });
+      });
+      expect(executor().ownedProcesses).toHaveLength(64);
+      expect(diagnostic).not.toHaveBeenCalled();
+      expect(
+        database
+          .prepare(
+            "SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = 'autopilot.operation-failed'",
+          )
+          .get(fixture.sessionId),
+      ).toMatchObject({ count: 0 });
+    });
+
     it('serves compact supervision deltas and wakes only for the selected host run', async () => {
       let coordinator: import('./features/autopilot/application/service.js').AutopilotCoordinator;
       const f = await createProductionAutopilotFixture({
