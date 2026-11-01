@@ -1,0 +1,262 @@
+{
+  "suites": [
+    {
+      "specs": [
+        {
+          "file": "autopilot-ui.spec.ts",
+          "title": "200 percent attention remains operable",
+          "tags": ["smoke"],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "annotations": [],
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "retry": 0,
+                  "errors": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "file": "autopilot-ui.spec.ts",
+          "title": "keyboard attention action sends safe payload without disturbing focus (mobile)",
+          "tags": ["smoke"],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "annotations": [],
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "retry": 0,
+                  "errors": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "file": "autopilot-ui.spec.ts",
+          "title": "keyboard toggle is idempotent and preserves focus through a socket update (mobile)",
+          "tags": ["smoke"],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "annotations": [],
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "retry": 0,
+                  "errors": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "file": "autopilot-ui.spec.ts",
+          "title": "keyboard attention action sends safe payload without disturbing focus (desktop)",
+          "tags": ["smoke"],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "annotations": [],
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "retry": 0,
+                  "errors": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "file": "autopilot-ui.spec.ts",
+          "title": "keyboard toggle is idempotent and preserves focus through a socket update (desktop)",
+          "tags": ["smoke"],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "annotations": [],
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "retry": 0,
+                  "errors": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "file": "chat-cache.spec.ts",
+          "title": "upgrades v2 storage and restores redacted chat on reload before authoritative reconciliation",
+          "tags": ["smoke"],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "annotations": [],
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "retry": 0,
+                  "errors": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "file": "chat-resilience.spec.ts",
+          "title": "converges a live item through an overlapping snapshot, reconnect, and refresh (mobile)",
+          "tags": ["smoke"],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "annotations": [],
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "retry": 0,
+                  "errors": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "file": "chat-resilience.spec.ts",
+          "title": "converges a live item through an overlapping snapshot, reconnect, and refresh (desktop)",
+          "tags": ["smoke"],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "annotations": [],
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "retry": 0,
+                  "errors": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "file": "file-browser.spec.ts",
+          "title": "selecting a file opens the shared preview from Git and restores focus to that file",
+          "tags": ["smoke"],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "annotations": [],
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "retry": 0,
+                  "errors": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "file": "interactions.spec.ts",
+          "title": "retries a failed quiz once and suppresses a duplicate accepted request (mobile)",
+          "tags": ["smoke"],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "annotations": [],
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "retry": 0,
+                  "errors": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "file": "interactions.spec.ts",
+          "title": "retries a failed quiz once and suppresses a duplicate accepted request (desktop)",
+          "tags": ["smoke"],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "annotations": [],
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "retry": 0,
+                  "errors": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "file": "kimi-provider.spec.ts",
+          "title": "restricts chat model switching to the session provider and badges kimi sessions",
+          "tags": ["smoke"],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "annotations": [],
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "retry": 0,
+                  "errors": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "file": "session-start.spec.ts",
+          "title": "sends a selected named skill profile only when creating a new session",
+          "tags": ["smoke"],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "annotations": [],
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "retry": 0,
+                  "errors": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "expected": 13,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}

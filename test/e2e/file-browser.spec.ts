@@ -236,24 +236,27 @@ test('pauses an upload collision and sends the selected conflict disposition', a
   await expect.poll(() => conflicts).toEqual(['reject', 'keep-both']);
 });
 
-test('selecting a file opens the shared preview from Git and restores focus to that file', async ({
-  page,
-}) => {
-  await openBrowser(page);
-  await page.route('**/api/workspaces/repo/files/preview?**', (route) =>
-    route.fulfill({
-      json: { kind: 'file', path: 'note.txt', content: 'First line\nSecond line', size: 22 },
-    }),
-  );
-  await page.getByRole('treeitem', { name: /note.txt/ }).click();
-  const viewer = page.getByRole('dialog', { name: 'note.txt' });
-  await expect(viewer.locator('pre')).toHaveText('First line\nSecond line');
-  await page.keyboard.press('Escape');
-  await expect(page.getByRole('dialog', { name: 'Files in ~/repo' })).toBeVisible();
-  await expect(page.getByRole('treeitem', { name: /note.txt/ })).toBeFocused();
-  await page.getByRole('treeitem', { name: /note.txt/ }).press('Enter');
-  await expect(page.getByRole('dialog', { name: 'note.txt' })).toBeVisible();
-});
+test(
+  'selecting a file opens the shared preview from Git and restores focus to that file',
+  { tag: '@smoke' },
+  async ({ page }) => {
+    await openBrowser(page);
+    await page.route('**/api/workspaces/repo/files/preview?**', (route) => {
+      expect(new URL(route.request().url()).searchParams.get('path')).toBe('note.txt');
+      return route.fulfill({
+        json: { kind: 'file', path: 'note.txt', content: 'First line\nSecond line', size: 22 },
+      });
+    });
+    await page.getByRole('treeitem', { name: /note.txt/ }).click();
+    const viewer = page.getByRole('dialog', { name: 'note.txt' });
+    await expect(viewer.locator('pre')).toHaveText('First line\nSecond line');
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'Files in ~/repo' })).toBeVisible();
+    await expect(page.getByRole('treeitem', { name: /note.txt/ })).toBeFocused();
+    await page.getByRole('treeitem', { name: /note.txt/ }).press('Enter');
+    await expect(page.getByRole('dialog', { name: 'note.txt' })).toBeVisible();
+  },
+);
 
 for (const width of [390, 1280]) {
   test(`selecting Markdown from Git opens the advanced renderer at ${width}px`, async ({

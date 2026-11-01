@@ -308,55 +308,59 @@ for (const width of [1280, 390]) {
   });
 }
 
-test('sends a selected named skill profile only when creating a new session', async ({ page }) => {
-  let requestBody: unknown;
-  await page.route('**/api/bootstrap', (route) =>
-    route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({
-        workspaces: workspaceTree(),
-        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
-        sessions: [],
-      }),
-    }),
-  );
-  await page.route('**/api/skill-profiles', (route) =>
-    route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({
-        profiles: [{ version: 1, name: 'focused', path: '/profiles/focused.yml', skills: [] }],
-      }),
-    }),
-  );
-  await page.route('**/api/sessions', async (route) => {
-    if (route.request().method() === 'POST') {
-      requestBody = route.request().postDataJSON();
-      return route.fulfill({
+test(
+  'sends a selected named skill profile only when creating a new session',
+  { tag: '@smoke' },
+  async ({ page }) => {
+    let requestBody: unknown;
+    await page.route('**/api/bootstrap', (route) =>
+      route.fulfill({
         contentType: 'application/json',
-        body: JSON.stringify({ id: 'session-1', state: 'ready' }),
-      });
-    }
-    return route.fulfill({ contentType: 'application/json', body: '[]' });
-  });
-
-  await page.goto('/');
-  await page.getByLabel('Skills profile').selectOption('focused');
-  await page.getByRole('button', { name: 'Create session' }).click();
-  await expect
-    .poll(() => requestBody)
-    .toEqual({
-      workspaceId: 'workspace-1',
-      profile: 'default',
-      provider: 'codex',
-      model: 'gpt-6.1-sol',
-      reasoningEffort: 'medium',
-      executorModel: 'gpt-5.6-terra',
-      executorReasoningEffort: 'high',
-      sandbox: 'workspace-git',
-      approvalPolicy: 'never',
-      skillProfile: 'focused',
+        body: JSON.stringify({
+          workspaces: workspaceTree(),
+          profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+          sessions: [],
+        }),
+      }),
+    );
+    await page.route('**/api/skill-profiles', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          profiles: [{ version: 1, name: 'focused', path: '/profiles/focused.yml', skills: [] }],
+        }),
+      }),
+    );
+    await page.route('**/api/sessions', async (route) => {
+      if (route.request().method() === 'POST') {
+        requestBody = route.request().postDataJSON();
+        return route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ id: 'session-1', state: 'ready' }),
+        });
+      }
+      return route.fulfill({ contentType: 'application/json', body: '[]' });
     });
-});
+
+    await page.goto('/');
+    await page.getByLabel('Skills profile').selectOption('focused');
+    await page.getByRole('button', { name: 'Create session' }).click();
+    await expect
+      .poll(() => requestBody)
+      .toEqual({
+        workspaceId: 'workspace-1',
+        profile: 'default',
+        provider: 'codex',
+        model: 'gpt-6.1-sol',
+        reasoningEffort: 'medium',
+        executorModel: 'gpt-5.6-terra',
+        executorReasoningEffort: 'high',
+        sandbox: 'workspace-git',
+        approvalPolicy: 'never',
+        skillProfile: 'focused',
+      });
+  },
+);
 
 test('labels relay threads as sessions and shows recent sessions from Codex', async ({ page }) => {
   const managedSession = {

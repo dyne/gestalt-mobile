@@ -23,7 +23,7 @@ describe('GitHub verification workflow', () => {
     expect(configuration.on).toHaveProperty('pull_request');
     expect(configuration.on.push).toEqual({ branches: ['main'] });
     const required = configuration.jobs.release!.needs!;
-    expect(required.toSorted()).toEqual(['package-smoke', 'quality', 'vitest']);
+    expect(required.toSorted()).toEqual(['browser-smoke', 'package-smoke', 'quality', 'vitest']);
     expect(
       Object.entries(configuration.jobs)
         .filter(([, job]) => !job.if)
@@ -33,7 +33,14 @@ describe('GitHub verification workflow', () => {
     for (const id of required) {
       const job = configuration.jobs[id]!;
       expect(job.if).toBeUndefined();
-      expect(job.steps.some((step) => /playwright|test:e2e/.test(step.run ?? ''))).toBe(false);
+      if (id === 'browser-smoke') {
+        expect(job.steps).toContainEqual({
+          name: 'Run required browser smoke',
+          run: 'npm run test:e2e:smoke',
+        });
+      } else {
+        expect(job.steps.some((step) => /playwright|test:e2e/.test(step.run ?? ''))).toBe(false);
+      }
     }
     expect(configuration.jobs.vitest!.steps).toContainEqual({ name: 'Run tests', run: 'npm test' });
     expect(configuration.jobs['package-smoke']!.steps).toContainEqual({
@@ -66,6 +73,7 @@ describe('GitHub verification workflow', () => {
     expect(browserJobs.map(([id]) => id).toSorted()).toEqual([
       'browser-evidence',
       'browser-functional',
+      'browser-smoke',
       'real-auth',
     ]);
   });
@@ -129,7 +137,12 @@ describe('GitHub verification workflow', () => {
   });
 
   it('releases only verified canonical main with pinned semver and explicit tags', () => {
-    expect(configuration.jobs.release!.needs).toEqual(['quality', 'vitest', 'package-smoke']);
+    expect(configuration.jobs.release!.needs).toEqual([
+      'quality',
+      'vitest',
+      'package-smoke',
+      'browser-smoke',
+    ]);
     expect(workflow).toContain("github.repository == 'dyne/gestalt-mobile'");
     expect(workflow).toContain(
       'ietf-tools/semver-action@c90370b2958652d71c06a3484129a4d423a6d8a8 # v1.11.0',

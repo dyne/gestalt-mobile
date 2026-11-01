@@ -275,157 +275,171 @@ for (const viewport of [
   });
 }
 
-test('converges a live item through an overlapping snapshot, reconnect, and refresh', async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await mockAuthenticatedStatus(page);
-  const fixture = new ChatRelayFixture(page);
-  await fixture.install([
-    {
-      id: 'session-1',
-      state: 'ready',
-      threadId: 'thread-1',
-      workspaceId: 'workspace-1',
-      workspacePath: '/workspace',
-      profile: 'default',
-      activeTurnId: null,
-      pendingInteractions: [],
-    },
-  ]);
-  const turn = fixture.deferTurn('session-1');
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Chat' }).click();
-  await page.getByRole('textbox', { name: 'Prompt' }).fill('live convergence prompt');
-  await page.getByRole('button', { name: 'Send prompt' }).click();
-  await expect(page.getByText('live convergence prompt')).toBeVisible();
-  await expect.poll(() => fixture.commands.length).toBe(1);
-  turn.resolve({ kind: 'fulfill', status: 202, body: { activeTurnId: 'turn-live' } });
-  await expect(page.getByRole('button', { name: 'Choose prompt action' })).toBeVisible();
-  const startedAt = '2026-01-01T12:10:00.000Z';
-  fixture.event(
-    'session-1',
-    1,
-    'agentMessageStarted',
-    {
-      itemId: 'answer-live',
-      turnId: 'turn-live',
-      text: '',
-      phase: 'final_answer',
-    },
-    startedAt,
-  );
-  fixture.event(
-    'session-1',
-    2,
-    'agentMessageDelta',
-    {
-      itemId: 'answer-live',
-      turnId: 'turn-live',
-      text: 'first ',
-      phase: 'final_answer',
-    },
-    '2026-01-01T12:10:10.000Z',
-  );
-  await expect(page.getByText('first ', { exact: true })).toBeVisible();
-  fixture.snapshot(
-    'session-1',
-    chatSnapshot({
-      baseSequence: 2,
-      currentSequence: 2,
-      activeTurnId: 'turn-live',
-      items: [
+for (const viewport of [
+  { name: 'mobile', width: 390, height: 844 },
+  { name: 'desktop', width: 1280, height: 800 },
+]) {
+  test(
+    `converges a live item through an overlapping snapshot, reconnect, and refresh (${viewport.name})`,
+    { tag: '@smoke' },
+    async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await mockAuthenticatedStatus(page);
+      const fixture = new ChatRelayFixture(page);
+      await fixture.install([
         {
-          id: 'prompt-live',
-          kind: 'user',
-          text: 'live convergence prompt',
-          turnId: 'turn-live',
-          operationId: fixture.commands[0]!.idempotencyKey!,
-          occurredAt: Date.parse('2026-01-01T12:09:00.000Z'),
+          id: 'session-1',
+          state: 'ready',
+          threadId: 'thread-1',
+          workspaceId: 'workspace-1',
+          workspacePath: '/workspace',
+          profile: 'default',
+          activeTurnId: null,
+          pendingInteractions: [],
         },
-      ],
-    }),
-  );
-  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  fixture.event(
-    'session-1',
-    3,
-    'agentMessageDelta',
-    {
-      itemId: 'answer-live',
-      turnId: 'turn-live',
-      text: 'second ',
-      phase: 'final_answer',
-    },
-    '2026-01-01T12:10:20.000Z',
-  );
-  fixture.event(
-    'session-1',
-    4,
-    'agentMessageCompleted',
-    {
-      itemId: 'answer-live',
-      turnId: 'turn-live',
-      text: 'first second final',
-      phase: 'final_answer',
-    },
-    '2026-01-01T12:10:30.000Z',
-  );
-  await expect(page.getByText('first second final', { exact: true })).toBeVisible();
-  const datetime = await page
-    .getByText('first second final', { exact: true })
-    .locator('xpath=ancestor::li')
-    .locator('time')
-    .getAttribute('datetime');
-  expect(datetime).toBe(startedAt);
-  fixture.snapshot(
-    'session-1',
-    chatSnapshot({
-      baseSequence: 4,
-      currentSequence: 4,
-      activeTurnId: null,
-      items: [
+      ]);
+      const turn = fixture.deferTurn('session-1');
+      await page.goto('/');
+      await page.getByRole('button', { name: 'Chat' }).click();
+      await page.getByRole('textbox', { name: 'Prompt' }).fill('live convergence prompt');
+      await page.getByRole('button', { name: 'Send prompt' }).click();
+      await expect(page.getByText('live convergence prompt')).toBeVisible();
+      await expect.poll(() => fixture.commands.length).toBe(1);
+      expect(fixture.commands[0]).toMatchObject({
+        kind: 'turn',
+        sessionId: 'session-1',
+        body: { text: 'live convergence prompt' },
+      });
+      turn.resolve({ kind: 'fulfill', status: 202, body: { activeTurnId: 'turn-live' } });
+      await expect(page.getByRole('button', { name: 'Choose prompt action' })).toBeVisible();
+      const startedAt = '2026-01-01T12:10:00.000Z';
+      fixture.event(
+        'session-1',
+        1,
+        'agentMessageStarted',
         {
-          id: 'prompt-live',
-          kind: 'user',
-          text: 'live convergence prompt',
+          itemId: 'answer-live',
           turnId: 'turn-live',
-          operationId: fixture.commands[0]!.idempotencyKey!,
-          occurredAt: Date.parse('2026-01-01T12:09:00.000Z'),
-        },
-        {
-          id: 'answer-live',
-          kind: 'agent',
-          text: 'first second final',
-          turnId: 'turn-live',
+          text: '',
           phase: 'final_answer',
-          occurredAt: Date.parse(startedAt),
         },
-      ],
-      turns: [
+        startedAt,
+      );
+      fixture.event(
+        'session-1',
+        2,
+        'agentMessageDelta',
         {
-          id: 'turn-live',
-          items: [],
-          startedAt: Date.parse('2026-01-01T12:09:00.000Z'),
-          completedAt: Date.parse('2026-01-01T12:10:30.000Z'),
+          itemId: 'answer-live',
+          turnId: 'turn-live',
+          text: 'first ',
+          phase: 'final_answer',
         },
-      ],
-    }),
+        '2026-01-01T12:10:10.000Z',
+      );
+      await expect(page.getByText('first ', { exact: true })).toBeVisible();
+      fixture.snapshot(
+        'session-1',
+        chatSnapshot({
+          baseSequence: 2,
+          currentSequence: 2,
+          activeTurnId: 'turn-live',
+          items: [
+            {
+              id: 'prompt-live',
+              kind: 'user',
+              text: 'live convergence prompt',
+              turnId: 'turn-live',
+              operationId: fixture.commands[0]!.idempotencyKey!,
+              occurredAt: Date.parse('2026-01-01T12:09:00.000Z'),
+            },
+          ],
+        }),
+      );
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+      fixture.event(
+        'session-1',
+        3,
+        'agentMessageDelta',
+        {
+          itemId: 'answer-live',
+          turnId: 'turn-live',
+          text: 'second ',
+          phase: 'final_answer',
+        },
+        '2026-01-01T12:10:20.000Z',
+      );
+      fixture.event(
+        'session-1',
+        4,
+        'agentMessageCompleted',
+        {
+          itemId: 'answer-live',
+          turnId: 'turn-live',
+          text: 'first second final',
+          phase: 'final_answer',
+        },
+        '2026-01-01T12:10:30.000Z',
+      );
+      await expect(page.getByText('first second final', { exact: true })).toBeVisible();
+      const datetime = await page
+        .getByText('first second final', { exact: true })
+        .locator('xpath=ancestor::li')
+        .locator('time')
+        .getAttribute('datetime');
+      expect(datetime).toBe(startedAt);
+      fixture.snapshot(
+        'session-1',
+        chatSnapshot({
+          baseSequence: 4,
+          currentSequence: 4,
+          activeTurnId: null,
+          items: [
+            {
+              id: 'prompt-live',
+              kind: 'user',
+              text: 'live convergence prompt',
+              turnId: 'turn-live',
+              operationId: fixture.commands[0]!.idempotencyKey!,
+              occurredAt: Date.parse('2026-01-01T12:09:00.000Z'),
+            },
+            {
+              id: 'answer-live',
+              kind: 'agent',
+              text: 'first second final',
+              turnId: 'turn-live',
+              phase: 'final_answer',
+              occurredAt: Date.parse(startedAt),
+            },
+          ],
+          turns: [
+            {
+              id: 'turn-live',
+              items: [],
+              startedAt: Date.parse('2026-01-01T12:09:00.000Z'),
+              completedAt: Date.parse('2026-01-01T12:10:30.000Z'),
+            },
+          ],
+        }),
+      );
+      const oldSocket = fixture.sockets.get('session-1');
+      fixture.close('session-1');
+      await expect.poll(() => fixture.sockets.get('session-1') !== oldSocket).toBe(true);
+      await expect(page.getByText('first second final', { exact: true })).toHaveCount(1);
+      await expect(page.getByText('live convergence prompt', { exact: true })).toHaveCount(1);
+      await page.reload();
+      await page.getByRole('button', { name: 'Chat' }).click();
+      await expectTimeline(page, ['live convergence prompt', 'first second final']);
+      const messageTimes = page.getByLabel('Chat messages').locator('time');
+      await expect(messageTimes).toHaveCount(2);
+      await expect(messageTimes.first()).toHaveAttribute('datetime', startedAt);
+      await expect(page.getByLabel('Chat messages')).toContainText('1 minute later');
+      expect((await page.locator('.chat-tail').boundingBox())?.y ?? Infinity).toBeLessThanOrEqual(
+        viewport.height,
+      );
+    },
   );
-  const oldSocket = fixture.sockets.get('session-1');
-  fixture.close('session-1');
-  await expect.poll(() => fixture.sockets.get('session-1') !== oldSocket).toBe(true);
-  await expect(page.getByText('first second final', { exact: true })).toHaveCount(1);
-  await expect(page.getByText('live convergence prompt', { exact: true })).toHaveCount(1);
-  await page.reload();
-  await page.getByRole('button', { name: 'Chat' }).click();
-  await expectTimeline(page, ['live convergence prompt', 'first second final']);
-  const messageTimes = page.getByLabel('Chat messages').locator('time');
-  await expect(messageTimes).toHaveCount(2);
-  await expect(messageTimes.first()).toHaveAttribute('datetime', startedAt);
-  await expect(page.getByLabel('Chat messages')).toContainText('1 minute later');
-  expect((await page.locator('.chat-tail').boundingBox())?.y ?? Infinity).toBeLessThanOrEqual(844);
-});
+}
 
 test('retains activity through foreground refresh and restores its completed disclosure', async ({
   page,

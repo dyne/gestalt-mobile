@@ -836,115 +836,138 @@ for (const item of [
   { name: 'attention', state: 'attentionRequired' as const },
   { name: 'dense-audit', state: 'backoff' as const },
 ]) {
-  test(`200 percent ${item.name} remains operable`, async ({ page }) => {
-    await mkdir(evidence, { recursive: true });
-    await install(page, item.state);
-    const errors = await openEvidence(page, {
-      viewport: { width: 390, height: 844 },
-      theme: 'minimal-dark',
-      zoom: 200,
-    });
-    await page.getByRole('button', { name: 'Chat' }).click();
-    const control = page.getByRole('button', { name: /^Autopilot:/ });
-    await expectFocusedControlClearOfNavigation(page, control);
-    await expect(control).toHaveCSS('min-height', '44px');
-    if (item.name === 'attention') {
-      const resume = page.getByRole('button', { name: 'Resume' });
-      await expectFocusedControlClearOfNavigation(page, resume);
-    }
-    if (item.name === 'dense-audit') {
-      const auditEntries = page.getByLabel('Autopilot audit entry', { exact: true });
-      await expect(auditEntries).toHaveCount(4);
-      await expect(auditEntries.filter({ hasText: 'Automatic continuation failed' })).toHaveCount(
-        3,
-      );
-      await auditEntries.last().scrollIntoViewIfNeeded();
-    }
-    await expectNoHorizontalOverflow(page);
-    await page.screenshot({
-      path: `${evidence}/zoom200-${item.name}-390x844-dark.png`,
-      // The focused control is deliberately above the fixed navigation; a
-      // viewport capture proves the dense phone state is not obscured by it.
-      fullPage: false,
-    });
-    expect(errors).toEqual([]);
-  });
+  test(
+    `200 percent ${item.name} remains operable`,
+    { tag: item.name === 'attention' ? '@smoke' : [] },
+    async ({ page }) => {
+      await mkdir(evidence, { recursive: true });
+      await install(page, item.state);
+      const errors = await openEvidence(page, {
+        viewport: { width: 390, height: 844 },
+        theme: 'minimal-dark',
+        zoom: 200,
+      });
+      await page.getByRole('button', { name: 'Chat' }).click();
+      const control = page.getByRole('button', { name: /^Autopilot:/ });
+      await expectFocusedControlClearOfNavigation(page, control);
+      await expect(control).toHaveCSS('min-height', '44px');
+      if (item.name === 'attention') {
+        const resume = page.getByRole('button', { name: 'Resume' });
+        await expectFocusedControlClearOfNavigation(page, resume);
+      }
+      if (item.name === 'dense-audit') {
+        const auditEntries = page.getByLabel('Autopilot audit entry', { exact: true });
+        await expect(auditEntries).toHaveCount(4);
+        await expect(auditEntries.filter({ hasText: 'Automatic continuation failed' })).toHaveCount(
+          3,
+        );
+        await auditEntries.last().scrollIntoViewIfNeeded();
+      }
+      await expectNoHorizontalOverflow(page);
+      await page.screenshot({
+        path: `${evidence}/zoom200-${item.name}-390x844-dark.png`,
+        // The focused control is deliberately above the fixed navigation; a
+        // viewport capture proves the dense phone state is not obscured by it.
+        fullPage: false,
+      });
+      expect(errors).toEqual([]);
+    },
+  );
 }
 
 test.beforeAll(async () => {
   await rm(evidence, { recursive: true, force: true });
 });
 
-test('keyboard attention action sends safe payload without disturbing focus', async ({ page }) => {
-  const payloads: unknown[] = [];
-  const outcomes: unknown[] = [];
-  await install(page, 'attentionRequired');
-  await page.route('**/api/sessions/session-1/attention/attention-1/resolve', async (route) => {
-    payloads.push(route.request().postDataJSON());
-    outcomes.push({
-      status: 202,
-      body: { accepted: true, replayed: false, resolvedAt: '2026-08-20T00:01:00.000Z' },
-    });
-    await route.fulfill({
-      contentType: 'application/json',
-      status: 202,
-      body: JSON.stringify(outcomes.at(-1)!.body),
-    });
-  });
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Chat' }).click();
-  const control = page.getByRole('button', { name: 'Autopilot: Paused for attention' });
-  await control.focus();
-  await expect(control).toBeFocused();
-  await page.getByLabel('Optional guidance for the resumed work').fill('Continue after repair.');
-  await page.getByRole('button', { name: 'Resume' }).press('Enter');
-  await expect
-    .poll(() => payloads)
-    .toEqual([expect.objectContaining({ action: 'resume', guidance: 'Continue after repair.' })]);
-  expect(outcomes).toEqual([
-    {
-      status: 202,
-      body: { accepted: true, replayed: false, resolvedAt: '2026-08-20T00:01:00.000Z' },
+for (const viewport of [
+  { name: 'mobile', width: 390, height: 844 },
+  { name: 'desktop', width: 1280, height: 800 },
+]) {
+  test(
+    `keyboard attention action sends safe payload without disturbing focus (${viewport.name})`,
+    { tag: '@smoke' },
+    async ({ page }) => {
+      await page.setViewportSize(viewport);
+      const payloads: unknown[] = [];
+      const outcomes: unknown[] = [];
+      await install(page, 'attentionRequired');
+      await page.route('**/api/sessions/session-1/attention/attention-1/resolve', async (route) => {
+        payloads.push(route.request().postDataJSON());
+        outcomes.push({
+          status: 202,
+          body: { accepted: true, replayed: false, resolvedAt: '2026-08-20T00:01:00.000Z' },
+        });
+        await route.fulfill({
+          contentType: 'application/json',
+          status: 202,
+          body: JSON.stringify(outcomes.at(-1)!.body),
+        });
+      });
+      await page.goto('/');
+      await page.getByRole('button', { name: 'Chat' }).click();
+      const control = page.getByRole('button', { name: 'Autopilot: Paused for attention' });
+      await control.focus();
+      await expect(control).toBeFocused();
+      await page
+        .getByLabel('Optional guidance for the resumed work')
+        .fill('Continue after repair.');
+      await page.getByRole('button', { name: 'Resume' }).press('Enter');
+      await expect
+        .poll(() => payloads)
+        .toEqual([
+          expect.objectContaining({ action: 'resume', guidance: 'Continue after repair.' }),
+        ]);
+      expect(outcomes).toEqual([
+        {
+          status: 202,
+          body: { accepted: true, replayed: false, resolvedAt: '2026-08-20T00:01:00.000Z' },
+        },
+      ]);
     },
-  ]);
-});
+  );
 
-test('keyboard toggle is idempotent and preserves focus through a socket update', async ({
-  page,
-}) => {
-  const payloads: unknown[] = [];
-  const idempotencyKeys: string[] = [];
-  await install(page, 'monitoring');
-  await page.route('**/api/sessions/session-1/autopilot', async (route) => {
-    payloads.push(route.request().postDataJSON());
-    idempotencyKeys.push(route.request().headers()['idempotency-key'] ?? '');
-    await route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({
-        autopilot:
-          payloads.length === 1 ? autopilot('disabled', 'manualDisabled') : autopilot('monitoring'),
-      }),
-    });
-  });
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Chat' }).click();
-  const control = page.getByRole('button', { name: 'Autopilot: Monitoring' });
-  await control.focus();
-  await control.press('Enter');
-  await expect.poll(() => payloads.length).toBe(1);
-  expect(idempotencyKeys[0]).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
-  const updatedControl = page.getByRole('button', { name: 'Autopilot: Off' });
-  await expect(updatedControl).toBeFocused();
-  await expect(updatedControl).toHaveAttribute('aria-pressed', 'false');
-  await updatedControl.press('Enter');
-  await expect
-    .poll(() => payloads)
-    .toEqual([
-      expect.objectContaining({ enabled: false }),
-      expect.objectContaining({ enabled: true }),
-    ]);
-  await expect(page.getByRole('button', { name: 'Autopilot: Monitoring' })).toBeFocused();
-});
+  test(
+    `keyboard toggle is idempotent and preserves focus through a socket update (${viewport.name})`,
+    { tag: '@smoke' },
+    async ({ page }) => {
+      await page.setViewportSize(viewport);
+      const payloads: unknown[] = [];
+      const idempotencyKeys: string[] = [];
+      await install(page, 'monitoring');
+      await page.route('**/api/sessions/session-1/autopilot', async (route) => {
+        payloads.push(route.request().postDataJSON());
+        idempotencyKeys.push(route.request().headers()['idempotency-key'] ?? '');
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            autopilot:
+              payloads.length === 1
+                ? autopilot('disabled', 'manualDisabled')
+                : autopilot('monitoring'),
+          }),
+        });
+      });
+      await page.goto('/');
+      await page.getByRole('button', { name: 'Chat' }).click();
+      const control = page.getByRole('button', { name: 'Autopilot: Monitoring' });
+      await control.focus();
+      await control.press('Enter');
+      await expect.poll(() => payloads.length).toBe(1);
+      expect(idempotencyKeys[0]).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+      const updatedControl = page.getByRole('button', { name: 'Autopilot: Off' });
+      await expect(updatedControl).toBeFocused();
+      await expect(updatedControl).toHaveAttribute('aria-pressed', 'false');
+      await updatedControl.press('Enter');
+      await expect
+        .poll(() => payloads)
+        .toEqual([
+          expect.objectContaining({ enabled: false }),
+          expect.objectContaining({ enabled: true }),
+        ]);
+      await expect(page.getByRole('button', { name: 'Autopilot: Monitoring' })).toBeFocused();
+    },
+  );
+}
 
 test('typed missing-plan conflicts remain safe and actionable after the real toggle endpoint response', async ({
   page,
