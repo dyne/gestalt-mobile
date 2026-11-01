@@ -1744,14 +1744,13 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             );
           }
           if (!rawInteraction && isAutopilotWaitLeaseCall(request)) {
-            const rootOwned =
-              origin.kind === 'root' && origin.physicalTurnId === session.activeTurnId;
-            if (rootOwned) autopilot.rejectProbe(sessionId);
+            // Invalid tool arguments are recoverable in this turn. They do not
+            // establish that supervision is stalled or revoke continuation.
             return (
               runtime?.resolveServerRequest(
                 sessionId,
                 String(request.id),
-                autopilotWaitLeaseToolResponse(false),
+                autopilotWaitLeaseToolResponse(false, 'invalidWaitLease'),
               ) === true
             );
           }
@@ -1776,7 +1775,6 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                     wakeConditions: lease.wakeConditions,
                   }));
             if (registration !== true) {
-              if (rootOwned && registration === false) autopilot.rejectProbe(sessionId);
               return (
                 runtime?.resolveServerRequest(
                   sessionId,
