@@ -5,6 +5,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import type { SessionScratch } from '../../features/sessions/application/session-scratch.js';
 
 import {
   RelaySession,
@@ -94,6 +95,7 @@ export class KimiSessionRuntime {
   public constructor(
     private readonly input: {
       servers: KimiWebServerManager;
+      scratch?: SessionScratch;
       skillsFor(
         session: RelaySessionSnapshot,
       ): Promise<SkillSelection | undefined> | SkillSelection | undefined;
@@ -368,6 +370,7 @@ export class KimiSessionRuntime {
   }
 
   private async ensureServer(session: RelaySessionSnapshot): Promise<KimiServerHandle> {
+    await this.input.scratch?.allocate(session);
     // A recent thread imported from a running Kimi server carries that server's
     // profile key in `profile`, but no reconstructable effective skill selection.
     // Reuse its exact owner; never collapse it onto the default server or restart
@@ -402,6 +405,7 @@ export class KimiSessionRuntime {
     threadId: string,
     handle: KimiServerHandle,
   ): Promise<SessionResource> {
+    await this.input.scratch?.associateProviderThread(session, 'kimi', threadId);
     await this.detach(session.id);
     const resource: SessionResource = {
       sessionId: session.id,

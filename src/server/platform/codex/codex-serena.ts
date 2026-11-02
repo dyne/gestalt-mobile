@@ -5,6 +5,7 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import { sessionScratchEnvironmentKeys } from '../scratch/child-environment.js';
 import {
   beforeDeadline,
   type CodexRetrievalState,
@@ -146,7 +147,7 @@ export class CodexSerena {
             command: install.manager,
             args: ['serena', 'mcp', '--cwd', input.cwd],
             cwd: input.cwd,
-            env_vars: ['CODEX_HOME', 'GESTALT_HOME'],
+            env_vars: ['CODEX_HOME', 'GESTALT_HOME', ...sessionScratchEnvironmentKeys],
             enabled: true,
             required: false,
             startup_readiness: 'connection',

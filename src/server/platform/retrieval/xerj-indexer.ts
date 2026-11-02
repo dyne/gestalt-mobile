@@ -5,6 +5,9 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import type { ServiceScratchLease } from '../../features/sessions/application/session-scratch.js';
+import { withoutSessionScratch } from '../scratch/child-environment.js';
+import { stopOwnedProcessGroup } from '../scratch/owned-process-group.js';
 import { createHash } from 'node:crypto';
 import { realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -73,6 +76,7 @@ export class XerjIndexer {
   private value: XerjStatus;
   private readonly evidence = new ReadinessEvidence();
   private child?: ChildProcess;
+  private scratch?: ServiceScratchLease;
   private task?: Promise<void>;
   private closed = false;
   private saveConfiguration?: () => Promise<void>;
@@ -87,6 +91,7 @@ export class XerjIndexer {
     private readonly capability: RetrievalCapabilityPort,
     private readonly environment: NodeJS.ProcessEnv = process.env,
     private readonly report: (message: string) => void = console.warn,
+    private readonly serviceScratch?: () => Promise<ServiceScratchLease>,
   ) {
     this.value = { root, mode, state: mode === 'off' ? 'disabled' : 'starting' };
   }
@@ -167,6 +172,11 @@ export class XerjIndexer {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     }
     if (this.closed) return;
+    this.scratch = await this.serviceScratch?.();
+    if (this.closed) {
+      await this.scratch?.release();
+      return;
+    }
     const child = spawn(
       ready.manager,
       [
@@ -191,7 +201,13 @@ export class XerjIndexer {
         '--progress',
         'json',
       ],
-      { cwd: root, env: this.environment, shell: false, stdio: ['ignore', 'ignore', 'pipe'] },
+      {
+        cwd: root,
+        env: { ...withoutSessionScratch(this.environment), ...this.scratch?.environment },
+        shell: false,
+        detached: true,
+        stdio: ['ignore', 'ignore', 'pipe'],
+      },
     );
     this.child = child;
     this.value = { ...this.value, state: 'indexing' };
@@ -212,7 +228,7 @@ export class XerjIndexer {
         );
     });
     child.once('close', (code) => {
-      this.child = undefined;
+      // Retain the live-owned group handle: leader exit does not prove descendants stopped.
       if (this.closed) return;
       if (code === 75) {
         this.evidence.coverage('unknown');
@@ -364,14 +380,7 @@ export class XerjIndexer {
     await this.configurationSaved;
     await this.diagnosticSaved;
     const child = this.child;
-    if (child && child.exitCode === null && child.signalCode === null) {
-      await new Promise<void>((resolve) => {
-        child.once('close', resolve);
-        child.kill('SIGTERM');
-        const timer = setTimeout(() => child.kill('SIGKILL'), 2_000).unref();
-        child.once('close', () => clearTimeout(timer));
-      });
-    }
+    if (child && (await stopOwnedProcessGroup(child))) await this.scratch?.release();
     this.value = { ...this.value, state: this.value.mode === 'off' ? 'disabled' : 'stopped' };
     this.evidence.connection('unavailable');
   }

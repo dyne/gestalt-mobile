@@ -36,6 +36,7 @@ import {
 import { deviceNickname } from './features/auth/domain/device-nickname.js';
 import { workspaceId } from './platform/catalog/workspace-id.js';
 import {
+  FilesystemPlanStatusSource,
   planStatusDirectoryPath,
   planStatusFilePath,
 } from './platform/plans/filesystem-plan-status-source.js';
@@ -7650,6 +7651,61 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('sessions', () => {
+    it('does not return retained display history as current when an in-flight plan refresh is superseded by mandatory rejection', async () => {
+      const { app, sessionId, workspacePath } = await createProductionAutopilotFixture();
+      const url = `/api/sessions/${sessionId}/plan`;
+      const previous = (await app.inject(url)).json();
+      const actualRefresh = FilesystemPlanStatusSource.prototype.refresh;
+      let release: (() => void) | undefined;
+      const blocked = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const refresh = vi
+        .spyOn(FilesystemPlanStatusSource.prototype, 'refresh')
+        .mockImplementationOnce(async (id) => {
+          expect(id).toBe(sessionId);
+          await blocked;
+          // ActiveLease retires an older in-flight read with null after its policy
+          // selection revision changes; its existing filesystem test covers that gate.
+          return null;
+        });
+      const pending = app.inject(url).then((response) => response);
+      try {
+        await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+        const source = refresh.mock.contexts[0] as FilesystemPlanStatusSource;
+        await writeFile(
+          join(planStatusDirectoryPath(workspacePath, sessionId), 'unsupported.plan-status.json'),
+          JSON.stringify({
+            schemaVersion: 1,
+            modelPolicyVersion: 2,
+            requiredCapabilities: ['l1-model-policy-v2'],
+          }),
+        );
+        await actualRefresh.call(source, sessionId);
+        const rejected = (await app.inject(`/api/sessions/${sessionId}`)).json();
+        expect(rejected.autopilot.executionAdmission).toMatchObject({
+          allowed: false,
+          reason: 'POLICY_PROJECTION_UNAVAILABLE',
+        });
+        expect(rejected.lastOrgPlan.title).toBe(previous.title);
+        release?.();
+        expect((await pending).statusCode).toBe(204);
+        expect(
+          (
+            await app.inject({
+              method: 'PUT',
+              url: `/api/sessions/${sessionId}/autopilot`,
+              payload: { enabled: true },
+            })
+          ).statusCode,
+        ).toBe(409);
+      } finally {
+        release?.();
+        await pending;
+        refresh.mockRestore();
+        await app.close();
+      }
+    });
     it('persists replay-stable tool groups from runtime notifications without charging provider tokens', async () => {
       const homeDirectory = await mkdtemp(join(tmpdir(), 'gestalt-efficiency-home-'));
       ownTemporaryPaths(homeDirectory);

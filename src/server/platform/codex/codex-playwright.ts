@@ -6,6 +6,8 @@
 
 import { readFile, realpath } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
+import { sessionScratchEnvironmentKeys } from '../scratch/child-environment.js';
+import type { SessionScratch } from '../../features/sessions/application/session-scratch.js';
 import type { RelaySessionSnapshot } from '../../features/sessions/model/relay-session.js';
 import type { AvailableSkill } from '../../features/skills/model/skill-profile.js';
 import { managedPlaywrightRequestSchema } from '../../../shared/contracts/managed-playwright.js';
@@ -57,7 +59,10 @@ type Prepared = {
 export class CodexPlaywright {
   private readonly bindings = new Map<string, Binding>();
   private readonly prepared = new WeakMap<CodexRetrievalState, Prepared>();
-  constructor(private readonly installation: Pick<ManagedPlaywright, 'check' | 'ready'>) {}
+  constructor(
+    private readonly installation: Pick<ManagedPlaywright, 'check' | 'ready'>,
+    private readonly scratch?: SessionScratch,
+  ) {}
 
   private async binding(authority: PlaywrightAuthority): Promise<Binding> {
     const workspace = await realpath(authority.session.workspacePath);
@@ -313,7 +318,13 @@ export class CodexPlaywright {
             guidance = await beforeDeadline(readFile(skill.path, 'utf8'), input.deadline);
             if (guidance.length <= 16_384) {
               const readiness = await beforeDeadline(
-                this.installation.ready(manager, binding.workspace, input.deadline, options),
+                this.installation.ready(
+                  manager,
+                  binding.workspace,
+                  input.deadline,
+                  options,
+                  (await this.scratch?.allocate(authority.session))?.environment,
+                ),
                 input.deadline,
               );
               enabled = readiness.ready;
@@ -378,7 +389,7 @@ export class CodexPlaywright {
                   ...reserved,
                   ...disabled,
                   enabled: true,
-                  env_vars: ['GESTALT_HOME'],
+                  env_vars: ['GESTALT_HOME', ...sessionScratchEnvironmentKeys],
                   startup_readiness: 'connection',
                   startup_timeout_ms: Math.max(1, input.deadline - Date.now()),
                 }

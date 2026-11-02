@@ -6,6 +6,7 @@
 
 import { ORG_PLAN_CAPABILITIES } from '../plans/org-plan-capabilities.js';
 import { readExecutorConfiguration } from './executor-configuration.js';
+import type { SessionScratch } from '../../features/sessions/application/session-scratch.js';
 import { decodeCodexPolicyCatalog } from './codex-model-catalog.js';
 import type { RuntimePolicyCatalogRead } from '../../features/plans/application/executor-launch-validation.js';
 
@@ -299,6 +300,7 @@ export class CodexSessionRuntime {
       sessionId: string,
       threadId: string,
     ) => void | Promise<void | { model: string; reasoningEffort: string; assertCurrent(): void }>,
+    private readonly scratch?: SessionScratch,
   ) {
     void _legacyProcesses;
     void _legacyRequestTimeoutMs;
@@ -351,6 +353,7 @@ export class CodexSessionRuntime {
       resource.threadId = startedThreadId;
       if (resource.retrieval) this.retrieval?.bound?.(resource.retrieval, startedThreadId);
       await this.verifyRetrieval(resource, session, true);
+      await this.scratch?.associateProviderThread(session, 'codex', resource.threadId!);
       this.sessions.set(session.id, resource);
       await this.writePendingThreadName(session.id);
       return this.withEffectiveRetrieval(
@@ -1500,6 +1503,7 @@ export class CodexSessionRuntime {
       resource.threadId = result.session.threadId!;
       if (resource.retrieval) this.retrieval?.bound?.(resource.retrieval, resource.threadId);
       await this.verifyRetrieval(resource, session, result.replacementCreated);
+      await this.scratch?.associateProviderThread(session, 'codex', resource.threadId!);
       if (result.replacementCreated && resource.threadId !== result.session.threadId)
         result = rebindMissingRollout(session, missingRollout, resource.threadId!, now);
       this.sessions.get(session.id)?.dispose();
@@ -1636,12 +1640,14 @@ export class CodexSessionRuntime {
       const token = randomUUID();
       const skillsConfig = await this.resolveSkills?.(session);
       const modelConfig = (await this.resolveModelConfig?.(session)) ?? {};
+      const scratch = await this.scratch?.allocate(session);
       const process = this.launch({
         profile: session.profile,
         cwd: session.workspacePath,
-        ...(lease || this.planMeasurementBaseUrl
+        ...(lease || this.planMeasurementBaseUrl || scratch
           ? {
               environment: {
+                ...scratch?.environment,
                 ...(lease
                   ? {
                       GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY: lease.statusDirectory,

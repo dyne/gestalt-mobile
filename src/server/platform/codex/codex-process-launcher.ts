@@ -7,6 +7,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { JsonRpcClient } from './json-rpc-client.js';
 import { profileAppServerCommand } from '../catalog/profile-command.js';
+import { withoutSessionScratch } from '../scratch/child-environment.js';
 
 export type CodexProcess = {
   child: ChildProcessWithoutNullStreams;
@@ -69,7 +70,7 @@ export function codexChildEnvironment(
   environment?: Readonly<Record<string, string>>,
   launchEnvironment: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  const inherited = { ...launchEnvironment };
+  const inherited = withoutSessionScratch(launchEnvironment);
   delete inherited.GESTALT_MOBILE_ORG_PLAN_CAPABILITIES;
   delete inherited.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE;
   delete inherited.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY;

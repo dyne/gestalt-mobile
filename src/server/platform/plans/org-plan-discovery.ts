@@ -6,6 +6,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { withoutSessionScratch } from '../scratch/child-environment.js';
 
 const execute = promisify(execFile);
 type Run = (command: string, args: readonly string[], cwd: string) => Promise<string>;
@@ -14,6 +15,7 @@ async function run(command: string, args: readonly string[], cwd: string): Promi
   try {
     const result = await execute(command, [...args], {
       cwd,
+      env: withoutSessionScratch(),
       encoding: 'utf8',
       maxBuffer: 64 * 1024 * 1024,
       timeout: 30_000,

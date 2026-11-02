@@ -19,6 +19,7 @@ import type { CodexRetrievalState } from '../retrieval/codex-xerj.js';
 import type { RelaySessionSnapshot } from '../../features/sessions/model/relay-session.js';
 import { compileSkillOverride } from '../../features/skills/model/skill-profile.js';
 import { CodexCapabilities } from './codex-capabilities.js';
+import { FilesystemSessionScratch } from '../scratch/filesystem-session-scratch.js';
 import type { CodexXerj } from '../retrieval/codex-xerj.js';
 import type { CodexSerena } from './codex-serena.js';
 
@@ -67,7 +68,7 @@ async function fixture() {
     })),
     ready: vi.fn(async () => healthyReadiness),
   };
-  const adapter = new CodexPlaywright(installation);
+  const adapter = new CodexPlaywright(installation, new FilesystemSessionScratch());
   const native: Record<string, unknown> = { mcp_servers: {}, skills: {} };
   const tools: Record<string, unknown> = Object.fromEntries(
     playwrightTools.map((tool) => [tool, {}]),
@@ -230,7 +231,7 @@ describe('managed Mobile Playwright session', () => {
         enabled: true,
         default_tools_approval_mode: 'prompt',
         tools: { browser_navigate: { approval_mode: 'prompt' } },
-        env_vars: ['GESTALT_HOME'],
+        env_vars: ['GESTALT_HOME', 'TMPDIR', 'TMP', 'TEMP', 'GESTALT_SESSION_TMP_CONTEXT'],
       },
     });
     expect(await f.adapter.verify(f.rpc, 'root-a', state)).toBe(true);
@@ -318,6 +319,10 @@ describe('managed Mobile Playwright session', () => {
       f.root,
       expect.any(Number),
       ['--executable-path', '/operator/chrome'],
+      expect.objectContaining({
+        TMPDIR: expect.stringContaining('/tmp/sessions/mobile-'),
+        GESTALT_SESSION_TMP_CONTEXT: expect.any(String),
+      }),
     );
   });
   it.each(['missing', 'disabled', 'instructions-off'])(

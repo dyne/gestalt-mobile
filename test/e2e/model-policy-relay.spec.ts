@@ -260,10 +260,24 @@ async function verifyRelayPolicy(assurance: 'configured' | 'runtime-attested') {
             : {}),
         }),
       );
-      // Explicit plan retrieval refreshes the authoritative publication without
-      // waiting for filesystem debounce or running a model-probe turn.
-      const refreshed = await request(`${base}/plan`);
-      expect(refreshed.status, await refreshed.text()).toBe(version === 1 ? 200 : 204);
+      // A concurrent watcher rejection can supersede this refresh and keep it
+      // fail-closed until the publication settles. Wait for the exact current
+      // policy identity without running a model-probe turn.
+      await expect
+        .poll(async () => {
+          const refreshed = await request(`${base}/plan`);
+          const plan = refreshed.status === 200 ? await refreshed.json() : null;
+          return {
+            status: refreshed.status,
+            modelPolicyVersion: plan?.modelPolicyVersion ?? null,
+            modelPolicyAssurance: plan?.modelPolicyAssurance ?? null,
+          };
+        })
+        .toEqual({
+          status: version === 1 ? 200 : 204,
+          modelPolicyVersion: version === 1 && versioned ? 1 : null,
+          modelPolicyAssurance: version === 1 && versioned ? assurance : null,
+        });
     };
     const session = async () => (await request(base)).json();
     let toolId = 1000;
@@ -295,11 +309,16 @@ async function verifyRelayPolicy(assurance: 'configured' | 'runtime-attested') {
     await publish(true, 'supervision-start');
     const configured = assurance === 'configured';
     await expect.poll(async () => (await session()).autopilot.enabled).toBe(configured);
-    expect((await health()).executionAdmission).toMatchObject(
-      configured
-        ? { allowed: true, scope: 'configured', assurance, runtimeEnforcement: false }
-        : { allowed: false, reason: 'RUNTIME_ATTESTATION_UNAVAILABLE' },
-    );
+    // A mandatory publication can briefly fail closed while the plan/status
+    // watchers reconcile. Strict assurance is disabled in both that transient
+    // state and the settled state, so enabled alone cannot synchronize admission.
+    await expect
+      .poll(async () => (await health()).executionAdmission)
+      .toMatchObject(
+        configured
+          ? { allowed: true, scope: 'configured', assurance, runtimeEnforcement: false }
+          : { allowed: false, reason: 'RUNTIME_ATTESTATION_UNAVAILABLE' },
+      );
     // Configured admission permits automation without claiming attestation.
     // Manual Off still fences callbacks scheduled under the earlier legacy plan.
     if (configured) {

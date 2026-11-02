@@ -12,6 +12,10 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { KimiWebServerManager, kimiChildEnvironment } from './kimi-web-server-manager.js';
 import type { SkillSelection } from '../../features/skills/model/skill-profile.js';
+import {
+  FilesystemSessionScratch,
+  scratchMarkerName,
+} from '../scratch/filesystem-session-scratch.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -100,6 +104,84 @@ const selection = (enabled: boolean): SkillSelection => [
 ];
 
 describe('KimiWebServerManager', () => {
+  it('uses a service lease for a shared profile instead of the ambient first session', async () => {
+    const root = await sandbox();
+    const input = await fixture(root);
+    stubFetch([]);
+    vi.stubEnv('GESTALT_SESSION_TMP_CONTEXT', 'first-session');
+    vi.stubEnv('TMPDIR', '/first-session');
+    const scratch = new FilesystemSessionScratch();
+    const environments: NodeJS.ProcessEnv[] = [];
+    const manager = new KimiWebServerManager({
+      ...input,
+      serviceScratch: (key) => scratch.allocateService(root, `kimi-${key}`),
+      spawnImpl: (_command, _args, options) => {
+        environments.push(options.env);
+        return fakeChild() as never;
+      },
+    });
+    try {
+      const first = await manager.ensure('shared-profile', []);
+      expect(await manager.ensure('shared-profile', [])).toBe(first);
+      expect(environments).toHaveLength(1);
+      const context = JSON.parse(environments[0].GESTALT_SESSION_TMP_CONTEXT!);
+      expect(environments[0].TMPDIR).toBe(context.directory);
+      const marker = JSON.parse(await readFile(join(context.directory, scratchMarkerName), 'utf8'));
+      expect(marker.ownerKind).toBe('workspace-service');
+      const lease = join(context.directory, 'leases', marker.authority.leaseId + '.json');
+      expect(JSON.parse(await readFile(lease, 'utf8')).state).toBe('active');
+      await manager.stopAll();
+      // A test double without an OS group cannot establish release authority.
+      expect(JSON.parse(await readFile(lease, 'utf8')).state).toBe('active');
+    } finally {
+      await manager.stopAll();
+    }
+  });
+  it('keeps its lease active after leader exit while the owned descendant group still exists', async () => {
+    const root = await sandbox();
+    const input = await fixture(root);
+    stubFetch([]);
+    const scratch = new FilesystemSessionScratch();
+    const lease = await scratch.allocateService(root, 'kimi-manager');
+    const marker = JSON.parse(await readFile(join(lease.directory, scratchMarkerName), 'utf8'));
+    const leasePath = join(lease.directory, 'leases', marker.authority.leaseId + '.json');
+    const fakePid = 2147483000;
+    let child!: FakeChild & { pid: number };
+    let groupPresent = true;
+    const realKill = process.kill.bind(process);
+    const signal = vi.spyOn(process, 'kill').mockImplementation((pid, value) => {
+      if (pid !== -fakePid) return realKill(pid, value);
+      if (!groupPresent) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+      if (value === 'SIGTERM') {
+        child.exitCode = 0;
+        child.emit('exit', 0, null);
+      }
+      return true;
+    });
+    const manager = new KimiWebServerManager({
+      ...input,
+      serviceScratch: async () => lease,
+      spawnImpl: () => {
+        child = Object.assign(fakeChild(), { pid: fakePid });
+        return child as never;
+      },
+    });
+    let stopping: Promise<void> | undefined;
+    try {
+      await manager.ensure('shared', []);
+      stopping = manager.stop('shared');
+      await vi.waitFor(() => expect(child.exitCode).toBe(0));
+      expect(JSON.parse(await readFile(leasePath, 'utf8')).state).toBe('active');
+      groupPresent = false;
+      await stopping;
+      expect(JSON.parse(await readFile(leasePath, 'utf8')).state).toBe('released');
+    } finally {
+      groupPresent = false;
+      await stopping;
+      await manager.stopAll();
+      signal.mockRestore();
+    }
+  });
   it('publishes only isolated selected managed content for enabled and disabled profiles', async () => {
     const root = await sandbox();
     const { stateBase, sourceShareDir } = await fixture(root);

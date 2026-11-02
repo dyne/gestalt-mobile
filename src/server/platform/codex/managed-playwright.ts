@@ -9,6 +9,7 @@ import { access, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { spawn } from 'node:child_process';
+import { withoutSessionScratch } from '../scratch/child-environment.js';
 
 export const playwrightServerName = 'gestalt-playwright';
 export const playwrightTools = [
@@ -89,13 +90,16 @@ export class ManagedPlaywright {
     cwd: string,
     deadline: number,
     options: readonly string[] = [],
+    scratchEnvironment?: Readonly<Record<string, string>>,
   ): Promise<PlaywrightReadiness> {
     if (Date.now() >= deadline) return unknownReadiness();
+    const independent = withoutSessionScratch(this.environment);
     const env = Object.fromEntries(
-      ['PATH', 'HOME', 'TMPDIR', 'GESTALT_HOME']
-        .filter((key) => this.environment[key] !== undefined)
-        .map((key) => [key, this.environment[key]]),
+      ['PATH', 'HOME', 'GESTALT_HOME', 'TMPDIR', 'TMP', 'TEMP']
+        .filter((key) => independent[key] !== undefined)
+        .map((key) => [key, independent[key]]),
     );
+    Object.assign(env, scratchEnvironment);
     return new Promise((resolve) => {
       const child = spawn(manager, ['playwright', 'doctor', '--json', '--cwd', cwd, ...options], {
         cwd,

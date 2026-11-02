@@ -17,6 +17,7 @@ import { SqliteTransportDiagnostics } from './platform/persistence/sqlite-transp
 import { buildApp } from './app.js';
 import { ManagedUpgrade } from './platform/maintenance/managed-upgrade.js';
 import { LocalHostTestRunner } from './platform/host-tests/runner.js';
+import { FilesystemSessionScratch } from './platform/scratch/filesystem-session-scratch.js';
 import { loadWorkspaceHostTestConfig, within } from './platform/host-tests/config.js';
 import { handleHostTestTool } from './features/host-tests/application/handle-tool.js';
 import { gestaltTestRunnerDynamicTool } from '../shared/contracts/host-tests.js';
@@ -679,6 +680,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     databasePath,
   );
   const homeDirectory = options.homeDirectory ?? homedir();
+  const sessionScratch = new FilesystemSessionScratch();
   // Constructing the manager is cheap (no spawn until `ensure`); building it
   // before the model catalog lets the catalog reuse the gestalt-owned servers.
   const kimiManager =
@@ -687,6 +689,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       ? new KimiWebServerManager({
           stateBase: kimiStateBase(homeDirectory),
           sourceShareDir: join(homeDirectory, '.kimi-code'),
+          serviceScratch: (profileKey) =>
+            sessionScratch.allocateService(root, `kimi-${profileKey}`),
         })
       : undefined);
   const kimiModels = new KimiModelCatalog(kimiManager ?? null, kimiManager != null);
@@ -723,11 +727,18 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     options.xerj === 'off'
       ? { check: async () => ({ status: 'absent' as const }) }
       : (options.retrievalCapability ?? new ManagedXerj());
-  const xerjIndexer = new XerjIndexer(root, options.xerj ?? 'manual', retrievalCapability);
+  const xerjIndexer = new XerjIndexer(
+    root,
+    options.xerj ?? 'manual',
+    retrievalCapability,
+    process.env,
+    console.warn,
+    () => sessionScratch.allocateService(root, 'xerj-indexer'),
+  );
   const xerj = new CodexXerj(retrievalCapability);
   const serenaInstallation = new ManagedSerena();
   const capabilities = new CodexCapabilities(xerj, new CodexSerena(serenaInstallation));
-  const playwright = new CodexPlaywright(new ManagedPlaywright());
+  const playwright = new CodexPlaywright(new ManagedPlaywright(), sessionScratch);
   const playwrightAuthority = (session: RelaySessionSnapshot): PlaywrightAuthority => {
     const plan = supervisedPlans.findCurrent(session.id);
     const active = plan?.steps[currentExecutableL1Index(plan)];
@@ -1830,6 +1841,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           assertCurrent();
           return { ...report.requested, assertCurrent };
         },
+        sessionScratch,
       )
     : null;
   const handleKimiNotification = (
@@ -1893,6 +1905,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   kimiRuntime = kimiManager
     ? new KimiSessionRuntime({
         servers: kimiManager,
+        scratch: sessionScratch,
         skillsFor: async (session) => {
           const config = await resolveSkills(session);
           return config?.map((entry) => ({
@@ -2118,6 +2131,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             throw new Error('Host test workspace is outside the configured root');
           return loadWorkspaceHostTestConfig(workspace);
         },
+        sessionScratch,
       );
       await hostTests.initialize();
     }
@@ -2538,7 +2552,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         refresh: async (id) => {
           const refreshed = await planStatusSource.refresh(id);
           if (refreshed?.kind === 'updated') return refreshed.plan;
-          return refreshed ? null : supervisedPlans.find(id);
+          return refreshed ? null : supervisedPlans.findCurrent(id);
         },
         open: async (id, planName) => {
           const session = sessions.find(id);

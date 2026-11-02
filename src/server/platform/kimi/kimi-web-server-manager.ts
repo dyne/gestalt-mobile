@@ -12,6 +12,9 @@ import { KimiWebClient } from './kimi-web-client.js';
 import { boundMessage } from './kimi-errors.js';
 import { prepareKimiShareDir } from './kimi-share-dir.js';
 import { materializeKimiSkillsDir } from './kimi-skills-materializer.js';
+import type { ServiceScratchLease } from '../../features/sessions/application/session-scratch.js';
+import { withoutSessionScratch } from '../scratch/child-environment.js';
+import { stopOwnedProcessGroup } from '../scratch/owned-process-group.js';
 
 export type KimiServerHandle = {
   profileKey: string;
@@ -25,7 +28,7 @@ export type KimiServerHandle = {
 type SpawnFn = (
   command: string,
   args: string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv; shell: false; stdio: 'pipe' },
+  options: { cwd: string; env: NodeJS.ProcessEnv; shell: false; stdio: 'pipe'; detached?: boolean },
 ) => ChildProcessWithoutNullStreams;
 
 const READINESS_TIMEOUT_MS = 15_000;
@@ -41,6 +44,7 @@ type ManagedServer = {
   exitListeners: Set<() => void>;
   exited: boolean;
   logTail: string;
+  scratch?: ServiceScratchLease;
 };
 
 /**
@@ -61,6 +65,7 @@ export class KimiWebServerManager {
       spawnImpl?: SpawnFn;
       fetchImpl?: typeof fetch;
       startPort?: number;
+      serviceScratch?: (profileKey: string) => Promise<ServiceScratchLease>;
     },
   ) {}
 
@@ -118,10 +123,7 @@ export class KimiWebServerManager {
     const server = this.servers.get(profileKey);
     if (!server) return;
     this.servers.delete(profileKey);
-    if (!server.exited) {
-      server.child.kill('SIGTERM');
-      await waitForExit(server.child, 3_000);
-    }
+    if (await stopOwnedProcessGroup(server.child, 3000)) await server.scratch?.release();
     for (const listener of server.exitListeners) listener();
   }
 
@@ -142,14 +144,16 @@ export class KimiWebServerManager {
     materializeKimiSkillsDir(skillsDir, selection);
     const port = await pickFreePort(this.input.startPort ?? BASE_PORT);
     const baseUrl = `http://127.0.0.1:${port}`;
+    const scratch = await this.input.serviceScratch?.(profileKey);
     const child = (this.input.spawnImpl ?? (spawn as SpawnFn))(
       this.input.command ?? 'kimi',
       ['web', '--no-open', '--port', String(port)],
       {
         cwd: shareDir,
-        env: kimiChildEnvironment({ KIMI_SHARE_DIR: shareDir }),
+        env: kimiChildEnvironment({ KIMI_SHARE_DIR: shareDir, ...scratch?.environment }),
         shell: false,
         stdio: 'pipe',
+        detached: true,
       },
     );
 
@@ -168,8 +172,13 @@ export class KimiWebServerManager {
       exitListeners: new Set(),
       exited: false,
       logTail: '',
+      scratch,
     };
     this.servers.set(profileKey, server);
+    child.once('exit', () => {
+      server.exited = true;
+      // Unexpected exit cannot prove its descendants stopped. Keep the lease protected.
+    });
 
     try {
       server.handle.token = await waitForServerReady(server);
@@ -193,7 +202,7 @@ export class KimiWebServerManager {
 export function kimiChildEnvironment(
   overrides: Readonly<Record<string, string>>,
 ): NodeJS.ProcessEnv {
-  const inherited = { ...process.env };
+  const inherited = withoutSessionScratch();
   delete inherited.GESTALT_MOBILE_ORG_PLAN_CAPABILITIES;
   delete inherited.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE;
   delete inherited.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY;
@@ -251,17 +260,6 @@ async function waitForServerReady(server: ManagedServer): Promise<string> {
   } finally {
     clearTimeout(timeout);
   }
-}
-
-function waitForExit(child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, timeoutMs);
-    child.once('exit', () => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
 }
 
 function delay(ms: number): Promise<void> {

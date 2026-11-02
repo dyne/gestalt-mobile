@@ -15,6 +15,8 @@ import type {
 } from '../../../shared/contracts/host-tests.js';
 import type { HostTestOwner, HostTestRunner } from '../../features/host-tests/application/ports.js';
 import { candidate } from './candidate.js';
+import type { SessionScratch } from '../../features/sessions/application/session-scratch.js';
+import { withoutSessionScratch } from '../scratch/child-environment.js';
 import { loadWorkspaceHostTestConfig, within, type HostTestSuite } from './config.js';
 
 // The host owns a lifetime pipe; even a host crash closes it. Tests cannot inherit
@@ -56,6 +58,7 @@ export class LocalHostTestRunner implements HostTestRunner {
     private readonly workspaceSuites: (
       workspace: string,
     ) => Promise<HostTestSuite[]> = loadWorkspaceHostTestConfig,
+    private readonly scratch?: SessionScratch,
   ) {}
 
   async initialize(): Promise<void> {
@@ -235,7 +238,11 @@ export class LocalHostTestRunner implements HostTestRunner {
         return structuredClone(result);
       }
       try {
-        this.launch(suite, result);
+        const scratch = await this.scratch?.allocate({
+          id: owner.sessionId,
+          workspacePath: owner.workspace,
+        });
+        this.launch(suite, result, scratch?.environment);
       } catch {
         result.state = 'interrupted';
         await this.persist(result);
@@ -247,16 +254,33 @@ export class LocalHostTestRunner implements HostTestRunner {
     }
   }
 
-  private launch(suite: HostTestSuite, result: HostTestResult): void {
+  private launch(
+    suite: HostTestSuite,
+    result: HostTestResult,
+    scratchEnvironment?: Readonly<Record<string, string>>,
+  ): void {
     const fd = openSync(result.logPath, 'wx', 0o600);
     const hash = createHash('sha256');
     // No provider keys, relay tokens, hooks, NODE_OPTIONS or shell startup variables.
     const env: NodeJS.ProcessEnv = {};
-    for (const key of ['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR']) {
-      if (process.env[key] !== undefined) env[key] = process.env[key];
+    const independent = withoutSessionScratch();
+    for (const key of [
+      'PATH',
+      'HOME',
+      'USER',
+      'LOGNAME',
+      'LANG',
+      'LC_ALL',
+      'TZ',
+      'TMPDIR',
+      'TMP',
+      'TEMP',
+    ]) {
+      if (independent[key] !== undefined) env[key] = independent[key];
     }
     env.CI = '1';
     env.NO_COLOR = '1';
+    Object.assign(env, scratchEnvironment);
     let child;
     try {
       child = spawn(
