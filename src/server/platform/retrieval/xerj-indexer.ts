@@ -80,6 +80,8 @@ export class XerjIndexer {
   private diagnosticDirectory?: string;
   private pendingDiagnostic?: XerjIndexDiagnostic;
   private diagnosticSaved?: Promise<void>;
+  private diskBudgetRefused = false;
+  private currentFailure?: XerjIndexDiagnostic;
 
   constructor(
     root: string,
@@ -97,9 +99,8 @@ export class XerjIndexer {
 
   start(): void {
     if (this.task || this.closed || this.value.mode === 'off') return;
-    this.task = this.launch().catch(() => {
-      if (!this.closed)
-        this.fail('Could not start XERJ indexing. Check root access and run gestalt doctor.');
+    this.task = this.launch().catch((error) => {
+      if (!this.closed) this.reportFailure(error);
     });
   }
 
@@ -107,6 +108,31 @@ export class XerjIndexer {
     this.evidence.coverage(this.value.lastUpdate ? 'stale' : 'unavailable');
     this.value = { ...this.value, state: 'error', phase: undefined, percent: undefined, message };
     this.report(message);
+  }
+
+  private rememberDiagnostic(diagnostic: XerjIndexDiagnostic): void {
+    this.currentFailure = diagnostic;
+    this.value = { ...this.value, diagnostic };
+    this.pendingDiagnostic = diagnostic;
+    this.diagnosticSaved ??= this.saveDiagnostics();
+  }
+
+  private reportFailure(message: unknown): void {
+    const diagnostic = xerjIndexDiagnostic(message);
+    if (this.currentFailure?.summary && this.genericFailure(diagnostic)) return;
+    this.rememberDiagnostic(diagnostic);
+    this.fail(
+      `XERJ indexing failed: ${diagnostic.summary ?? 'No error cause was supplied'}. Index freshness is unverified.`,
+    );
+  }
+
+  private genericFailure(diagnostic: XerjIndexDiagnostic): boolean {
+    return (
+      !diagnostic.summary ||
+      /^(?:needs-decision|unknown (?:error|cause)|(?:indexing|autoindex|operation|pass) failed)$/i.test(
+        diagnostic.summary,
+      )
+    );
   }
 
   private async launch(): Promise<void> {
@@ -191,25 +217,26 @@ export class XerjIndexer {
         '--progress',
         'json',
       ],
-      { cwd: root, env: this.environment, shell: false, stdio: ['ignore', 'ignore', 'pipe'] },
+      { cwd: root, env: this.environment, shell: false, stdio: ['ignore', 'pipe', 'pipe'] },
     );
     this.child = child;
     this.value = { ...this.value, state: 'indexing' };
-    // Never retain raw tool output or filenames. The status contains only an
-    // allowlist of counters/phases; bound even a malformed unterminated line.
-    let pending = '';
-    child.stderr?.on('data', (data: Buffer) => {
-      pending += data.toString();
-      const lines = pending.split('\n');
-      pending = lines.pop() ?? '';
-      if (pending.length > 16_384) pending = '';
-      for (const line of lines) this.progress(line);
-    });
-    child.once('error', () => {
-      if (!this.closed)
-        this.fail(
-          'Could not launch XERJ. Check the Gestalt manager and flock/setpriv installation.',
-        );
+    // Retain only redacted error summaries and allowlisted counters/phases;
+    // bound even a malformed unterminated line.
+    // Native budget decisions use stdout; progress and watch failures use stderr.
+    // Keep separate line buffers so interleaved streams cannot corrupt JSON.
+    for (const stream of [child.stdout, child.stderr]) {
+      let pending = '';
+      stream?.on('data', (data: Buffer) => {
+        pending += data.toString();
+        const lines = pending.split('\n');
+        pending = lines.pop() ?? '';
+        if (pending.length > 16_384) pending = '';
+        for (const line of lines) if (line.length <= 16_384) this.progress(line);
+      });
+    }
+    child.once('error', (error) => {
+      if (!this.closed) this.reportFailure(error);
     });
     child.once('close', (code) => {
       this.child = undefined;
@@ -223,7 +250,7 @@ export class XerjIndexer {
         };
       } else {
         this.fail(
-          `XERJ watcher stopped (exit ${code ?? 'signal'}). Run gestalt doctor; verify flock and setpriv are installed, then restart Mobile.`,
+          `XERJ watcher stopped${this.currentFailure?.summary ? `: ${this.currentFailure.summary}` : ` (exit ${code ?? 'signal'})`}. Run gestalt doctor before restarting Mobile.`,
         );
       }
     });
@@ -233,7 +260,30 @@ export class XerjIndexer {
     if (this.closed) return;
     try {
       const event = JSON.parse(line) as Record<string, unknown>;
-      if (event.event === 'progress') {
+      if (event.xerj === 'autoindex-budget' && event.decision_required === true) {
+        const disk = event.disk as Record<string, unknown> | undefined;
+        if (
+          disk?.threshold_enabled === true &&
+          typeof disk.used_percent === 'number' &&
+          typeof disk.flood_stage === 'number' &&
+          disk.flood_stage > 0 &&
+          disk.used_percent <= 100 &&
+          disk.used_percent >= disk.flood_stage
+        ) {
+          this.diskBudgetRefused = true;
+          const diagnostic = xerjIndexDiagnostic('no space left: disk flood-stage budget');
+          this.rememberDiagnostic(diagnostic);
+          this.fail(
+            'XERJ indexing refused: disk flood-stage threshold reached. Free space or move the index to a larger volume. Index freshness is unverified.',
+          );
+        } else {
+          this.reportFailure(
+            event.error ?? event.refused ?? 'Indexing requires an operator decision',
+          );
+        }
+      } else if (event.event === 'progress') {
+        this.diskBudgetRefused = false;
+        this.currentFailure = undefined;
         this.evidence.invalidate();
         this.evidence.connection('ready');
         this.evidence.coverage(this.value.lastUpdate ? 'stale' : 'unknown');
@@ -255,9 +305,9 @@ export class XerjIndexer {
         };
       } else if (event.event === 'done') {
         if (event.ok !== true) {
-          this.fail(
-            'XERJ indexing failed. Check the index with gestalt xerj autoindex status; the next source change retries it.',
-          );
+          if (this.diskBudgetRefused) return;
+          const detail = event.error ?? event.message;
+          if (detail || !this.currentFailure) this.reportFailure(detail ?? event.reason);
           return;
         }
         if (this.saveConfiguration && !this.configurationSaved) {
@@ -277,6 +327,8 @@ export class XerjIndexer {
           ...(count(event.files) !== undefined ? { files: count(event.files) } : {}),
           ...(count(event.records) !== undefined ? { records: count(event.records) } : {}),
         };
+        this.diskBudgetRefused = false;
+        this.currentFailure = undefined;
         const records = count(event.records);
         this.evidence.coverage(
           records === undefined ? 'unknown' : records === 0 ? 'unavailable' : 'ready',
@@ -285,13 +337,17 @@ export class XerjIndexer {
             records,
           },
         );
-      } else if (event.event === 'warning') {
-        const diagnostic = xerjIndexDiagnostic(event.message);
-        this.value = { ...this.value, diagnostic };
-        this.pendingDiagnostic = diagnostic;
-        this.diagnosticSaved ??= this.saveDiagnostics();
-        const reference = ` Diagnostic: ${diagnostic.id} (${diagnostic.code}).`;
+      } else if (event.event === 'warning' || event.event === 'error') {
+        const diagnostic = xerjIndexDiagnostic(event.error ?? event.message ?? event.reason);
+        if (
+          (this.currentFailure?.summary && this.genericFailure(diagnostic)) ||
+          (this.diskBudgetRefused &&
+            ['watch-pass-failed', 'unknown-warning'].includes(diagnostic.code))
+        )
+          return;
+        this.rememberDiagnostic(diagnostic);
         if (diagnostic.code === 'watch-rescan') {
+          this.currentFailure = undefined;
           // Native XERJ already schedules a full pass after dropped watch events.
           // This invalidates coverage, but is not a failed pass or lost connection.
           this.evidence.coverage(this.value.lastUpdate ? 'stale' : 'unknown');
@@ -306,15 +362,13 @@ export class XerjIndexer {
         }
         if (diagnostic.code === 'rebuild-required') {
           this.fail(
-            'XERJ cannot update the saved index with the current indexing configuration. A new index generation is required; source changes alone cannot repair it. See the XERJ recovery guide.' +
-              reference,
+            `XERJ indexing failed: ${diagnostic.summary ?? 'Saved index configuration changed'}. A new index generation is required; source changes alone cannot repair it.`,
           );
           return;
         }
         if (diagnostic.code === 'ambiguous-assignment') {
           this.fail(
-            'XERJ incremental dataset assignment failed; the index is stale. See the XERJ recovery guide for this upstream limitation.' +
-              reference,
+            `XERJ indexing failed: ${diagnostic.summary ?? 'Ambiguous dataset assignment'}. The index is stale; see the XERJ recovery guide.`,
           );
           return;
         }
@@ -326,18 +380,14 @@ export class XerjIndexer {
           'watch-pass-failed': 'The underlying cause could not be classified.',
           'unknown-warning': 'The warning could not be classified.',
         }[diagnostic.code];
-        const pass = diagnostic.watchPass;
         this.fail(
-          (pass
-            ? `XERJ watch pass ${pass.number} failed after ${pass.durationSeconds}s. `
-            : 'XERJ indexing reported a warning. ') +
-            cause +
-            ' The watcher is still running and is waiting for a source change to retry; index coverage is unverified until an update succeeds.' +
-            reference,
+          `XERJ indexing failed: ${diagnostic.summary ?? cause.replace(/\.$/, '')}. The watcher is still running; index freshness is unverified.`,
         );
       }
     } catch {
-      /* Native diagnostics are not public status or application logs. */
+      // Ignore ordinary stdout and partial payloads. Only explicit error lines
+      // are eligible for redaction and display.
+      if (/^\s*(?:error|fatal|caused by):/i.test(line)) this.reportFailure(line);
     }
   }
 
