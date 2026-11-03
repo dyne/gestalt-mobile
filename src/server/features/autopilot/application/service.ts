@@ -735,7 +735,13 @@ export class AutopilotCoordinator {
         ...state,
         supervision: {
           ...nextProtocol,
-          wakeCause: { condition: wake.condition, leaseId: wake.leaseId },
+          wakeCause: {
+            condition: wake.condition,
+            leaseId: wake.leaseId,
+            ...(state.supervision.waitLease?.runId
+              ? { runId: state.supervision.waitLease.runId }
+              : {}),
+          },
         },
         updatedAt: now,
       },
@@ -2370,7 +2376,14 @@ export class AutopilotCoordinator {
           this.persist(
             {
               ...state,
-              supervision: { ...protocol, wakeCause: { condition: 'deadline', leaseId } },
+              supervision: {
+                ...protocol,
+                wakeCause: {
+                  condition: 'deadline',
+                  leaseId,
+                  ...(lease.runId ? { runId: lease.runId } : {}),
+                },
+              },
               updatedAt: observedAt,
             },
             undefined,
@@ -2575,6 +2588,9 @@ export class AutopilotCoordinator {
   }
 
   private requiresRootBoundary(state: AutopilotSession, plan: SupervisedPlan): boolean {
+    // Host tests are root-owned. Preserve that ownership across wake, backoff
+    // and restart until the next root turn is accepted and consumes wakeCause.
+    if (state.supervision?.wakeCause?.runId) return true;
     if (state.providerRetry?.resumeRoot) return true;
     // Completed milestone reports do not complete terminal review or its fixes.
     // Keep their continuation at root; a settled last executor cannot own it.

@@ -84,6 +84,24 @@ const facts = (change: Partial<SemanticProgressFacts> = {}): SemanticProgressFac
 });
 
 describe('persisted wake attribution', () => {
+  it('retains a root-owned run across persistence and rejects malformed run identities', () => {
+    const state = {
+      ...startSupervisionProtocol('revision'),
+      wakeCause: {
+        condition: 'deadline' as const,
+        leaseId: 'host-test-wait',
+        runId: '00000000-0000-4000-8000-000000000001',
+      },
+    };
+    expect(parseSupervisionProtocolState(JSON.parse(JSON.stringify(state)))).toEqual(state);
+    expect(
+      parseSupervisionProtocolState({
+        ...state,
+        wakeCause: { ...state.wakeCause, runId: 'untrusted prose' },
+      }),
+    ).toBeUndefined();
+  });
+
   const acknowledgement = {
     revision: `sha256:${'a'.repeat(64)}`,
     controlId: 'control',

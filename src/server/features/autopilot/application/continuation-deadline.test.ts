@@ -128,6 +128,58 @@ describe('continuation deadline across reconciliation', () => {
     };
   }
 
+  it.each(['result', 'deadline', 'manual-off', 'pending-interaction'] as const)(
+    'returns a host-test wait to its supervisor with a settled executor (%s)',
+    async (wake) => {
+      const f = fixture(undefined, 'idle', () => 'running', true);
+      const runId = '29dbca6a-e4f2-496b-8479-a91a4c01e891';
+      try {
+        f.activity.subagents = [
+          {
+            id: 'child',
+            threadId: 'child',
+            canonicalPosition: 'L1',
+            canonicalTaskName: 'l1',
+            taskPath: '/root/l1',
+            continuationGeneration: 1,
+            state: 'idle',
+            outcome: 'partial',
+            reason: 'turnCompleted',
+            observedAt: new Date().toISOString(),
+            lastActivityAt: new Date().toISOString(),
+            ownedProcesses: [],
+          },
+        ];
+        expect(
+          f.coordinator.registerProactiveWait('s', {
+            id: 'host-test-result',
+            leaseId: 'host-test-wait',
+            runId,
+            maxWaitMs: 600_000,
+            wakeConditions: ['processResultAvailable'],
+          }),
+        ).toBe(true);
+        if (wake === 'manual-off') f.coordinator.disable('s');
+        if (wake === 'pending-interaction') f.block();
+        if (wake === 'deadline') await vi.advanceTimersByTimeAsync(600_000);
+        else f.coordinator.rootProcessCompleted('s', runId);
+        if (wake !== 'manual-off') {
+          expect(f.store.find('s')?.supervision?.wakeCause?.runId).toBe(runId);
+          f.coordinator.restore('s');
+        }
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(f.resume).not.toHaveBeenCalled();
+        expect(f.start).toHaveBeenCalledTimes(
+          wake === 'manual-off' || wake === 'pending-interaction' ? 0 : 1,
+        );
+        if (wake === 'result' || wake === 'deadline')
+          expect(f.store.find('s')?.supervision?.wakeCause).toBeNull();
+      } finally {
+        f.close();
+      }
+    },
+  );
+
   it.each(['continue', 'manual-off', 'pending-interaction', 'executor-active'] as const)(
     'retains an unconfirmed issued command and diagnoses at root after wait expiry (%s)',
     async (gate) => {
