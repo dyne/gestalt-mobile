@@ -9,6 +9,30 @@ import { describe, expect, it } from 'vitest';
 import { createRelayClient, type RelayAvailableSkill } from './relay-client.js';
 
 describe('relay client', () => {
+  it('requests global Clean TMP with an empty typed request and preserves partial counts', async () => {
+    const result = {
+      status: 'partial',
+      folders: { removed: 2, skipped: 1, failed: 0 },
+      workspaces: { cleaned: 1, removed: 1, skipped: 0, failed: 0, unavailable: 1 },
+      reasons: {
+        protected: 1,
+        busy: 0,
+        lease: 0,
+        unrecognized: 0,
+        unsafe: 0,
+        unavailable: 1,
+        io: 0,
+      },
+    };
+    let received: { url: string; method?: string; body?: string } | undefined;
+    const client = createRelayClient(async (url, init) => {
+      received = { url: String(url), method: init?.method, body: init?.body as string };
+      return new Response(JSON.stringify(result));
+    });
+    expect(await client.cleanTmp()).toEqual(result);
+    expect(received).toEqual({ url: '/api/maintenance/clean-tmp', method: 'POST', body: '{}' });
+  });
+
   it('carries additive skill provenance and accepts older skill responses without it', async () => {
     const provenance = {
       kind: 'gestalt-verified' as const,

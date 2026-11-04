@@ -7,6 +7,7 @@
 import type { HistoryObservation } from '../../../shared/contracts/chat-transport-diagnostics.js';
 import type { SupervisedPlan } from '../plans/contracts.js';
 import type { UpgradeStatus } from '../../../shared/contracts/upgrade.js';
+import type { CleanTmpResult } from '../../../shared/contracts/tmp-cleanup.js';
 import type {
   ChatSnapshot,
   SafeInteractionOutcome,
@@ -318,6 +319,7 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       get<unknown>(`/api/sessions/${encodeURIComponent(id)}/debug/trace`, signal),
     quit: () => request<{ accepted: true }>('/api/maintenance/quit', {}),
     upgrade: () => request<UpgradeStatus>('/api/maintenance/upgrade', {}),
+    cleanTmp: () => request<CleanTmpResult>('/api/maintenance/clean-tmp', {}),
     upgradeStatus: (signal: AbortSignal) => get<UpgradeStatus>('/api/maintenance/upgrade', signal),
     listSessions: (signal?: AbortSignal) => get<RelaySession[]>('/api/sessions', signal),
     checkWorkspaceFileReferences: (workspaceId: string, paths: string[], signal?: AbortSignal) =>

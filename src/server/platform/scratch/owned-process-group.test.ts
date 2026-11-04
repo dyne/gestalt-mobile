@@ -10,6 +10,25 @@ import { describe, expect, it, vi } from 'vitest';
 import { stopOwnedProcessGroup } from './owned-process-group.js';
 
 describe('owned process group shutdown', () => {
+  it('does not send KILL after the original leader exits during TERM grace', async () => {
+    const child = {
+      pid: 2147483000,
+      kill: vi.fn(),
+      exitCode: null as number | null,
+      signalCode: null,
+    };
+    const signal = vi.spyOn(process, 'kill').mockImplementation((_pid, value) => {
+      if (value === 'SIGTERM') child.exitCode = 0;
+      return true;
+    });
+    try {
+      expect(await stopOwnedProcessGroup(child, 5, 5)).toBe(false);
+      expect(signal).not.toHaveBeenCalledWith(-child.pid, 'SIGKILL');
+      expect(signal.mock.calls.slice(1).every(([, value]) => value === 0)).toBe(true);
+    } finally {
+      signal.mockRestore();
+    }
+  });
   it('waits for a delayed real descendant and its parent to exit and be reaped', async () => {
     const descendant = `process.on('SIGTERM',()=>setTimeout(()=>process.exit(0),200)); process.send('ready'); setInterval(()=>{},1000);`;
     const parent = `const {spawn}=require('node:child_process'); process.on('SIGTERM',()=>{}); const child=spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore','ignore','ignore','ipc']}); child.on('message',()=>process.send('ready')); child.once('exit',()=>process.exit(0));`;

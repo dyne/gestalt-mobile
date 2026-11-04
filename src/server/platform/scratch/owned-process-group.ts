@@ -13,6 +13,7 @@ export async function stopOwnedProcessGroup(
   graceMs = 2000,
   confirmationMs = 1000,
 ): Promise<boolean> {
+  if (process.platform === 'win32') return false;
   if (!child.pid) {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
     return false;
@@ -43,6 +44,8 @@ export async function stopOwnedProcessGroup(
   if (term !== 'present') return term === 'absent';
   const graceful = await wait(graceMs);
   if (graceful !== 'present') return graceful === 'absent';
+  if (child.exitCode !== null || child.signalCode !== null)
+    return (await wait(confirmationMs)) === 'absent';
   const forced = signal('SIGKILL');
   if (forced !== 'present') return forced === 'absent';
   return (await wait(confirmationMs)) === 'absent';

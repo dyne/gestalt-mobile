@@ -1,0 +1,405 @@
+/*
+ * Copyright (C) 2026 Dyne.org foundation
+ * Designed by Denis Roio <jaromil@dyne.org>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+// BEGIN SESSION SCRATCH RUNTIME
+const scratchFs = require('node:fs');
+const scratchPath = require('node:path');
+const scratchCrypto = require('node:crypto');
+const scratchVariable = 'GESTALT_SESSION_TMP_CONTEXT';
+const scratchNames = [scratchVariable, 'TMPDIR', 'TMP', 'TEMP'];
+
+const scratchId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(value);
+const scratchUuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+function scratchAssert(condition) { if (!condition) throw Error('SESSION_SCRATCH_INVALID_CONTEXT'); }
+function scratchCanonical(directory) {
+  scratchAssert(typeof directory === 'string' && scratchPath.isAbsolute(directory) &&
+    !/[\x00-\x1f\x7f]/.test(directory) && scratchPath.resolve(directory) === directory);
+  let current = scratchPath.parse(directory).root;
+  for (const component of directory.slice(current.length).split('/').filter(Boolean)) {
+    current = scratchPath.join(current, component);
+    const info = scratchFs.lstatSync(current);
+    scratchAssert(info.isDirectory() && !info.isSymbolicLink());
+  }
+  scratchAssert(scratchFs.realpathSync(directory) === directory);
+}
+function scratchPrivate(directory) {
+  scratchCanonical(directory);
+  const info = scratchFs.lstatSync(directory);
+  scratchAssert((!process.getuid || info.uid === process.getuid()) &&
+    (process.platform === 'win32' || (info.mode & 0o777) === 0o700));
+}
+function scratchJson(file) {
+  const fd = scratchFs.openSync(file, scratchFs.constants.O_RDONLY | scratchFs.constants.O_NOFOLLOW);
+  try {
+    const info = scratchFs.fstatSync(fd);
+    scratchAssert(info.isFile() && info.nlink === 1 && info.size <= 16384 &&
+      (!process.getuid || info.uid === process.getuid()) &&
+      (process.platform === 'win32' || (info.mode & 0o077) === 0));
+    return JSON.parse(scratchFs.readFileSync(fd, 'utf8'));
+  } finally { scratchFs.closeSync(fd); }
+}
+function scratchContext(environment = process.env, allowReleased = false) {
+  if (!Object.hasOwn(environment, scratchVariable)) return null;
+  const context = JSON.parse(environment[scratchVariable]);
+  scratchAssert(context?.schemaVersion === 1 && scratchId(context.ownerId));
+  scratchCanonical(context.workspacePath);
+  const container = scratchPath.join(context.workspacePath, 'tmp', 'sessions');
+  scratchAssert(context.directory === scratchPath.join(container, context.ownerId) &&
+    context.markerPath === scratchPath.join(context.directory, '.gestalt-owner.json'));
+  // tmp may already contain user files/rules. Match the producer's parent
+  // check without changing its existing permissions; managed descendants alone
+  // require 0700.
+  const parent = scratchPath.dirname(container);
+  scratchCanonical(parent);
+  scratchAssert(!process.getuid || scratchFs.lstatSync(parent).uid === process.getuid());
+  for (const directory of [container, context.directory]) scratchPrivate(directory);
+  const marker = scratchJson(context.markerPath);
+  scratchAssert(marker?.schemaVersion === 1 && marker.ownerId === context.ownerId &&
+    marker.workspacePath === context.workspacePath && scratchId(marker.sessionId) &&
+    typeof marker.createdAt === 'string' && Number.isFinite(Date.parse(marker.createdAt)) &&
+    Array.isArray(marker.providerThreads) && marker.providerThreads.every(thread =>
+      ['codex', 'kimi'].includes(thread?.provider) && scratchId(thread.threadId)));
+  if (marker.ownerKind === 'mobile-session') {
+    scratchAssert(context.ownerId === 'mobile-' + scratchCrypto.createHash('sha256').update(marker.sessionId).digest('hex') &&
+      marker.authority?.kind === 'mobile-roster' && marker.authority.sessionId === marker.sessionId);
+  } else {
+    const prefix = marker.ownerKind === 'cli-session' ? 'cli-' : marker.ownerKind === 'workspace-service' ? 'service-' : '';
+    scratchAssert(prefix && context.ownerId.startsWith(prefix) && scratchUuid(context.ownerId.slice(prefix.length)) &&
+      marker.sessionId === context.ownerId && marker.authority?.kind === 'lease' && scratchUuid(marker.authority.leaseId));
+    const leases = scratchPath.join(context.directory, 'leases');
+    scratchPrivate(leases);
+    const lease = scratchJson(scratchPath.join(leases, marker.authority.leaseId + '.json'));
+    scratchAssert(lease?.schemaVersion === 1 && lease.ownerId === context.ownerId && lease.workspacePath === context.workspacePath &&
+      lease.leaseId === marker.authority.leaseId && (lease.state === 'active' || allowReleased && lease.state === 'released') && scratchUuid(lease.processIdentity) &&
+      typeof lease.createdAt === 'string' && Number.isFinite(Date.parse(lease.createdAt)) &&
+      typeof lease.updatedAt === 'string' && Number.isFinite(Date.parse(lease.updatedAt)) &&
+      Array.isArray(lease.consumers) && lease.consumers.every(scratchId));
+  }
+  return context;
+}
+function scratchEnvironment(environment = process.env) {
+  const context = scratchContext(environment);
+  return context ? { ...environment, TMPDIR: context.directory, TMP: context.directory, TEMP: context.directory } : { ...environment };
+}
+function scratchDiscoveryEnvironment(environment = process.env) {
+  const result = { ...environment };
+  if (Object.hasOwn(result, scratchVariable)) for (const name of scratchNames) delete result[name];
+  return result;
+}
+function scratchPublish(file, value, initial = false) {
+  const staged = initial ? file : scratchPath.join(scratchPath.dirname(file), '.' + scratchCrypto.randomUUID() + '.json');
+  const fd = scratchFs.openSync(staged, 'wx', 0o600);
+  try { scratchFs.writeFileSync(fd, JSON.stringify(value) + '\n'); scratchFs.fsyncSync(fd); }
+  finally { scratchFs.closeSync(fd); }
+  if (!initial) scratchFs.renameSync(staged, file);
+}
+function scratchContainer(workspace) {
+  scratchCanonical(workspace);
+  const parent = scratchPath.join(workspace, 'tmp');
+  try { scratchFs.mkdirSync(parent, {mode: 0o700}); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+  scratchCanonical(parent);
+  scratchAssert(!process.getuid || scratchFs.lstatSync(parent).uid === process.getuid());
+  const container = scratchPath.join(parent, 'sessions');
+  try { scratchFs.mkdirSync(container, {mode: 0o700}); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+  scratchPrivate(container);
+  try { scratchFs.writeFileSync(scratchPath.join(container, '.gitignore'), '*\n', {mode: 0o600, flag: 'wx'}); }
+  catch (e) { if (e.code !== 'EEXIST') throw e; }
+  return container;
+}
+function scratchOwnerContext(workspace, ownerId) {
+  const directory = scratchPath.join(workspace, 'tmp', 'sessions', ownerId);
+  return {schemaVersion: 1, workspacePath: workspace, ownerId, directory, markerPath: scratchPath.join(directory, '.gestalt-owner.json')};
+}
+function scratchLeaseRecords(context) {
+  const directory = scratchPath.join(context.directory, 'leases');
+  scratchPrivate(directory);
+  return scratchFs.readdirSync(directory).map(name => {
+    scratchAssert(scratchUuid(name.replace(/\.json$/, '')) && name.endsWith('.json'));
+    const value = scratchJson(scratchPath.join(directory, name));
+    scratchAssert(value?.schemaVersion === 1 && value.ownerId === context.ownerId && value.workspacePath === context.workspacePath &&
+      name === value.leaseId + '.json' && ['active', 'released'].includes(value.state) && scratchUuid(value.processIdentity) &&
+      typeof value.createdAt === 'string' && Number.isFinite(Date.parse(value.createdAt)) &&
+      typeof value.updatedAt === 'string' && Number.isFinite(Date.parse(value.updatedAt)) &&
+      Array.isArray(value.consumers) && value.consumers.every(scratchId) && (value.state !== 'released' || value.consumers.length === 0));
+    return value;
+  });
+}
+function scratchDirectoryIdentity(directory) {
+  const info = scratchFs.lstatSync(directory, {bigint: true});
+  scratchAssert(info.isDirectory() && !info.isSymbolicLink());
+  return {dev: info.dev, ino: info.ino, birth: info.birthtimeNs};
+}
+function scratchSameDirectory(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.birth === right.birth;
+}
+function scratchAncestorOwner(context) {
+  // Released CLI/service ancestors still have positive attribution. This read
+  // grants no cleanup authority and never expires a lease or steals a fence.
+  scratchContext({[scratchVariable]: JSON.stringify(context)}, true);
+  const marker = scratchJson(context.markerPath);
+  try {
+    scratchFs.lstatSync(scratchPath.join(context.directory, 'leases'));
+    scratchLeaseRecords(context);
+  } catch (error) {if (error.code !== 'ENOENT' || marker.ownerKind !== 'mobile-session') throw error;}
+  return {
+    context, identity: scratchDirectoryIdentity(context.directory),
+    provenance: JSON.stringify([marker.schemaVersion, marker.ownerKind, marker.ownerId, marker.workspacePath,
+      marker.sessionId, marker.createdAt, marker.authority.kind, marker.authority.sessionId ?? null, marker.authority.leaseId ?? null]),
+  };
+}
+function scratchManagedAncestors(workspace) {
+  const parts = workspace.slice(scratchPath.parse(workspace).root.length).split(scratchPath.sep).filter(Boolean);
+  const ancestors = [];
+  let directory = scratchPath.parse(workspace).root;
+  for (let i = 0; i < parts.length; i++) {
+    directory = scratchPath.join(directory, parts[i]);
+    if (i >= 2 && parts[i - 1] === 'sessions' && parts[i - 2] === 'tmp') {
+      const ownerWorkspace = scratchPath.dirname(scratchPath.dirname(scratchPath.dirname(directory)));
+      ancestors.push(scratchAncestorOwner(scratchOwnerContext(ownerWorkspace, parts[i])));
+    }
+  }
+  return ancestors;
+}
+function scratchRevalidateAncestor(ancestor) {
+  const current = scratchAncestorOwner(ancestor.context);
+  scratchAssert(scratchSameDirectory(ancestor.identity, current.identity) && ancestor.provenance === current.provenance);
+}
+function scratchWithContainment(workspace, publish) {
+  scratchCanonical(workspace);
+  const selected = scratchDirectoryIdentity(workspace), ancestors = scratchManagedAncestors(workspace), claims = [];
+  try {
+    // Path traversal supplies outermost-first order. These short fences precede
+    // new-owner controller/association work and never span a runtime lifetime.
+    for (const ancestor of ancestors) {
+      const path = scratchPath.join(ancestor.context.directory, '.containment-lock');
+      try {scratchFs.mkdirSync(path, {mode: 0o700});}
+      catch (error) {
+        if (error.code === 'EEXIST') throw new Error('SESSION_SCRATCH_CONTAINMENT_BUSY');
+        throw error;
+      }
+      const claim = {path, identity: scratchDirectoryIdentity(path), fd: undefined};
+      claims.push(claim);
+      scratchPrivate(path);
+      claim.fd = scratchFs.openSync(path, scratchFs.constants.O_RDONLY | scratchFs.constants.O_DIRECTORY | scratchFs.constants.O_NOFOLLOW);
+      const held = scratchFs.fstatSync(claim.fd, {bigint: true});
+      scratchAssert(scratchSameDirectory(claim.identity, {dev: held.dev, ino: held.ino, birth: held.birthtimeNs}));
+      scratchRevalidateAncestor(ancestor);
+    }
+    scratchCanonical(workspace);
+    scratchAssert(scratchSameDirectory(selected, scratchDirectoryIdentity(workspace)));
+    for (const ancestor of ancestors) scratchRevalidateAncestor(ancestor);
+    // This publication callback is synchronous. No recursive workspace creation:
+    // retirement or alias/identity changes
+    // between discovery and fencing fail before scratchContainer publishes.
+    return publish();
+  } finally {
+    let failure;
+    for (const claim of claims.reverse()) {
+      try {
+        if (!scratchSameDirectory(claim.identity, scratchDirectoryIdentity(claim.path)))
+          throw new Error('SESSION_SCRATCH_CONTAINMENT_FENCE_CHANGED');
+        scratchFs.rmdirSync(claim.path);
+      } catch (error) {failure ??= error;}
+      finally {
+        try {if (claim.fd !== undefined) scratchFs.closeSync(claim.fd);}
+        catch (error) {failure ??= error;}
+      }
+    }
+    if (failure) throw failure;
+  }
+}
+function scratchAllocate(workspace,kind,consumer) {
+ scratchAssert(['cli-session','workspace-service'].includes(kind)&&scratchId(consumer));
+ return scratchWithContainment(workspace,()=>{
+ scratchContainer(workspace);
+ const ownerId=(kind==='cli-session'?'cli-':'service-')+scratchCrypto.randomUUID(),context=scratchOwnerContext(workspace,ownerId);
+ scratchFs.mkdirSync(context.directory,{mode:0o700});scratchPrivate(context.directory);
+ const lock=scratchPath.join(context.directory,'.controller-lock');scratchFs.mkdirSync(lock,{mode:0o700});
+ scratchFs.mkdirSync(scratchPath.join(context.directory,'leases'),{mode:0o700});
+ const leaseId=scratchCrypto.randomUUID(),time=new Date().toISOString();
+ const lease={schemaVersion:1,ownerId,workspacePath:workspace,leaseId,state:'active',processIdentity:scratchCrypto.randomUUID(),createdAt:time,updatedAt:time,consumers:[consumer]};
+ const marker={schemaVersion:1,ownerKind:kind,ownerId,workspacePath:workspace,sessionId:ownerId,createdAt:time,authority:{kind:'lease',leaseId},providerThreads:[]};
+ scratchPublish(scratchPath.join(context.directory,'leases',leaseId+'.json'),lease,true);scratchPublish(context.markerPath,marker,true);
+ scratchContext({[scratchVariable]:JSON.stringify(context)});return {context,lease,lock};
+ });
+}
+function scratchRelease(ownership) {
+  const {context, lease, lock} = ownership;
+  return scratchMetadata(context, () => {
+  scratchPrivate(scratchPath.join(context.directory, 'leases'));
+  // Unknown or unreleased borrowers protect the complete owner, not just one
+  // process's view of it. Never use a PID or timestamp to retire another lease.
+  if (!ownership.borrowed && scratchLeaseRecords(context).some(value => value.leaseId !== lease.leaseId && value.state !== 'released')) return false;
+  const file = scratchPath.join(context.directory, 'leases', lease.leaseId + '.json');
+  const current = scratchJson(file);
+  scratchAssert(current.schemaVersion === 1 && current.ownerId === context.ownerId && current.workspacePath === context.workspacePath &&
+    current.leaseId === lease.leaseId && current.processIdentity === lease.processIdentity && current.state === 'active' &&
+    current.createdAt === lease.createdAt && typeof current.updatedAt === 'string' && Number.isFinite(Date.parse(current.updatedAt)) &&
+    JSON.stringify(current.consumers) === JSON.stringify(lease.consumers));
+  scratchPublish(file, {...current, state: 'released', consumers: [], updatedAt: new Date().toISOString()});
+  if (!ownership.borrowed) {scratchPrivate(lock); scratchFs.rmdirSync(lock);}
+  return true;
+  });
+}
+function scratchMetadata(context, operation, waitMs = 0) {
+  scratchContext({[scratchVariable]: JSON.stringify(context)});
+  const mobile = scratchJson(context.markerPath).ownerKind === 'mobile-session';
+  // Mobile cleanup/association use this same controller fence. CLI/service
+  // controllers already hold it for their lifetime and serialize borrowers
+  // against primary release with the association fence instead.
+  const lock = scratchPath.join(context.directory, mobile ? '.controller-lock' : '.association-lock');
+  const deadline = Date.now() + waitMs;
+  while (true) {
+    try {scratchFs.mkdirSync(lock, {mode: 0o700}); break;} catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (Date.now() >= deadline) return false;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+  try {
+    scratchPrivate(lock);
+    scratchContext({[scratchVariable]: JSON.stringify(context)});
+    if (mobile) scratchAssert(!scratchFs.existsSync(scratchPath.join(context.directory, '.association-lock')));
+    return operation();
+  } finally {scratchFs.rmdirSync(lock);}
+}
+function scratchBorrow(context, consumer) {
+  scratchAssert(scratchId(consumer));
+  const ownership = scratchMetadata(context, () => {
+  const directory = scratchPath.join(context.directory, 'leases');
+  try {scratchFs.mkdirSync(directory, {mode: 0o700});} catch (error) {if (error.code !== 'EEXIST') throw error;}
+  scratchPrivate(directory);
+  scratchLeaseRecords(context);
+  const leaseId = scratchCrypto.randomUUID(), time = new Date().toISOString();
+  const lease = {schemaVersion: 1, ownerId: context.ownerId, workspacePath: context.workspacePath, leaseId,
+    state: 'active', processIdentity: scratchCrypto.randomUUID(), createdAt: time, updatedAt: time, consumers: [consumer]};
+  scratchPublish(scratchPath.join(context.directory, 'leases', leaseId + '.json'), lease, true);
+  return {context, lease, borrowed: true};
+  }, 1000);
+  scratchAssert(ownership);
+  return ownership;
+}
+async function scratchReleaseReady(ownership) {
+  const deadline = Date.now() + 3500;
+  while (!scratchRelease(ownership)) {
+    if (Date.now() >= deadline) return false;
+    await scratchDelay(25);
+  }
+  return true;
+}
+function scratchGuardianProgram(manager, consumer, browser = false) {
+  const context = scratchContext();
+  if (!context) return null;
+  const ownership = scratchBorrow(context, consumer);
+  const source = scratchFs.readFileSync(manager, 'utf8').match(/^\/\/ BEGIN SESSION SCRATCH RUNTIME\n([\s\S]*?)^\/\/ END SESSION SCRATCH RUNTIME/m);
+  scratchAssert(source);
+  return source[1] + '\nconst args=JSON.parse(process.argv[2]);' +
+    (browser ? 'args.push(JSON.stringify({useProcessIdentity:true,staleToken:process.argv[4]||null}));' : '') +
+    'scratchGuard('+JSON.stringify(ownership)+',process.argv[1],args,process.argv[3]).catch(()=>{process.stderr.write("gestalt: managed tool release unconfirmed; temporary owner protected\\n");process.exitCode=1;process.stdin.destroy();});';
+}
+function scratchAssociate(environment, threadId) {
+  const context = scratchContext(environment);
+  scratchAssert(context && scratchId(threadId));
+  const lock = scratchPath.join(context.directory, '.association-lock'), deadline = Date.now() + 1000;
+  while (true) {
+    try {scratchFs.mkdirSync(lock, {mode: 0o700}); break;} catch (e) {
+      if (e.code !== 'EEXIST' || Date.now() >= deadline) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+  try {
+    const marker = scratchJson(context.markerPath);
+    scratchAssert(marker.ownerKind === 'cli-session');
+    if (!marker.providerThreads.some(value => value.provider === 'codex' && value.threadId === threadId)) {
+      const updated={...marker,providerThreads:[...marker.providerThreads,{provider:'codex',threadId}]};
+      scratchPublish(context.markerPath,updated);
+    }
+  } finally {scratchFs.rmdirSync(lock);}
+}
+const scratchDelay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+function scratchGroupAbsent(pid) {
+  if (!Number.isSafeInteger(pid) || pid < 2) return false;
+  try { process.kill(-pid, 0); return false; } catch (e) { return e.code === 'ESRCH'; }
+}
+async function scratchStopped(child, stop = false, options = {}) {
+  const running = () => child.exitCode === null && child.signalCode === null;
+  const signal = name => {if (running() && child.pid) try {process.kill(-child.pid, name);} catch (e) {if (e.code !== 'ESRCH') throw e;}};
+  if (stop) signal('SIGTERM');
+  const deadline = Date.now() + (options.maxMs ?? 3500), escalation = Date.now() + (options.graceMs ?? 1500);
+  while (Date.now() < deadline) {
+    if (!running() && scratchGroupAbsent(child.pid)) return true;
+    if (stop && Date.now() >= escalation) signal('SIGKILL');
+    await scratchDelay(25);
+  }
+  // Leader exit permits read-only absence checks only. A cached numeric group
+  // never authorizes a fresh termination signal after that boundary.
+  return !running() && scratchGroupAbsent(child.pid);
+}
+async function scratchGuard(ownership, command, args, cwd) {
+  const {spawn} = require('node:child_process');
+  const environment = scratchEnvironment({...process.env, [scratchVariable]: JSON.stringify(ownership.context)});
+  const child = spawn(command, args, {cwd, env: environment, detached: true, stdio: [3, 'inherit', 'inherit']});
+  let stopping;
+  const stop = code => stopping ??= (async () => {
+    const stopped = await scratchStopped(child, true);
+    if (stopped) await scratchReleaseReady(ownership);
+    else process.stderr.write('gestalt: temporary owner remains protected; subprocess release is unconfirmed\n');
+    process.exitCode = code;
+    process.stdin.destroy();
+  })();
+  process.stdin.resume(); process.stdin.on('end', () => void stop(143));
+  process.on('SIGTERM', () => void stop(143)); process.on('SIGINT', () => void stop(130));
+  await new Promise(resolve => {child.once('error', () => resolve(127)); child.once('exit', code => resolve(code ?? 143));})
+    .then(async code => {
+      if (stopping) return stopping;
+      stopping = (async () => {
+        if (await scratchStopped(child)) await scratchReleaseReady(ownership);
+        else process.stderr.write('gestalt: temporary owner remains protected; subprocess release is unconfirmed\n');
+        process.exitCode = code; process.stdin.destroy();
+      })();
+      return stopping;
+    });
+}
+async function scratchSupervise(manager, ownership, command, args) {
+  const {spawn} = require('node:child_process');
+  const source = scratchFs.readFileSync(manager, 'utf8').match(/^\/\/ BEGIN SESSION SCRATCH RUNTIME\n([\s\S]*?)^\/\/ END SESSION SCRATCH RUNTIME/m);
+  scratchAssert(source);
+  const program = source[1] + '\nscratchGuard(JSON.parse(process.argv[1]),process.argv[2],JSON.parse(process.argv[3])).catch(()=>{process.stderr.write("gestalt: owned temporary lifetime failed; owner remains protected\\n");process.exitCode=1;process.stdin.destroy();});';
+  // Separate lifetime pipe and original terminal/stdin: guardian EOF survives
+  // an uncatchable controller exit and never consumes the native CLI's input.
+  const guardian = spawn(process.execPath, ['-e', program, JSON.stringify(ownership), command, JSON.stringify(args)],
+    {stdio: ['pipe', 'inherit', 'inherit', 0]});
+  guardian.stdin.on('error', () => {});
+  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {
+    if (guardian.exitCode === null && guardian.signalCode === null) guardian.kill(signal);
+  });
+  const code = await new Promise(resolve => {guardian.once('error', () => resolve(127)); guardian.once('exit', value => resolve(value ?? 143));});
+  guardian.stdin.end(); process.exitCode = code;
+}
+async function scratchCli(manager, args) {
+  let selected;
+  for (let i = 0; i < args.length && args[i] !== '--'; i++) {
+    const arg = args[i];
+    if (['-c', '--config', '-p', '--profile', '--model', '-m', '--sandbox', '-s', '--ask-for-approval', '-a', '--image', '-i', '--permissions', '--remote', '--add-dir', '--local-provider'].includes(arg)) {i++; continue;}
+    if (arg === '-C' || arg === '--cd') {scratchAssert(typeof args[i + 1] === 'string'); selected = scratchPath.resolve(selected ?? process.cwd(), args[++i]);}
+    else if (arg.startsWith('--cd=')) selected = scratchPath.resolve(selected ?? process.cwd(), arg.slice(5));
+    else if (arg.startsWith('-C') && arg.length > 2) selected = scratchPath.resolve(selected ?? process.cwd(), arg.slice(2));
+  }
+  if (!selected) {
+    process.stderr.write('gestalt: no selected workspace; CLI temporary ownership unavailable (select with -C)\n');
+    const {spawn} = require('node:child_process');
+    const child = spawn('bash', [manager, '__cli-owned', ...args], {stdio: 'inherit'});
+    for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => child.kill(signal));
+    process.exitCode = await new Promise(resolve => {child.once('error', () => resolve(127)); child.once('exit', value => resolve(value ?? 143));});
+    return;
+  }
+  scratchCanonical(selected);
+  // One invocation owns one stable UUID before native thread selection. Native
+  // selectors, stdin and permission flags pass through without interception.
+  const ownership = scratchAllocate(selected, 'cli-session', 'cli-controller');
+  await scratchSupervise(manager, ownership, 'bash', [manager, '__cli-owned', ...args]);
+}
+// END SESSION SCRATCH RUNTIME

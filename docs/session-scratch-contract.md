@@ -112,9 +112,156 @@ The launcher implements CLI allocation before cleanup may recognize CLI owners.
 
 Mobile's durable roster is its authority, covering running, open and saved/
 reopenable sessions even without a runtime, browser connection or active turn.
-Stop/release keeps scratch. Forget first stops and releases owned work; deletion
-and truthful retryable progress are implemented by the later cleanup milestone.
+Stop/release keeps scratch. Forget first stops and releases owned work before
+targeted deletion and durable roster retirement.
 Resuming forgotten history requires a new allocation. Allocation/association APIs
 grant no deletion authority. Clean TMP must skip unknown versions, links, foreign
 owners, indeterminate leases and unregistered/ambiguous contents. Never sweep
 arbitrary tmp siblings. Legacy recognition requires separate positive provenance.
+
+## Cleanup storage and fencing
+
+Mobile allocation and association claim the same private `.controller-lock`
+directory used by CLI controllers. Mobile service allocation holds it for the
+service lifetime and removes it only after release publication; active, malformed
+or unknown borrower leases prevent release. An existing fence is busy, including
+after a crash. No timestamp or PID permits stealing it. Concurrent allocation
+fails visibly and can be retried; it never repairs an unmarked collision.
+
+Cleanup takes an absent fence before validating the marker, every lease, and
+filesystem provenance. It then reads the durable roster again under that claim.
+Every roster state protects its owner, including old stopped/released entries;
+history outside that roster does not. Multiple instances sharing the durable
+repository observe committed roster changes before lazy runtime restoration.
+Workspace locators are backfilled and retained after roster deletion, alongside
+the existing canonical workspace catalog. Locators grant no deletion authority.
+
+Before removal, an eligible owner is atomically renamed within the private
+sessions container to `.cleanup-<ownerId>-<UUID>`. This registered removal
+namespace prevents a new allocation at the stable owner path from entering a
+deletion in progress. Payload is removed before authority metadata. A payload
+deletion failure releases this invocation's fence and permits a later validated
+retry. Crashes with a held fence or incomplete metadata stay indeterminate and
+are retained; a directory name alone never authorizes their removal. Restored
+roster protection covers both stable owners and their pending removal directories.
+Cleanup skips any owner containing symlinks, foreign UID, hard-linked files,
+special files, invalid metadata or unreleased/unknown leases. It returns fixed
+category counts without exposing paths or contents. One unavailable workspace
+does not prevent cleanup of another available workspace.
+
+### Contained workspace and owner protection
+
+Mobile and Launcher share the private, bare 0700 `.containment-lock` namespace.
+Before publishing a new selected-workspace association or allocating a nested
+owner, Mobile claims attributed managed ancestors outermost first. Cleanup also
+claims its current owner, before its controller fence. Directory identity and
+immutable marker provenance are revalidated under the claims; open directory
+handles prevent releasing a replacement fence. Release runs in reverse order.
+Busy, unknown or crashed claims are never stolen using age or PID information.
+These short publication guards do not span a provider/service lifetime or alter
+the existing controller and association fence rules.
+
+New session creation and history promotion publish their durable association
+before releasing the guard. Ordinary selected directories remain supported;
+contention or indeterminate ancestry fails visibly and can be retried. A missing
+or replaced selected workspace is not recreated by allocation. This protocol
+matches Launcher `5f36e7abe81cabd29ad9e14d6b3e0a698199c025`.
+
+Detached readable history may be opened after its historical workspace has been
+deleted. History promotion observes the nearest existing canonical directory
+without requiring ownership of ordinary system ancestors such as `/`. It still
+claims every managed ancestor in the full historical path, including reserved
+owner segments beyond a missing intermediate directory; absent, retired or
+unattributed owners fail closed. The existing prefix identity and missing
+frontier are revalidated under those fences before publishing the roster row.
+This read-only import never recreates the workspace, allocates scratch or resumes
+the provider thread. Start, allocation and cleanup retain their existence checks;
+a later resume still requires a valid selected workspace.
+
+Under these fences cleanup rereads the full authoritative roster, protecting
+both contained selected-workspace paths and their scratch paths, including the
+logical path of an owner already in its removal namespace. Targeted Forget uses
+the same roster and excludes only its exact authorized target. Another protected
+workspace keeps the outer owner and its retryable frame intact; Forget returns
+503 rather than a false 204.
+
+Nested ownership markers, leases/fences and indeterminate nested `tmp/sessions`
+namespaces are retained conservatively, including empty nested containers. An
+outer cleanup does not recursively retire another workspace's namespace.
+Inspection stops with a retained outcome above 128 levels or 100,000 entries;
+these bounds grant no deletion authority. Unrelated eligible owners still clean.
+Payload and marker retirement precede release of the cleanup invocation's own
+fences; the empty retired directory is then removed without recursive deletion
+of a fence or replacement namespace.
+
+Earlier Mobile v1 allocations use the same validated marker and roster authority;
+the compatibility fixture executes their actual historical allocator. Older
+unmarked tool families lack a session-directory binding and release authority.
+They remain untouched and are counted as ambiguous candidates when found directly
+under a known workspace's `tmp`. See [legacy provenance](legacy-scratch-provenance.md)
+for the producer revisions and limits. No general prefix sweep is permitted.
+
+## Clean TMP API
+
+`POST /api/maintenance/clean-tmp` accepts an empty body and no query options under
+the existing passkey and exact-origin policy. It scans all durable known workspace
+associations and catalog workspaces, deduplicating canonical aliases. A failure
+in one discovery source preserves the other source's scope and reports a partial
+result; it cannot claim that an unknown workspace was scanned.
+
+Cleanup catalog discovery prunes positively validated managed owner directories
+and their payload subtrees. These are scratch, not additional workspace targets
+that can disappear during the same cleanup. It shares the canonical/private
+filesystem and owner-marker validation with cleanup; names alone do not exclude
+a directory. Ordinary and ambiguous nested directories remain discoverable.
+Workspace selection browsing is unchanged. Durable selected workspace paths and
+the current roster remain independent discovery sources, including an explicitly
+selected path inside a managed owner.
+
+The typed response contains fixed removed/skipped/failed folder counts,
+cleaned/removed/skipped/failed/unavailable workspace counts, and fixed reason
+counts. A workspace with a removal can also have skipped or failed candidates.
+`cleaned` means its scan completed without skipped or failed candidates. Discovery
+failures contribute to the unavailable reason without inventing folder or
+workspace counts. Partial/inaccessible results remain distinct from complete
+scans. Paths, directory listings and filesystem diagnostics are never returned.
+Missing cleanup support or an unexpected operation failure returns a bounded 503;
+the response is not cached. The typed client exposes this action for later UI work.
+
+## Durable Forget operations
+
+`DELETE /api/sessions/:id` uses a dedicated operation, independent of Stop and
+release. Its fixed metadata contains `operationId`, `sessionId`, `phase` and
+`updatedAt`, plus a bounded `failureCode` on failure. Phases are `stopping`,
+`cleaning`, `finalizing`, `failed`, and `completed`. The roster's list/get read
+models include `forgetOperation`; `session.forget.updated` events publish the
+same typed metadata while the frame exists. No percentage is inferred.
+
+The operation row is a durable business fence across server instances sharing
+the database. Session mutations and scratch allocation reject a fenced owner;
+SQLite prevents a late save from overwriting or recreating the roster row.
+Same-process requests join one promise; cross-process requests/retries use the
+same operation ID. Startup retries unfinished operations without assuming the
+prior runtime died. It re-enters resource release before attempting deletion.
+Unknown crashed controller fences or process leases remain protected, including
+on restart. This is a visible retryable failure, never authority to steal a lock.
+
+Mobile-owned Codex resources and host-test guardians publish individual process
+leases before launch. Normal exit releases only the exact claim after confirmed
+process-group absence; termination delivery alone is insufficient. Forget waits
+for host-test cancellation and starting/closing runtime resources, uses existing
+native controls for known detached child claims, and requires confirmed runtime
+release. Unknown claims from another server retain their owner until that owner
+confirms release. Kimi commands use shared service scratch: Forget aborts only
+that session's known prompts, verifies the provider's inactive status and releases
+its subscription; other sessions keep the shared service. Persistent provider
+history, auth and profiles are never removed.
+
+Cleanup targets only the session's validated managed owner/removal directories,
+under its durable operation's authority. A successful request returns 204 only
+after deletion and atomic roster/operation finalization. Failure returns 503 with
+`SESSION_FORGET_FAILED` and operation metadata, retaining the roster and original
+thread identity for recovery/retry. Repeated completed requests remain idempotent.
+Promoting forgotten provider history creates a new relay identity and fresh
+scratch. Filesystem deletion and SQLite finalization are separate failure domains;
+no cross-resource transaction is claimed. UI rendering is a later milestone.

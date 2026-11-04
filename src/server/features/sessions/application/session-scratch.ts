@@ -17,6 +17,8 @@ export type ServiceScratchLease = SessionScratchContext & {
 
 /** The selected workspace and durable relay identity, never a command's cwd. */
 export interface SessionScratch {
+  assertAvailable?(sessionId: string): void;
+  borrow?(session: Readonly<{ id: string; workspacePath: string }>): Promise<ServiceScratchLease>;
   allocate(
     session: Readonly<{ id: string; workspacePath: string }>,
   ): Promise<SessionScratchContext>;

@@ -20,6 +20,7 @@ import type { RelaySessionSnapshot } from '../../features/sessions/model/relay-s
 import { compileSkillOverride } from '../../features/skills/model/skill-profile.js';
 import { CodexCapabilities } from './codex-capabilities.js';
 import { FilesystemSessionScratch } from '../scratch/filesystem-session-scratch.js';
+import { FilesystemScratchCleanup } from '../scratch/filesystem-scratch-cleanup.js';
 import type { CodexXerj } from '../retrieval/codex-xerj.js';
 import type { CodexSerena } from './codex-serena.js';
 
@@ -367,6 +368,43 @@ describe('managed Mobile Playwright session', () => {
       nodeStatus: 'ready',
     });
   });
+  it('keeps an in-flight doctor lease protected until its actual readiness work settles', async () => {
+    const f = await fixture();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    f.installation.ready.mockImplementation(async () => {
+      await gate;
+      return healthyReadiness;
+    });
+    await f.control('start');
+    const preparing = f.prepare();
+    let waiting: Promise<void> | undefined;
+    try {
+      await vi.waitFor(() => expect(f.installation.ready).toHaveBeenCalled(), { timeout: 1000 });
+      waiting = f.adapter.waitForRelease(f.authority.session.id);
+      await expect(
+        new FilesystemScratchCleanup().cleanSession(
+          f.authority.session,
+          () => true,
+          () => [f.authority.session],
+        ),
+      ).rejects.toThrow('SESSION_CLEANUP_FAILED');
+    } finally {
+      release();
+      await preparing;
+      await waiting;
+      await f.adapter.waitForRelease(f.authority.session.id);
+    }
+    await expect(
+      new FilesystemScratchCleanup().cleanSession(
+        f.authority.session,
+        () => true,
+        () => [f.authority.session],
+      ),
+    ).resolves.toBeUndefined();
+  });
   it('invalidates verification when consent or retained authority changes during the probe', async () => {
     const f = await fixture();
     await f.control('start');
@@ -562,6 +600,7 @@ describe('read-only managed Playwright installation', () => {
     'redacted-version',
   ])('bounds doctor output, exit and environment: %s', async (mode) => {
     const f = await fixture();
+    const scratch = await new FilesystemSessionScratch().allocate(f.authority.session);
     const manager = join(f.root, 'doctor.cjs');
     const capture = join(f.root, 'capture.json');
     const ready = {
@@ -586,17 +625,25 @@ describe('read-only managed Playwright installation', () => {
             : `console.log(${JSON.stringify(JSON.stringify(ready))});${mode === 'nonzero' ? 'process.exitCode=1;' : ''}`;
     await writeFile(
       manager,
-      `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(capture)},JSON.stringify({args:process.argv.slice(2),keys:Object.keys(process.env)}));\n${code}\n`,
+      `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(capture)},JSON.stringify({args:process.argv.slice(2),keys:Object.keys(process.env),scratch:Object.fromEntries(['TMPDIR','TMP','TEMP','GESTALT_SESSION_TMP_CONTEXT'].map(key=>[key,process.env[key]]))}));\n${code}\n`,
       { mode: 0o700 },
     );
     const adapter = new ManagedPlaywright({
-      ...process.env,
+      PATH: '/fixture/bin',
+      HOME: f.root,
+      GESTALT_HOME: join(f.root, 'operator-home'),
+      TMPDIR: '/untrusted/ambient',
+      TMP: '/untrusted/ambient',
+      TEMP: '/untrusted/ambient',
+      GESTALT_SESSION_TMP_CONTEXT: 'untrusted-ambient-context',
       TEST_SECRET: 'must-not-be-forwarded',
     });
     const result = await adapter.ready(
       manager,
       f.root,
       Date.now() + (mode === 'timeout' ? 200 : 1000),
+      [],
+      scratch.environment,
     );
     expect(result.ready).toBe(['valid', 'redacted-version'].includes(mode));
     if (['timeout', 'malformed', 'oversized', 'old-contract'].includes(mode))
@@ -618,10 +665,17 @@ describe('read-only managed Playwright installation', () => {
     const evidence = JSON.parse(await readFile(capture, 'utf8'));
     expect(evidence.args).toEqual(['playwright', 'doctor', '--json', '--cwd', f.root]);
     expect(evidence.keys).not.toContain('TEST_SECRET');
-    expect(
-      evidence.keys.every((key: string) =>
-        ['PATH', 'HOME', 'TMPDIR', 'GESTALT_HOME'].includes(key),
-      ),
-    ).toBe(true);
+    expect(evidence.keys.sort()).toEqual(
+      [
+        'PATH',
+        'HOME',
+        'GESTALT_HOME',
+        'TMPDIR',
+        'TMP',
+        'TEMP',
+        'GESTALT_SESSION_TMP_CONTEXT',
+      ].sort(),
+    );
+    expect(evidence.scratch).toEqual(scratch.environment);
   });
 });

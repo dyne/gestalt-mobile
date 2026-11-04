@@ -14,6 +14,7 @@ import type {
   WorkspaceOption,
 } from '../../features/catalog/application/ports.js';
 import type { GitWorkspace, GitWorkspaceResolver } from '../../features/git/application/ports.js';
+import { isManagedScratchOwnerDirectory } from '../scratch/managed-scratch-owner.js';
 
 export class FilesystemWorkspaceCatalog implements WorkspaceCatalog, GitWorkspaceResolver {
   private readonly root: Promise<string>;
@@ -22,6 +23,16 @@ export class FilesystemWorkspaceCatalog implements WorkspaceCatalog, GitWorkspac
   }
   async list(): Promise<WorkspaceOption[]> {
     return [(await this.tree()).option];
+  }
+  /** Keep canonical catalog identities without treating owned scratch as workspaces. */
+  async knownWorkspacePaths(): Promise<string[]> {
+    const paths: string[] = [];
+    const collect = (entry: CatalogEntry) => {
+      paths.push(entry.realPath);
+      for (const child of entry.children) collect(child);
+    };
+    collect(await this.tree(true));
+    return paths;
   }
   async resolve(id: string): Promise<{ id: string; name: string; realPath: string }> {
     const root = await this.root;
@@ -40,7 +51,7 @@ export class FilesystemWorkspaceCatalog implements WorkspaceCatalog, GitWorkspac
         }
       : null;
   }
-  private async tree(): Promise<CatalogEntry> {
+  private async tree(cleanupDiscovery = false): Promise<CatalogEntry> {
     const root = await this.root;
     return (
       (await this.visit({
@@ -50,6 +61,7 @@ export class FilesystemWorkspaceCatalog implements WorkspaceCatalog, GitWorkspac
         relativePath: '.',
         visited: new Set<string>(),
         isRoot: true,
+        cleanupDiscovery,
       })) ?? this.entry(root, '/', '.', false, [])
     );
   }
@@ -60,9 +72,16 @@ export class FilesystemWorkspaceCatalog implements WorkspaceCatalog, GitWorkspac
     relativePath: string;
     visited: Set<string>;
     isRoot?: boolean;
+    cleanupDiscovery?: boolean;
   }): Promise<CatalogEntry | null> {
     if (input.visited.has(input.realPath)) return null;
     input.visited.add(input.realPath);
+    if (
+      input.cleanupDiscovery &&
+      !input.isRoot &&
+      (await isManagedScratchOwnerDirectory(input.realPath))
+    )
+      return null;
 
     const isGitRepository = await this.isGitRepository(input.realPath);
     if (isGitRepository) {
@@ -95,6 +114,7 @@ export class FilesystemWorkspaceCatalog implements WorkspaceCatalog, GitWorkspac
           name: child.name,
           relativePath: childRelativePath,
           visited: input.visited,
+          cleanupDiscovery: input.cleanupDiscovery,
         });
         if (visitedChild) children.push(visitedChild);
       } catch {

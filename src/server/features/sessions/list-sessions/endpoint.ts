@@ -15,6 +15,9 @@ export function registerListSessions(
   app: FastifyInstance,
   deps: {
     list(): RelaySessionSnapshot[];
+    forgetOperation?: (
+      id: string,
+    ) => import('../../../../shared/contracts/session-forget.js').SessionForgetOperation | null;
     activity?: (id: string) => import('../../agent-activity/model.js').AgentActivitySnapshot;
     autopilot?: (
       id: string,
@@ -29,6 +32,9 @@ export function registerListSessions(
       const autopilot = deps.autopilot?.(session.id) ?? null;
       return {
         ...session,
+        ...(deps.forgetOperation?.(session.id)
+          ? { forgetOperation: deps.forgetOperation(session.id) }
+          : {}),
         ...(activity ? { agentActivity: toAgentActivityDto(activity) } : {}),
         ...(autopilot ? { autopilot } : {}),
         ...(plan ? { plan } : {}),

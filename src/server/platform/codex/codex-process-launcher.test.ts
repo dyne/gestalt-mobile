@@ -147,6 +147,19 @@ createInterface({input}).on('line', line => {
     }
   }, 6_000);
 
+  it('confirms actual owned group absence before Forget can release scratch', async () => {
+    const { server, cleanup } = await fixture('normal');
+    try {
+      await server.rpc.request('initialize', {});
+      await server.closeAndWait();
+      expect(server.child.exitCode !== null || server.child.signalCode !== null).toBe(true);
+      expect(() => process.kill(-server.child.pid!, 0)).toThrow();
+      await server.closeAndWait();
+    } finally {
+      await cleanup();
+    }
+  });
+
   it('settles outstanding RPCs when the native process exits', async () => {
     const { server, exit, cleanup } = await fixture('early-exit');
     try {

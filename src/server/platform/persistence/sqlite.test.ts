@@ -465,6 +465,41 @@ describe('SQLite relay persistence', () => {
     reopened.close();
   });
 
+  it('retains known workspaces through repeated saves, shared selections and moves back to a known workspace', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
+    directories.push(directory);
+    const database = openRelayDatabase(join(directory, 'relay.sqlite'));
+    try {
+      migrate(database);
+      const sessions = new SqliteSessionRepository(database);
+      const first = RelaySession.create({
+        id: 'first',
+        workspaceId: 'w',
+        workspacePath: '/w',
+        provider: 'codex',
+        profile: 'default',
+        effectiveSkillSelection: { skills: [] },
+        now: 't',
+      }).snapshot;
+      sessions.save(first);
+      sessions.save({ ...first, model: 'updated' });
+      sessions.save({ ...first, id: 'second' });
+      expect(sessions.find('first')?.model).toBe('updated');
+      expect(sessions.knownWorkspacePaths()).toEqual(['/w']);
+
+      sessions.save({ ...first, workspaceId: 'other', workspacePath: '/other' });
+      sessions.save(first);
+      expect(sessions.find('first')?.workspacePath).toBe('/w');
+      sessions.remove('first');
+      sessions.remove('second');
+      migrate(database);
+      expect(sessions.list()).toEqual([]);
+      expect(sessions.knownWorkspacePaths().sort()).toEqual(['/other', '/w']);
+    } finally {
+      database.close();
+    }
+  });
+
   it('migrates pre-provider rows to codex and round-trips the stored provider', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
     directories.push(directory);

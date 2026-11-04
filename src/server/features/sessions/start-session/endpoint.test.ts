@@ -5,7 +5,7 @@
  */
 
 import fastify from 'fastify';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { registerStartSession } from './endpoint.js';
 
 const skills = {
@@ -22,6 +22,46 @@ const skills = {
 };
 
 describe('POST /api/sessions', () => {
+  it.each(['SESSION_SCRATCH_CONTAINMENT_BUSY', 'SESSION_SCRATCH_CONTAINMENT_INVALID'])(
+    'reports %s as bounded retryable workspace failure before saving or activating',
+    async (code) => {
+      const app = fastify();
+      const save = vi.fn();
+      const activate = vi.fn(async () => {
+        throw new Error('Unexpected activation');
+      });
+      registerStartSession(app, {
+        createId: () => 's',
+        now: () => 't',
+        save,
+        activate,
+        publish: async () => {
+          throw new Error(`${code} /private/source`);
+        },
+        workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
+        profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+        ...skills,
+      });
+      try {
+        const response = await app.inject({
+          method: 'POST',
+          url: '/api/sessions',
+          payload: { workspaceId: 'w', profile: 'default', provider: 'codex' },
+        });
+        expect(response.statusCode).toBe(503);
+        expect(response.json()).toMatchObject({
+          code: 'SESSION_WORKSPACE_UNAVAILABLE',
+          retryable: true,
+        });
+        expect(response.body).not.toContain('/private/source');
+        expect(save).not.toHaveBeenCalled();
+        expect(activate).not.toHaveBeenCalled();
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
   it('accepts a new session', async () => {
     const app = fastify();
     registerStartSession(app, {

@@ -28,15 +28,23 @@ import { registerStartTurn } from './start-turn/endpoint.js';
 import { registerStopSession } from './stop-session/endpoint.js';
 import { registerRefreshActivity } from './refresh-activity/endpoint.js';
 import { registerGetRetrievalReadiness } from './get-retrieval-readiness/endpoint.js';
+import { registerCleanTmp } from './clean-tmp/endpoint.js';
 
 export function registerSessionRoutes(
   app: FastifyInstance,
   deps: Pick<
     AppDependencies,
-    'auth' | 'interactions' | 'logger' | 'recentThreads' | 'sessionEvents' | 'sessionRoutes'
+    | 'auth'
+    | 'interactions'
+    | 'logger'
+    | 'recentThreads'
+    | 'sessionEvents'
+    | 'sessionRoutes'
+    | 'tmpCleanup'
   >,
 ): void {
   const sessions = deps.sessionRoutes;
+  registerCleanTmp(app, deps.tmpCleanup);
   if (deps.recentThreads) {
     registerListRecentThreads(app, {
       ...deps.recentThreads,
@@ -61,6 +69,26 @@ export function registerSessionRoutes(
     });
   }
   if (sessions) {
+    const conflict = (request: import('fastify').FastifyRequest) => {
+      if (!request.routeOptions.url?.startsWith('/api/sessions/:id')) return null;
+      if (['GET', 'HEAD'].includes(request.method)) return null;
+      if (request.method === 'DELETE' && request.routeOptions.url === '/api/sessions/:id')
+        return null;
+      const id = (request.params as { id?: string } | undefined)?.id;
+      return id ? sessions.forgetOperation?.(id) : null;
+    };
+    app.addHook('preHandler', async (request, reply) => {
+      const operation = conflict(request);
+      if (operation) return reply.code(409).send({ code: 'SESSION_FORGET_IN_PROGRESS', operation });
+    });
+    app.addHook('preSerialization', async (request, reply, payload) => {
+      const operation = reply.statusCode < 400 ? conflict(request) : null;
+      if (operation) {
+        reply.code(409);
+        return { code: 'SESSION_FORGET_IN_PROGRESS', operation };
+      }
+      return payload;
+    });
     if (sessions.retrievalReadiness)
       registerGetRetrievalReadiness(app, {
         exists: (id) => sessions.find(id) !== null,
@@ -80,6 +108,7 @@ export function registerSessionRoutes(
       sessions.plan,
       sessions.toolEfficiency,
       sessions.currentSequence,
+      sessions.forgetOperation,
     );
     if (sessions.refreshActivity)
       registerRefreshActivity(app, {
@@ -89,6 +118,7 @@ export function registerSessionRoutes(
     if (sessions.list)
       registerListSessions(app, {
         list: sessions.list,
+        forgetOperation: sessions.forgetOperation,
         activity: sessions.agentActivity,
         autopilot: sessions.autopilotSnapshot,
         plan: sessions.plan,
@@ -145,11 +175,12 @@ export function registerSessionRoutes(
         close: sessions.close,
         idempotency: sessions.idempotency,
       });
-    if (sessions.remove && sessions.close)
+    if (sessions.forget || (sessions.remove && sessions.close))
       registerForgetSession(app, {
         find: sessions.find,
         close: sessions.close,
         remove: sessions.remove,
+        forget: sessions.forget,
       });
     if (sessions.close)
       registerStopSession(app, {

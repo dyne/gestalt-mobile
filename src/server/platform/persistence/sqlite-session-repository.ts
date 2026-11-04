@@ -81,6 +81,14 @@ export class SqliteSessionRepository {
       this.db.prepare('SELECT * FROM relay_sessions ORDER BY updated_at DESC').all() as Row[]
     ).map(map);
   }
+  /** Workspace locators outlive Forget; they never grant deletion authority. */
+  knownWorkspacePaths(): string[] {
+    return (
+      this.db.prepare('SELECT workspace_path FROM scratch_known_workspaces').all() as {
+        workspace_path: string;
+      }[]
+    ).map((row) => row.workspace_path);
+  }
   remove(id: string): void {
     this.db.prepare('DELETE FROM relay_sessions WHERE id = ?').run(id);
   }

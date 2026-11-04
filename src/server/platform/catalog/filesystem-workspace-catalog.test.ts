@@ -4,13 +4,28 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readlink,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { FilesystemWorkspaceCatalog } from './filesystem-workspace-catalog.js';
+import {
+  FilesystemSessionScratch,
+  scratchMarkerName,
+} from '../scratch/filesystem-session-scratch.js';
+import { workspaceId } from './workspace-id.js';
 
 describe('FilesystemWorkspaceCatalog', () => {
   const directories: string[] = [];
@@ -139,5 +154,82 @@ describe('FilesystemWorkspaceCatalog', () => {
     await expect(new FilesystemWorkspaceCatalog(root).resolveGitWorkspace('unknown')).resolves.toBe(
       null,
     );
+  });
+
+  it('excludes validated owner subtrees only from cleanup discovery while retaining ordinary workspaces and aliases', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-discovery-'));
+    directories.push(root);
+    const workspacePath = join(root, 'workspace');
+    await mkdir(workspacePath);
+    const owner = await new FilesystemSessionScratch().allocate({
+      id: 'catalog-owner',
+      workspacePath,
+    });
+    await mkdir(join(owner.directory, 'generated', '.git'), { recursive: true });
+    const ordinary = join(workspacePath, 'projects', 'nested');
+    await mkdir(ordinary, { recursive: true });
+    // Even a matching owner name in the reserved container is not sufficient.
+    const unmarked = join(workspacePath, 'tmp', 'sessions', `mobile-${'a'.repeat(64)}`);
+    await mkdir(join(unmarked, '.git'), { recursive: true, mode: 0o700 });
+    await symlink(workspacePath, join(root, 'alias'));
+    const catalog = new FilesystemWorkspaceCatalog(root);
+
+    const paths = await catalog.knownWorkspacePaths();
+    expect(paths).toEqual(expect.arrayContaining([root, workspacePath, ordinary, unmarked]));
+    expect(paths.filter((path) => path === workspacePath)).toHaveLength(1);
+    expect(
+      paths.some((path) => path === owner.directory || path.startsWith(`${owner.directory}${sep}`)),
+    ).toBe(false);
+    await expect(catalog.resolve(workspaceId(owner.directory))).resolves.toMatchObject({
+      realPath: owner.directory,
+    });
+    expect(await readFile(join(owner.directory, scratchMarkerName), 'utf8')).toContain(
+      'catalog-owner',
+    );
+    // A configured root remains explicit even if it lies inside managed scratch.
+    expect(await new FilesystemWorkspaceCatalog(owner.directory).knownWorkspacePaths()).toContain(
+      owner.directory,
+    );
+  });
+
+  it('retains invalid and linked markers in discovery without adopting their directories', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-discovery-'));
+    directories.push(root);
+    const workspacePath = join(root, 'workspace');
+    await mkdir(workspacePath);
+    const scratch = new FilesystemSessionScratch();
+    const valid = await scratch.allocate({ id: 'valid', workspacePath });
+    const invalid = await scratch.allocate({ id: 'invalid', workspacePath });
+    const linked = await scratch.allocate({ id: 'linked', workspacePath });
+    const marker = JSON.parse(await readFile(join(invalid.directory, scratchMarkerName), 'utf8'));
+    await writeFile(
+      join(invalid.directory, scratchMarkerName),
+      JSON.stringify({ ...marker, schemaVersion: 99 }),
+    );
+    await unlink(join(linked.directory, scratchMarkerName));
+    await symlink(
+      join(valid.directory, scratchMarkerName),
+      join(linked.directory, scratchMarkerName),
+    );
+    await mkdir(join(invalid.directory, 'keep'));
+    await mkdir(join(linked.directory, 'keep'));
+    await symlink(valid.directory, join(root, 'owner-alias'));
+
+    const paths = await new FilesystemWorkspaceCatalog(root).knownWorkspacePaths();
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        invalid.directory,
+        join(invalid.directory, 'keep'),
+        linked.directory,
+        join(linked.directory, 'keep'),
+      ]),
+    );
+    expect(paths).not.toContain(valid.directory);
+    expect(await readlink(join(linked.directory, scratchMarkerName))).toBe(
+      join(valid.directory, scratchMarkerName),
+    );
+    expect(
+      JSON.parse(await readFile(join(invalid.directory, scratchMarkerName), 'utf8')).schemaVersion,
+    ).toBe(99);
   });
 });

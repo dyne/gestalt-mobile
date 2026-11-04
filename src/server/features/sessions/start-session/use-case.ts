@@ -26,6 +26,7 @@ export async function startSession(
     createId(): string;
     now(): string;
     save(session: RelaySessionSnapshot): void;
+    publish?(session: RelaySessionSnapshot): Promise<void>;
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
     profiles: Pick<ProfileCatalog, 'require'>;
     models?: Pick<ModelCatalog, 'list'>;
@@ -123,7 +124,8 @@ export async function startSession(
     effectiveSkillSelection,
     now: deps.now(),
   }).snapshot;
-  deps.save(session);
+  if (deps.publish) await deps.publish(session);
+  else deps.save(session);
   if (!deps.activate) return session;
   const active = await deps.activate(session, { provider: session.provider });
   deps.save(active);

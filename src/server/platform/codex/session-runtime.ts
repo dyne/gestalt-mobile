@@ -6,7 +6,10 @@
 
 import { ORG_PLAN_CAPABILITIES } from '../plans/org-plan-capabilities.js';
 import { readExecutorConfiguration } from './executor-configuration.js';
-import type { SessionScratch } from '../../features/sessions/application/session-scratch.js';
+import type {
+  SessionScratch,
+  ServiceScratchLease,
+} from '../../features/sessions/application/session-scratch.js';
 import { decodeCodexPolicyCatalog } from './codex-model-catalog.js';
 import type { RuntimePolicyCatalogRead } from '../../features/plans/application/executor-launch-validation.js';
 
@@ -71,6 +74,7 @@ export type AppServer = {
     ): () => void;
   };
   close(): void;
+  closeAndWait?(): Promise<void>;
   onExit?(listener: () => void): () => void;
 };
 
@@ -150,6 +154,7 @@ export type OwnedChildProcess = Readonly<{
 
 /** One private owner for every resource acquired for a live Codex child. */
 class SessionResource {
+  scratchLease?: ServiceScratchLease;
   private disposed = false;
   private explicitShutdown = false;
   readonly pendingRequests = new Map<string, PendingRequest>();
@@ -312,6 +317,9 @@ export class CodexSessionRuntime {
   >();
   private readonly childTopologyReads = new Map<string, Promise<readonly DirectChildThread[]>>();
   private readonly writerAcquisitions = new Map<string, Promise<WriterAcquisition>>();
+  private readonly liveResources = new Map<string, Set<SessionResource>>();
+  private readonly resourceCreations = new Map<string, Set<Promise<SessionResource>>>();
+  private readonly resourceReleases = new Map<SessionResource, Promise<void>>();
 
   /** Current runtime observations only; durable workspace selection is never rewritten. */
   async readRetrievalReadiness(sessionId: string) {
@@ -372,6 +380,100 @@ export class CodexSessionRuntime {
     const resource = this.sessions.get(sessionId);
     resource?.beginExplicitShutdown();
     resource?.dispose();
+    if (resource) void this.confirmResourceRelease(resource).catch(() => undefined);
+  }
+
+  /** Forget requires actual release, including resources still starting or already closing. */
+  async releaseForForget(session: RelaySessionSnapshot): Promise<void> {
+    for (const resource of this.liveResources.get(session.id) ?? []) {
+      resource.beginExplicitShutdown();
+      if (resource.active) {
+        if (session.activeTurnId) await this.interruptTurn(session, session.activeTurnId);
+        if (resource.childThreads.size > 64) throw new Error('SESSION_RELEASE_UNCONFIRMED');
+        for (const threadId of resource.childThreads)
+          await this.interruptExecutor(session, threadId);
+        for (const claim of [...resource.ownedChildProcesses.values()]) {
+          if (!['running', 'detached-active'].includes(claim.state)) continue;
+          const present = async () => {
+            const result = asRecord(
+              await resource.process.rpc.request('thread/backgroundTerminals/list', {
+                threadId: claim.ownerThreadId,
+                limit: 64,
+              }),
+            );
+            if (
+              !Array.isArray(result?.data) ||
+              result.data.length > 64 ||
+              result.nextCursor ||
+              result.data.some(
+                (item) =>
+                  !boundedString(asRecord(item)?.processId, 256) ||
+                  !boundedString(asRecord(item)?.itemId, 256),
+              )
+            )
+              throw new Error('SESSION_RELEASE_UNCONFIRMED');
+            return result.data.some(
+              (item) =>
+                asRecord(item)?.processId === claim.processId &&
+                asRecord(item)?.itemId === claim.itemId,
+            );
+          };
+          if (await present()) {
+            const stopped = asRecord(
+              await resource.process.rpc.request('thread/backgroundTerminals/terminate', {
+                threadId: claim.ownerThreadId,
+                processId: claim.processId,
+              }),
+            );
+            if (stopped?.terminated !== true || (await present()))
+              throw new Error('SESSION_RELEASE_UNCONFIRMED');
+          }
+          resource.ownedChildProcesses.delete(
+            childProcessKey(claim.ownerThreadId, claim.processId),
+          );
+        }
+      }
+      resource.dispose();
+    }
+    await Promise.allSettled([
+      ...(this.resourceCreations.get(session.id) ?? []),
+      ...[this.writerAcquisitions.get(session.id)].filter((item) => item !== undefined),
+    ]);
+    for (const resource of this.liveResources.get(session.id) ?? []) {
+      resource.beginExplicitShutdown();
+      resource.dispose();
+      await this.confirmResourceRelease(resource, true);
+    }
+    this.retrieval?.release?.(session.id);
+  }
+
+  private confirmResourceRelease(resource: SessionResource, strict = false): Promise<void> {
+    const prior = this.resourceReleases.get(resource);
+    if (prior) return prior;
+    const task = (async () => {
+      if (!resource.process.closeAndWait) {
+        if (strict || resource.scratchLease) throw new Error('SESSION_RELEASE_UNCONFIRMED');
+        return;
+      }
+      await resource.process.closeAndWait();
+      if (
+        [...resource.ownedChildProcesses.values()].some((claim) =>
+          ['running', 'detached-active'].includes(claim.state),
+        )
+      )
+        throw new Error('SESSION_RELEASE_UNCONFIRMED');
+      await resource.scratchLease?.release();
+      const live = this.liveResources.get(resource.sessionId);
+      live?.delete(resource);
+      if (!live?.size) this.liveResources.delete(resource.sessionId);
+    })();
+    this.resourceReleases.set(resource, task);
+    void task
+      .finally(() => {
+        this.resourceReleases.delete(resource);
+      })
+      .catch(() => undefined);
+    return task;
   }
 
   async release(sessionId: string): Promise<void> {
@@ -402,8 +504,23 @@ export class CodexSessionRuntime {
     // shared intent for every owner before closing any process.
     const resources = [...this.sessions.values()];
     for (const resource of resources) resource.beginExplicitShutdown();
-    for (const resource of resources) resource.dispose();
+    for (const resource of resources) {
+      resource.dispose();
+      void this.confirmResourceRelease(resource).catch(() => undefined);
+    }
     for (const resource of resources) this.retrieval?.release?.(resource.sessionId);
+  }
+
+  async drainReleases(): Promise<void> {
+    await Promise.allSettled(
+      [...this.liveResources.values()].flatMap((resources) =>
+        [...resources].map((resource) => {
+          resource.beginExplicitShutdown();
+          resource.dispose();
+          return this.confirmResourceRelease(resource);
+        }),
+      ),
+    );
   }
 
   /** Keeps a detached session's supervised-plan status observable without launching Codex. */
@@ -468,6 +585,7 @@ export class CodexSessionRuntime {
     now: string,
     mayStart?: () => boolean,
   ): Promise<RelaySessionSnapshot> {
+    this.scratch?.assertAvailable?.(session.id);
     const resumeRequested = this.retrieval?.needsResume?.(session);
     if (resumeRequested === true || (resumeRequested && (await resumeRequested))) {
       // The same root resumes only at an idle boundary. Never recycle a writer
@@ -624,6 +742,7 @@ export class CodexSessionRuntime {
   }
 
   async ensureWriter(session: RelaySessionSnapshot, now: string): Promise<WriterAcquisition> {
+    this.scratch?.assertAvailable?.(session.id);
     if (this.ownsWriter(session.id)) return { session, replacementCreated: false };
     const inflight = this.writerAcquisitions.get(session.id);
     if (inflight) return inflight;
@@ -867,6 +986,7 @@ export class CodexSessionRuntime {
     text: string,
     clientUserMessageId?: string,
   ): Promise<void> {
+    this.scratch?.assertAvailable?.(session.id);
     const resource = this.sessions.get(session.id);
     if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
     await resource.process.rpc.request('turn/steer', {
@@ -1628,7 +1748,22 @@ export class CodexSessionRuntime {
       : { sandbox: selection };
   }
 
-  private async createResource(session: RelaySessionSnapshot): Promise<SessionResource> {
+  private createResource(session: RelaySessionSnapshot): Promise<SessionResource> {
+    this.scratch?.assertAvailable?.(session.id);
+    const task = this.createResourceInner(session);
+    const pending = this.resourceCreations.get(session.id) ?? new Set();
+    pending.add(task);
+    this.resourceCreations.set(session.id, pending);
+    void task
+      .finally(() => {
+        pending.delete(task);
+        if (!pending.size) this.resourceCreations.delete(session.id);
+      })
+      .catch(() => undefined);
+    return task;
+  }
+
+  private async createResourceInner(session: RelaySessionSnapshot): Promise<SessionResource> {
     const deadline = xerjDeadline();
     const lease = this.planStatusSource
       ? await this.planStatusSource.open(
@@ -1636,11 +1771,15 @@ export class CodexSessionRuntime {
           (update) => this.onPlanStatus?.(session.id, update),
         )
       : undefined;
+    let borrowed: ServiceScratchLease | undefined;
+    let launched = false;
     try {
       const token = randomUUID();
       const skillsConfig = await this.resolveSkills?.(session);
       const modelConfig = (await this.resolveModelConfig?.(session)) ?? {};
       const scratch = await this.scratch?.allocate(session);
+      const scratchLease = (borrowed = await this.scratch?.borrow?.(session));
+      this.scratch?.assertAvailable?.(session.id);
       const process = this.launch({
         profile: session.profile,
         cwd: session.workspacePath,
@@ -1676,12 +1815,18 @@ export class CodexSessionRuntime {
           if (this.sessions.get(session.id) === resource) this.sessions.delete(session.id);
         },
       );
+      launched = true;
+      resource.scratchLease = scratchLease;
+      const live = this.liveResources.get(session.id) ?? new Set();
+      live.add(resource);
+      this.liveResources.set(session.id, live);
       resource.readinessDeadline = deadline;
       // Own process exit before resume/initialization can make this resource appear healthy.
       // A short-lived child could otherwise leave a durable ready session without a writer.
       const exitUnsubscribe =
         process.onExit?.(() => {
           if (resource.dispose() && resource.exitedUnexpectedly) this.onProcessExit?.(session.id);
+          void this.confirmResourceRelease(resource).catch(() => undefined);
         }) ?? (() => {});
       resource.attach([exitUnsubscribe]);
       if (!resource.active) {
@@ -1821,6 +1966,7 @@ export class CodexSessionRuntime {
       ]);
       return resource;
     } catch (error) {
+      if (borrowed && !launched) await borrowed.release();
       lease?.close();
       throw error;
     }

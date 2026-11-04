@@ -31,7 +31,7 @@ afterEach(async () => {
   await Promise.all(fixtures.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 async function fixture() {
-  const base = join(process.cwd(), 'tmp', 'sessions');
+  const base = join(process.cwd(), 'tmp', 'mobile-scratch-tests');
   await mkdir(base, { recursive: true, mode: 0o700 });
   await writeFile(join(base, '.gitignore'), '*\n', { flag: 'wx' }).catch(
     (error: NodeJS.ErrnoException) => {

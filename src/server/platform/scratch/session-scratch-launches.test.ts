@@ -24,7 +24,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 async function workspace() {
-  const base = join(process.cwd(), 'tmp', 'sessions');
+  const base = join(process.cwd(), 'tmp', 'mobile-scratch-tests');
   await mkdir(base, { recursive: true, mode: 0o700 });
   await writeFile(join(base, '.gitignore'), '*\n', { flag: 'wx' }).catch(
     (error: NodeJS.ErrnoException) => {

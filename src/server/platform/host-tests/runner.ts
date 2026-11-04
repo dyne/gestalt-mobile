@@ -15,7 +15,11 @@ import type {
 } from '../../../shared/contracts/host-tests.js';
 import type { HostTestOwner, HostTestRunner } from '../../features/host-tests/application/ports.js';
 import { candidate } from './candidate.js';
-import type { SessionScratch } from '../../features/sessions/application/session-scratch.js';
+import type {
+  SessionScratch,
+  ServiceScratchLease,
+} from '../../features/sessions/application/session-scratch.js';
+import { stopOwnedProcessGroup } from '../scratch/owned-process-group.js';
 import { withoutSessionScratch } from '../scratch/child-environment.js';
 import { loadWorkspaceHostTestConfig, within, type HostTestSuite } from './config.js';
 
@@ -242,7 +246,17 @@ export class LocalHostTestRunner implements HostTestRunner {
           id: owner.sessionId,
           workspacePath: owner.workspace,
         });
-        this.launch(suite, result, scratch?.environment);
+        const claim = await this.scratch?.borrow?.({
+          id: owner.sessionId,
+          workspacePath: owner.workspace,
+        });
+        try {
+          this.scratch?.assertAvailable?.(owner.sessionId);
+          this.launch(suite, result, scratch?.environment, claim);
+        } catch (error) {
+          await claim?.release();
+          throw error;
+        }
       } catch {
         result.state = 'interrupted';
         await this.persist(result);
@@ -258,6 +272,7 @@ export class LocalHostTestRunner implements HostTestRunner {
     suite: HostTestSuite,
     result: HostTestResult,
     scratchEnvironment?: Readonly<Record<string, string>>,
+    scratchLease?: ServiceScratchLease,
   ): void {
     const fd = openSync(result.logPath, 'wx', 0o600);
     const hash = createHash('sha256');
@@ -343,6 +358,13 @@ export class LocalHostTestRunner implements HostTestRunner {
       clearTimeout(timeout);
       closeSync(fd);
       void (async () => {
+        if (scratchLease) {
+          try {
+            if (await stopOwnedProcessGroup(child, 0, 1000)) await scratchLease.release();
+          } catch {
+            /* Unknown release remains a durable protected lease. */
+          }
+        }
         const terminal = structuredClone(result);
         terminal.outputSha256 = hash.digest('hex');
         try {

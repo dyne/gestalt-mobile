@@ -147,6 +147,32 @@ const thread1Routes = () =>
   ]);
 
 describe('KimiSessionRuntime', () => {
+  it('forgets one confirmed inactive claim while another session keeps the shared provider', async () => {
+    const routes = thread1Routes();
+    routes.set('/api/v1/sessions/kimi-thread-2', () => ({ main_turn_active: false }));
+    const { runtime, ws } = harness(routes);
+    const close = vi.spyOn(ws.client, 'close');
+    const first = await runtime.start(snapshot(), NOW);
+    await runtime.start({ ...snapshot(), id: 'relay-2' }, NOW);
+    await runtime.releaseForForget(first);
+    expect(runtime.ownsWriter('relay-1')).toBe(false);
+    expect(runtime.ownsWriter('relay-2')).toBe(true);
+    expect(close).not.toHaveBeenCalled();
+    runtime.stopAll();
+  });
+
+  it('retains the Kimi claim when provider release cannot be confirmed', async () => {
+    const routes = thread1Routes();
+    routes.set('/api/v1/sessions/kimi-thread-1', () => ({ main_turn_active: true }));
+    const { runtime } = harness(routes);
+    const first = await runtime.start(snapshot(), NOW);
+    try {
+      await expect(runtime.releaseForForget(first)).rejects.toThrow('SESSION_RELEASE_UNCONFIRMED');
+      expect(runtime.ownsWriter('relay-1')).toBe(true);
+    } finally {
+      runtime.stopAll();
+    }
+  });
   it('starts a session through the manager and binds the kimi thread', async () => {
     const { runtime, rest } = harness();
     const started = await runtime.start(snapshot(), NOW);

@@ -4,18 +4,32 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, realpath, rename, rmdir, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, realpath, rename, rmdir, unlink } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
+import { claimOwnerFence } from './owner-fence.js';
 import type {
   SessionScratch,
   SessionScratchContext,
   ServiceScratchLease,
 } from '../../features/sessions/application/session-scratch.js';
 
-export const scratchMarkerName = '.gestalt-owner.json';
-export const scratchContextVariable = 'GESTALT_SESSION_TMP_CONTEXT';
+import {
+  mobileScratchOwnerId,
+  privateDirectory,
+  readMarker,
+  scratchMarkerName,
+  scratchContextVariable,
+} from './scratch-filesystem.js';
+export {
+  mobileScratchOwnerId,
+  privateDirectory,
+  readMarker,
+  scratchMarkerName,
+  scratchContextVariable,
+} from './scratch-filesystem.js';
+import { withScratchContainment } from './containment-fence.js';
 
 export type ScratchMarker = {
   schemaVersion: 1;
@@ -31,50 +45,6 @@ export type ScratchMarker = {
 function validId(value: string): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/.test(value))
     throw new Error('SESSION_SCRATCH_INVALID_ID');
-}
-
-export function mobileScratchOwnerId(sessionId: string): string {
-  validId(sessionId);
-  return `mobile-${createHash('sha256').update(sessionId).digest('hex')}`;
-}
-
-/** Reject links and foreign directories; never repair their permissions or contents. */
-async function privateDirectory(path: string, create: boolean): Promise<boolean> {
-  let created = false;
-  if (create) {
-    try {
-      await mkdir(path, { mode: 0o700 });
-      created = true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-    }
-  }
-  const info = await lstat(path);
-  if (!info.isDirectory() || info.isSymbolicLink() || (await realpath(path)) !== path)
-    throw new Error('SESSION_SCRATCH_UNSAFE_PATH');
-  if (process.getuid && info.uid !== process.getuid())
-    throw new Error('SESSION_SCRATCH_FOREIGN_OWNER');
-  if (process.platform !== 'win32' && (info.mode & 0o777) !== 0o700)
-    throw new Error('SESSION_SCRATCH_NOT_PRIVATE');
-  return created;
-}
-
-async function readMarker(path: string): Promise<unknown> {
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const info = await handle.stat();
-    if (
-      !info.isFile() ||
-      info.nlink !== 1 ||
-      info.size > 16384 ||
-      (process.getuid && info.uid !== process.getuid()) ||
-      (process.platform !== 'win32' && (info.mode & 0o077) !== 0)
-    )
-      throw new Error('SESSION_SCRATCH_UNSAFE_MARKER');
-    return JSON.parse(await handle.readFile('utf8'));
-  } finally {
-    await handle.close();
-  }
 }
 
 function validateMarker(value: unknown, expected: ScratchMarker): ScratchMarker {
@@ -104,53 +74,161 @@ function validateMarker(value: unknown, expected: ScratchMarker): ScratchMarker 
 
 export class FilesystemSessionScratch implements SessionScratch {
   private readonly pending = new Map<string, Promise<unknown>>();
+  constructor(readonly assertAvailable: (sessionId: string) => void = () => {}) {}
+
+  /** A live process claim remains protected across relay crashes and other servers. */
+  async borrow(
+    session: Readonly<{ id: string; workspacePath: string }>,
+  ): Promise<ServiceScratchLease> {
+    validId(session.id);
+    this.assertAvailable(session.id);
+    return this.serialized(`${session.workspacePath}\0${session.id}`, () =>
+      withScratchContainment(session.workspacePath, async () => {
+        this.assertAvailable(session.id);
+        const { context, releaseFence } = await this.prepare(session);
+        try {
+          this.assertAvailable(session.id);
+          const leases = join(context.directory, 'leases');
+          await privateDirectory(leases, true);
+          const leaseId = randomUUID();
+          const path = join(leases, `${leaseId}.json`);
+          const record = {
+            schemaVersion: 1,
+            ownerId: context.ownerId,
+            workspacePath: context.workspacePath,
+            leaseId,
+            state: 'active',
+            processIdentity: randomUUID(),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            consumers: [`runtime-${randomUUID()}`],
+          };
+          const handle = await open(path, 'wx', 0o600);
+          try {
+            await handle.writeFile(JSON.stringify(record));
+            await handle.sync();
+          } finally {
+            await handle.close();
+          }
+          let released = false;
+          return {
+            ...context,
+            release: async () => {
+              if (released) return;
+              await privateDirectory(context.directory, false);
+              await privateDirectory(leases, false);
+              const current = (await readMarker(path)) as typeof record;
+              if (
+                current.schemaVersion !== 1 ||
+                current.ownerId !== record.ownerId ||
+                current.workspacePath !== record.workspacePath ||
+                current.processIdentity !== record.processIdentity ||
+                current.leaseId !== leaseId ||
+                current.state !== 'active' ||
+                current.createdAt !== record.createdAt ||
+                !Array.isArray(current.consumers) ||
+                JSON.stringify(current.consumers) !== JSON.stringify(record.consumers)
+              )
+                throw new Error('SESSION_SCRATCH_LEASE_CHANGED');
+              const staging = join(leases, `.${randomUUID()}.json`);
+              const file = await open(staging, 'wx', 0o600);
+              try {
+                await file.writeFile(
+                  JSON.stringify({
+                    ...record,
+                    state: 'released',
+                    consumers: [],
+                    updatedAt: new Date().toISOString(),
+                  }),
+                );
+                await file.sync();
+              } finally {
+                await file.close();
+              }
+              await rename(staging, path);
+              released = true;
+            },
+          };
+        } finally {
+          await releaseFence();
+        }
+      }),
+    );
+  }
 
   /** One lease per owned service process, independent of its first caller. */
   async allocateService(workspacePath: string, consumer: string): Promise<ServiceScratchLease> {
     validId(consumer);
-    const leaseId = randomUUID();
-    const ownerId = `service-${randomUUID()}`;
-    const { context } = await this.prepare({ id: ownerId, workspacePath }, leaseId);
-    const leases = join(context.directory, 'leases');
-    await privateDirectory(leases, true);
-    const path = join(leases, `${leaseId}.json`);
-    const record = {
-      schemaVersion: 1,
-      ownerId,
-      workspacePath: context.workspacePath,
-      leaseId,
-      state: 'active',
-      processIdentity: randomUUID(),
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      consumers: [consumer],
-    };
-    const publish = async (initial: boolean) => {
-      const staging = initial ? path : join(leases, `.${randomUUID()}.json`);
-      const handle = await open(staging, 'wx', 0o600);
-      try {
-        await handle.writeFile(`${JSON.stringify(record)}\n`);
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      if (!initial) await rename(staging, path);
-    };
-    await publish(true);
-    let released = false;
-    return {
-      ...context,
-      release: async () => {
-        if (released) return;
-        record.state = 'released';
-        record.consumers = [];
-        record.updatedAt = new Date().toISOString();
-        await privateDirectory(context.directory, false);
-        await privateDirectory(leases, false);
-        await publish(false);
-        released = true;
-      },
-    };
+    return withScratchContainment(workspacePath, async () => {
+      const leaseId = randomUUID();
+      const ownerId = `service-${randomUUID()}`;
+      const { context, releaseFence } = await this.prepare({ id: ownerId, workspacePath }, leaseId);
+      const leases = join(context.directory, 'leases');
+      await privateDirectory(leases, true);
+      const path = join(leases, `${leaseId}.json`);
+      const record = {
+        schemaVersion: 1,
+        ownerId,
+        workspacePath: context.workspacePath,
+        leaseId,
+        state: 'active',
+        processIdentity: randomUUID(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        consumers: [consumer],
+      };
+      const publish = async (initial: boolean) => {
+        const staging = initial ? path : join(leases, `.${randomUUID()}.json`);
+        const handle = await open(staging, 'wx', 0o600);
+        try {
+          await handle.writeFile(`${JSON.stringify(record)}\n`);
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+        if (!initial) await rename(staging, path);
+      };
+      await publish(true);
+      let released = false;
+      return {
+        ...context,
+        release: async () => {
+          if (released) return;
+          if ((await readdir(context.directory)).includes('.association-lock'))
+            throw new Error('SESSION_SCRATCH_BUSY');
+          for (const name of await readdir(leases)) {
+            if (name === `${leaseId}.json`) continue;
+            const borrower = (await readMarker(join(leases, name))) as Record<string, unknown>;
+            if (
+              !borrower ||
+              borrower.schemaVersion !== 1 ||
+              borrower.ownerId !== ownerId ||
+              borrower.workspacePath !== context.workspacePath ||
+              borrower.state !== 'released' ||
+              typeof borrower.leaseId !== 'string' ||
+              name !== `${borrower.leaseId}.json` ||
+              typeof borrower.processIdentity !== 'string' ||
+              !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(borrower.processIdentity) ||
+              typeof borrower.createdAt !== 'string' ||
+              !Number.isFinite(Date.parse(borrower.createdAt)) ||
+              typeof borrower.updatedAt !== 'string' ||
+              !Number.isFinite(Date.parse(borrower.updatedAt)) ||
+              !Array.isArray(borrower.consumers) ||
+              borrower.consumers.length !== 0
+            )
+              throw new Error('SESSION_SCRATCH_BORROWERS_ACTIVE');
+          }
+          record.state = 'released';
+          record.consumers = [];
+          record.updatedAt = new Date().toISOString();
+          await privateDirectory(context.directory, false);
+          await privateDirectory(leases, false);
+          await publish(false);
+          await releaseFence();
+          released = true;
+        },
+      };
+    });
   }
 
   private async serialized<T>(key: string, operation: () => Promise<T>): Promise<T> {
@@ -167,10 +245,20 @@ export class FilesystemSessionScratch implements SessionScratch {
   async allocate(
     session: Readonly<{ id: string; workspacePath: string }>,
   ): Promise<SessionScratchContext> {
-    return this.serialized(`${session.workspacePath}\0${session.id}`, async () => {
-      const { context } = await this.prepare(session);
-      return context;
-    });
+    validId(session.id);
+    this.assertAvailable(session.id);
+    return this.serialized(`${session.workspacePath}\0${session.id}`, () =>
+      withScratchContainment(session.workspacePath, async () => {
+        this.assertAvailable(session.id);
+        const { context, releaseFence } = await this.prepare(session);
+        try {
+          this.assertAvailable(session.id);
+          return context;
+        } finally {
+          await releaseFence();
+        }
+      }),
+    );
   }
 
   async associateProviderThread(
@@ -178,32 +266,41 @@ export class FilesystemSessionScratch implements SessionScratch {
     provider: 'codex' | 'kimi',
     threadId: string,
   ): Promise<void> {
+    validId(session.id);
+    this.assertAvailable(session.id);
     validId(threadId);
     if (!['codex', 'kimi'].includes(provider)) throw new Error('SESSION_SCRATCH_INVALID_PROVIDER');
-    await this.serialized(`${session.workspacePath}\0${session.id}`, async () => {
-      const { context, marker } = await this.prepare(session);
-      if (
-        marker.providerThreads.some(
-          (thread) => thread.provider === provider && thread.threadId === threadId,
-        )
-      )
-        return;
-      marker.providerThreads.push({ provider, threadId });
-      const staging = join(context.directory, `.owner-${randomUUID()}.json`);
-      const handle = await open(staging, 'wx', 0o600);
-      try {
-        await handle.writeFile(`${JSON.stringify(marker)}\n`);
-        await handle.sync();
-        await handle.close();
-        await privateDirectory(context.directory, false);
-        await rename(staging, join(context.directory, scratchMarkerName));
-      } finally {
-        await handle.close();
-        await unlink(staging).catch((error: NodeJS.ErrnoException) => {
-          if (error.code !== 'ENOENT') throw error;
-        });
-      }
-    });
+    await this.serialized(`${session.workspacePath}\0${session.id}`, () =>
+      withScratchContainment(session.workspacePath, async () => {
+        this.assertAvailable(session.id);
+        const { context, marker, releaseFence } = await this.prepare(session);
+        try {
+          if (
+            marker.providerThreads.some(
+              (thread) => thread.provider === provider && thread.threadId === threadId,
+            )
+          )
+            return;
+          marker.providerThreads.push({ provider, threadId });
+          const staging = join(context.directory, `.owner-${randomUUID()}.json`);
+          const handle = await open(staging, 'wx', 0o600);
+          try {
+            await handle.writeFile(`${JSON.stringify(marker)}\n`);
+            await handle.sync();
+            await handle.close();
+            await privateDirectory(context.directory, false);
+            await rename(staging, join(context.directory, scratchMarkerName));
+          } finally {
+            await handle.close();
+            await unlink(staging).catch((error: NodeJS.ErrnoException) => {
+              if (error.code !== 'ENOENT') throw error;
+            });
+          }
+        } finally {
+          await releaseFence();
+        }
+      }),
+    );
   }
 
   private async prepare(
@@ -252,56 +349,62 @@ export class FilesystemSessionScratch implements SessionScratch {
     }
     const directory = join(sessions, ownerId);
     const created = await privateDirectory(directory, true);
-    const markerPath = join(directory, scratchMarkerName);
-    const expected: ScratchMarker = {
-      schemaVersion: 1,
-      ownerKind: leaseId ? 'workspace-service' : 'mobile-session',
-      ownerId,
-      workspacePath,
-      sessionId: session.id,
-      createdAt: new Date().toISOString(),
-      authority: leaseId
-        ? { kind: 'lease', leaseId }
-        : { kind: 'mobile-roster', sessionId: session.id },
-      providerThreads: [],
-    };
-    let marker: ScratchMarker;
-    if (created) {
-      try {
-        const handle = await open(markerPath, 'wx', 0o600);
+    const releaseFence = await claimOwnerFence(directory);
+    try {
+      const markerPath = join(directory, scratchMarkerName);
+      const expected: ScratchMarker = {
+        schemaVersion: 1,
+        ownerKind: leaseId ? 'workspace-service' : 'mobile-session',
+        ownerId,
+        workspacePath,
+        sessionId: session.id,
+        createdAt: new Date().toISOString(),
+        authority: leaseId
+          ? { kind: 'lease', leaseId }
+          : { kind: 'mobile-roster', sessionId: session.id },
+        providerThreads: [],
+      };
+      let marker: ScratchMarker;
+      if (created) {
         try {
-          await handle.writeFile(`${JSON.stringify(expected)}\n`);
-          await handle.sync();
-        } finally {
-          await handle.close();
+          const handle = await open(markerPath, 'wx', 0o600);
+          try {
+            await handle.writeFile(`${JSON.stringify(expected)}\n`);
+            await handle.sync();
+          } finally {
+            await handle.close();
+          }
+          marker = expected;
+        } catch (error) {
+          // Remove only this invocation's still-empty allocation; preserve uncertainty.
+          await rmdir(directory).catch(() => undefined);
+          throw error;
         }
-        marker = expected;
-      } catch (error) {
-        // Remove only this invocation's still-empty allocation; preserve uncertainty.
-        await rmdir(directory).catch(() => undefined);
-        throw error;
+      } else {
+        marker = validateMarker(await readMarker(markerPath), expected);
       }
-    } else {
-      marker = validateMarker(await readMarker(markerPath), expected);
+      await privateDirectory(directory, false);
+      const context: SessionScratchContext = {
+        workspacePath,
+        ownerId,
+        directory,
+        environment: {
+          TMPDIR: directory,
+          TMP: directory,
+          TEMP: directory,
+          [scratchContextVariable]: JSON.stringify({
+            schemaVersion: 1,
+            workspacePath,
+            ownerId,
+            directory,
+            markerPath,
+          }),
+        },
+      };
+      return { context, marker, releaseFence };
+    } catch (error) {
+      await releaseFence();
+      throw error;
     }
-    await privateDirectory(directory, false);
-    const context: SessionScratchContext = {
-      workspacePath,
-      ownerId,
-      directory,
-      environment: {
-        TMPDIR: directory,
-        TMP: directory,
-        TEMP: directory,
-        [scratchContextVariable]: JSON.stringify({
-          schemaVersion: 1,
-          workspacePath,
-          ownerId,
-          directory,
-          markerPath,
-        }),
-      },
-    };
-    return { context, marker };
   }
 }
