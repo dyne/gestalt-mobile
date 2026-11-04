@@ -20,12 +20,14 @@ export type XerjIndexDiagnostic = {
     | 'watch-rescan'
     | 'unknown-warning';
   messageDigest: string | null;
+  /** Bounded, redacted cause for display; never the original native message. */
+  summary?: string;
   /** Native pass metadata only; never filenames or exception prose. */
   watchPass?: { number: number; durationSeconds: number };
 };
 
 export type XerjStatus = {
-  /** Latest warning, retained even after indexing recovers. Never contains provider prose. */
+  /** Latest redacted diagnostic, retained even after indexing recovers. */
   diagnostic?: XerjIndexDiagnostic;
   readiness?: RetrievalReadiness;
   mode: 'auto' | 'manual' | 'off';

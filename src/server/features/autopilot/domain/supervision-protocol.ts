@@ -186,7 +186,12 @@ function compareBy<Key extends string>(key: Key) {
 export type SupervisionProtocolState = Readonly<{
   /** Runtime acceptance acknowledges observation, never task completion or provider usage. */
   acknowledgedRevision?: Readonly<{ revision: string; controlId: string; turnId: string }>;
-  wakeCause?: Readonly<{ condition: ObservableWakeCondition | 'deadline'; leaseId: string }> | null;
+  wakeCause?: Readonly<{
+    condition: ObservableWakeCondition | 'deadline';
+    leaseId: string;
+    /** A host-test result belongs to the root which registered its wait. */
+    runId?: string;
+  }> | null;
   outcome:
     'active' | 'probeRequired' | 'parked' | 'retrying' | 'attentionRequired' | 'safetyPaused';
   progressKey: string;
@@ -458,9 +463,12 @@ export function parseSupervisionProtocolState(
       wake.leaseId.length > 256
     )
       return undefined;
+    if (wake.runId !== undefined && !validRunWait(wake.runId, ['processResultAvailable']))
+      return undefined;
     parsedWake = {
       condition: wake.condition as ObservableWakeCondition | 'deadline',
       leaseId: wake.leaseId,
+      ...(typeof wake.runId === 'string' ? { runId: wake.runId } : {}),
     };
   }
   if (acknowledgement !== undefined) {

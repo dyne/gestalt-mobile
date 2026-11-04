@@ -139,7 +139,104 @@ describe('host-owned XERJ indexing', () => {
   });
   it.each([
     [
-      'watch: pass 12 FAILED after 0.4s: private-path changed during snapshot',
+      'warning',
+      JSON.stringify({
+        event: 'warning',
+        message: 'watch: pass 3 FAILED after 1.2s: schema conflict; token=canary-token',
+        output: 'canary-output',
+      }),
+    ],
+    [
+      'error',
+      JSON.stringify({
+        event: 'error',
+        error: { reason: 'schema conflict', request: 'canary-request' },
+      }),
+    ],
+    [
+      'done',
+      JSON.stringify({
+        event: 'done',
+        ok: false,
+        error: { message: 'schema conflict; password=canary-password' },
+      }),
+    ],
+    ['plain error', 'Error: schema conflict; Authorization: Bearer canary-token'],
+  ])('publishes and persists a concise cause from a native %s', async (_, line) => {
+    const f = await fixture(
+      `console.log(JSON.stringify({event:'done',ok:true,files:6,records:12}));
+       console.log(${JSON.stringify(line)});
+       setInterval(() => {},1000);`,
+    );
+    const indexer = f.create();
+    indexer.start();
+    await vi.waitFor(() => expect(indexer.status().message).toContain('schema conflict'));
+    expect(indexer.status().message).not.toMatch(/1\.2s|watch pass|Diagnostic:/);
+    await indexer.close();
+    const path = join(
+      f.root,
+      '.home',
+      'xerj-data',
+      'autoindex',
+      indexer.status().namespace!,
+      '.gestalt-index-diagnostic.json',
+    );
+    const saved = JSON.parse(await readFile(path, 'utf8'));
+    expect(saved.summary).toContain('schema conflict');
+    expect(JSON.stringify([indexer.status(), f.report.mock.calls, saved])).not.toContain('canary');
+  });
+
+  it('keeps a specific cause through generic failure events until the next pass', async () => {
+    const f = await fixture(
+      `console.error(JSON.stringify({event:'warning',message:'schema conflict'}));
+       console.error(JSON.stringify({event:'done',ok:false,reason:'needs-decision'}));
+       console.error(JSON.stringify({event:'warning',message:'watch: pass 3 FAILED after 0.1s: operation failed'}));
+       require('node:fs').writeFileSync(process.env.ARGS_FILE+'.failed','');
+       setInterval(() => {
+         if (require('node:fs').existsSync(process.env.ARGS_FILE+'.retry')) {
+           console.error(JSON.stringify({event:'progress',phase:'scan',pct:0}));
+           console.error(JSON.stringify({event:'done',ok:false,error:{reason:'segment checksum mismatch'}}));
+         }
+       },20);`,
+    );
+    const indexer = f.create();
+    indexer.start();
+    await vi.waitFor(async () => {
+      await stat(join(f.root, 'args.json.failed'));
+      expect(indexer.status().message).toContain('schema conflict');
+    });
+    await writeFile(join(f.root, 'args.json.retry'), '');
+    await vi.waitFor(() => expect(indexer.status().message).toContain('segment checksum mismatch'));
+  });
+
+  it('reports a stdout disk-budget refusal without losing it to generic failure events', async () => {
+    const f = await fixture(
+      `console.log(JSON.stringify({xerj:'autoindex-budget',decision_required:true,refused:'no plan fits the budget',disk:{used_percent:99,flood_stage:95,threshold_enabled:true},root:'private-path'}));
+       setTimeout(() => {
+         console.error(JSON.stringify({event:'done',ok:false,exit:4,reason:'needs-decision'}));
+         console.error(JSON.stringify({event:'warning',message:'watch: pass 702 FAILED after 0.1s: private-path'}));
+         require('node:fs').writeFileSync(process.env.ARGS_FILE+'.failed','');
+       },30);
+       setInterval(() => {},1000);`,
+    );
+    const indexer = f.create();
+    indexer.start();
+    await vi.waitFor(async () => {
+      await stat(join(f.root, 'args.json.failed'));
+      expect(indexer.status()).toMatchObject({
+        state: 'error',
+        diagnostic: { code: 'capacity' },
+        message: expect.stringContaining('flood-stage'),
+        readiness: { connection: { state: 'ready' }, coverage: { state: 'unavailable' } },
+      });
+    });
+    expect(indexer.status().message).toContain('Free space');
+    expect(JSON.stringify([indexer.status(), f.report.mock.calls])).not.toContain('private-path');
+  });
+
+  it.each([
+    [
+      'watch: pass 12 FAILED after 0.4s: /private/path changed during snapshot',
       'watch-pass-failed',
       'watcher is still running',
     ],
@@ -166,7 +263,7 @@ describe('host-owned XERJ indexing', () => {
       });
       expect(indexer.status().phase).toBeUndefined();
       expect(indexer.status().percent).toBeUndefined();
-      expect(JSON.stringify(indexer.status())).not.toContain('private-path');
+      expect(JSON.stringify(indexer.status())).not.toContain('/private/path');
       await vi.waitFor(async () => {
         const path = join(
           f.root,
@@ -210,7 +307,7 @@ describe('host-owned XERJ indexing', () => {
   it('distinguishes a failed pass, an active retry and a recovered index', async () => {
     const f = await fixture(
       `console.error(JSON.stringify({event:'done',ok:true,files:6,records:12}));
-       console.error(JSON.stringify({event:'warning',message:'watch: pass 12 FAILED after 0.4s: connection refused private-path'}));
+       console.error(JSON.stringify({event:'warning',message:'watch: pass 12 FAILED after 0.4s: connection refused /private/path'}));
        let retry=false, done=false;
        setInterval(() => {
          if (!retry && require('node:fs').existsSync(process.env.ARGS_FILE+'.retry')) {
@@ -226,10 +323,10 @@ describe('host-owned XERJ indexing', () => {
     await vi.waitFor(() => expect(indexer.status().state).toBe('error'));
     expect(indexer.status()).toMatchObject({
       diagnostic: { code: 'connection', watchPass: { number: 12, durationSeconds: 0.4 } },
-      message: expect.stringContaining('watch pass 12 failed after 0.4s'),
+      message: expect.stringContaining('connection refused'),
       readiness: { connection: { state: 'ready' }, coverage: { state: 'stale' } },
     });
-    expect(indexer.status().message).toContain('backend connection failed');
+    expect(indexer.status().message).not.toContain('0.4s');
     expect(indexer.status().message).not.toContain('unclassified');
     await writeFile(join(f.root, 'args.json.retry'), '');
     await vi.waitFor(() => expect(indexer.status().state).toBe('indexing'));
@@ -239,7 +336,7 @@ describe('host-owned XERJ indexing', () => {
     await vi.waitFor(() => expect(indexer.status().state).toBe('watching'));
     expect(indexer.status().message).toBeUndefined();
     expect(indexer.status().readiness?.coverage.state).toBe('ready');
-    expect(JSON.stringify([indexer.status(), f.report.mock.calls])).not.toContain('private-path');
+    expect(JSON.stringify([indexer.status(), f.report.mock.calls])).not.toContain('/private/path');
   });
 
   it.each([0, 12, undefined])(
@@ -323,7 +420,7 @@ describe('host-owned XERJ indexing', () => {
 
   it('retains the latest redacted warning on disk and in status after recovery', async () => {
     const f = await fixture(
-      `for (let i=0;i<20;i++) console.error(JSON.stringify({event:'warning',message:'bulk timed out private-path token=secret-value '+i,output:'private-output'})); console.error(JSON.stringify({event:'done',ok:true,files:6,records:12})); setInterval(() => {},1000);`,
+      `for (let i=0;i<20;i++) console.error(JSON.stringify({event:'warning',message:'bulk timed out /private/path token=secret-value '+i,output:'private-output'})); console.error(JSON.stringify({event:'done',ok:true,files:6,records:12})); setInterval(() => {},1000);`,
     );
     const indexer = f.create();
     indexer.start();
@@ -335,7 +432,7 @@ describe('host-owned XERJ indexing', () => {
       occurredAt: expect.any(String),
       messageDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
-    expect(f.report).toHaveBeenLastCalledWith(expect.stringContaining(diagnostic.id));
+    expect(f.report).toHaveBeenLastCalledWith(expect.stringContaining(diagnostic.summary!));
     await indexer.close();
     const path = join(
       f.root,
@@ -349,7 +446,7 @@ describe('host-owned XERJ indexing', () => {
     expect((await stat(path)).mode & 0o777).toBe(0o600);
     expect(
       JSON.stringify([indexer.status(), f.report.mock.calls, await readFile(path, 'utf8')]),
-    ).not.toMatch(/secret-value|private-path|private-output/);
+    ).not.toMatch(/secret-value|\/private\/path|private-output/);
   });
 
   it('does nothing when disabled and starts only retrieval in manual mode', async () => {
