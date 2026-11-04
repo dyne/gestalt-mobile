@@ -42,6 +42,22 @@ export function registerStartSession(
       deps.reportFailure?.('start-session', error);
       if (
         error instanceof Error &&
+        (error.message.startsWith('SESSION_SCRATCH_') ||
+          error.message.startsWith('SCRATCH_CLEANUP_'))
+      )
+        return reply
+          .code(503)
+          .type('application/problem+json')
+          .send(
+            problem(
+              'SESSION_WORKSPACE_UNAVAILABLE',
+              503,
+              'The selected workspace is busy or its temporary ownership could not be confirmed. Retry shortly.',
+              true,
+            ),
+          );
+      if (
+        error instanceof Error &&
         ['ORG_EXECUTOR_PROFILE_UNAVAILABLE', 'ORG_EXECUTOR_PROFILE_INVALID'].includes(error.message)
       )
         return reply

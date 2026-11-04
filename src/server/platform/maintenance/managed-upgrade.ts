@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { access } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
+import { withoutSessionScratch } from '../scratch/child-environment.js';
 import type { UpgradePort } from '../../features/maintenance/upgrade/endpoint.js';
 import type { UpgradeStatus } from '../../../shared/contracts/upgrade.js';
 
@@ -65,7 +66,7 @@ export class ManagedUpgrade implements UpgradePort {
       ['update-restart'],
       {
         cwd: this.cwd,
-        env: this.environment,
+        env: withoutSessionScratch(this.environment),
         timeout: 15_000,
         maxBuffer: 64 * 1024,
       },

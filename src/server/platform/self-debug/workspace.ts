@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process';
 import { lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { withoutSessionScratch } from '../scratch/child-environment.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { DebugContext, SelfDebugSession } from '../../../shared/contracts/self-debug.js';
 import { exportControlPlaneTrace } from '../../features/control-plane-trace/export-trace.js';
@@ -80,10 +81,12 @@ export class SelfDebugWorkspace {
       if (!exists)
         await exec('git', ['clone', '--', `https://github.com/dyne/${name}.git`, destination], {
           timeout: 120_000,
+          env: withoutSessionScratch(),
           maxBuffer: 1024 * 1024,
         });
       const origin = await exec('git', ['-C', destination, 'remote', 'get-url', 'origin'], {
         timeout: 10_000,
+        env: withoutSessionScratch(),
       });
       if (
         !new RegExp(

@@ -70,6 +70,7 @@ import { registerPwaRoutes, type PwaIcon } from './features/pwa/register-routes.
 import { registerSelfDebug, type SelfDebugDependencies } from './features/self-debug/endpoint.js';
 
 export type AppDependencies = {
+  tmpCleanup?: import('./features/sessions/clean-tmp/endpoint.js').TmpCleanupPort;
   transportDiagnostic?(sessionId: string, event: TransportDiagnostic): void;
   upgrade?: import('./features/maintenance/upgrade/endpoint.js').UpgradePort;
   sessionDefaults?: SessionDefaultsStore;
@@ -85,6 +86,7 @@ export type AppDependencies = {
     createId(): string;
     now(): string;
     save(session: RelaySessionSnapshot): void;
+    publish?(session: RelaySessionSnapshot): Promise<void>;
     find(id: string): RelaySessionSnapshot | null;
     list?(): RelaySessionSnapshot[];
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
@@ -107,6 +109,12 @@ export type AppDependencies = {
     models?: Pick<ModelCatalog, 'list'>;
     sessionModels?: Pick<ModelCatalog, 'list'>;
     close?(id: string): void | Promise<void>;
+    forget?(
+      id: string,
+    ): Promise<import('../shared/contracts/session-forget.js').SessionForgetOperation | null>;
+    forgetOperation?(
+      id: string,
+    ): import('../shared/contracts/session-forget.js').SessionForgetOperation | null;
     remove?(id: string): void;
     replyInteraction?(sessionId: string, requestId: string, value: unknown): InteractionReplyResult;
     readHistory?(session: RelaySessionSnapshot): Promise<{

@@ -35,6 +35,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     ondevices = () => {},
     onnotifications = () => {},
     onscratchpad = () => {},
+    oncleantmp = async () => {},
+    cleanTmpPending = false,
     onquit = async () => {},
     onupgrade = async () => {},
     ondetach,
@@ -59,6 +61,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     ondevices?: (trigger: HTMLButtonElement) => void;
     onnotifications?: () => void;
     onscratchpad?: () => void;
+    oncleantmp?: () => Promise<void>;
+    cleanTmpPending?: boolean;
     onquit?: () => Promise<void>;
     onupgrade?: () => Promise<void>;
     ondetach?: () => void;
@@ -67,12 +71,23 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   } = $props();
 
   let menuTrigger = $state<HTMLButtonElement | null>(null);
+  let configurationPanel = $state<HTMLDivElement | null>(null);
   let quitDialog = $state<HTMLDialogElement | null>(null);
   let quitCancel = $state<HTMLButtonElement | null>(null);
   let quitPending = $state(false);
   let upgradeDialog = $state<HTMLDialogElement | null>(null);
   let upgradeCancel = $state<HTMLButtonElement | null>(null);
   let upgradePending = $state(false);
+
+  async function cleanTmp(): Promise<void> {
+    await oncleantmp();
+    // A completed notification must be visible outside the native top layer.
+    // Preserve the user's focus if they already left the menu while cleaning.
+    if (configurationPanel?.hidePopover && configurationPanel.matches(':popover-open')) {
+      configurationPanel.hidePopover();
+      menuTrigger?.focus();
+    }
+  }
 
   function openUpgrade(): void {
     upgradeDialog?.showModal();
@@ -165,6 +180,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </header>
 
 <div
+  bind:this={configurationPanel}
   id="configuration-panel"
   class="configuration-panel"
   popover="auto"
@@ -302,9 +318,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <div class="maintenance-actions">
     <button
       type="button"
+      disabled={cleanTmpPending || upgradePending || quitPending}
+      aria-busy={cleanTmpPending}
+      aria-describedby={cleanTmpPending ? 'clean-tmp-status' : undefined}
+      onclick={() => void cleanTmp()}>Clean TMP</button
+    >
+    {#if cleanTmpPending}<p id="clean-tmp-status" role="status">Cleaning temporary files…</p>{/if}
+    <button
+      type="button"
       popovertarget="configuration-panel"
       popovertargetaction="hide"
-      disabled={upgradePending || quitPending}
+      disabled={cleanTmpPending || upgradePending || quitPending}
       onclick={openUpgrade}>Upgrade</button
     >
     <button
@@ -312,7 +336,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       popovertarget="configuration-panel"
       popovertargetaction="hide"
       class="quit-relay"
-      disabled={upgradePending}
+      disabled={cleanTmpPending || upgradePending}
       onclick={openQuit}>Quit</button
     >
   </div>

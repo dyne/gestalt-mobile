@@ -37,12 +37,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     type ThinkingLevel,
   } from '../../../shared/contracts/session-model-settings.js';
   import DebugIdentifiers from '../self-debug/DebugIdentifiers.svelte';
+  import { isSessionForgetting, type SessionForgetState } from './session-forgetting.js';
 
   type Props = {
     rosterOnly?: boolean;
     allowanceFetcher?: typeof fetch;
     onallowanceerror?: () => void;
     sessions: RelaySession[];
+    forgettingStates?: ReadonlyMap<string, SessionForgetState>;
     recentSessions: RecentSession[];
     selectedSessionId: string | null;
     activitySnapshots?: ReadonlyMap<string, AgentActivitySnapshot>;
@@ -108,6 +110,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     allowanceFetcher,
     onallowanceerror = () => {},
     sessions,
+    forgettingStates = new Map(),
     recentSessions,
     selectedSessionId,
     activitySnapshots = new Map(),
@@ -171,8 +174,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let otherRecentSessions = $derived(
     recentSessions.filter(
       (recent) =>
-        !openSessions.some(
+        !sessions.some(
           (session) =>
+            (session.state === 'ready' ||
+              session.state === 'turnActive' ||
+              forgettingStates.has(session.id) ||
+              session.forgetOperation) &&
             session.threadId === recent.id &&
             (session.provider ?? 'codex') === (recent.provider ?? 'codex'),
         ),
@@ -182,10 +189,30 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let closeDialog = $state<HTMLDialogElement | null>(null);
   let closingSessionId = $state<string | null>(null);
   function requestClose(id: string) {
+    if (isSessionForgetting(forgettingStates.get(id))) return;
     closingSessionId = id;
     closeDialog?.showModal();
   }
 </script>
+
+{#snippet forgettingStatus(state: SessionForgetState | undefined)}
+  {#if state && state.phase !== 'completed'}
+    <p class="session-forget-status" role="status" aria-atomic="true">
+      {#if isSessionForgetting(state)}
+        <span class="forget-spinner" aria-hidden="true"></span>
+      {/if}
+      <span>
+        {state.phase === 'failed'
+          ? 'Could not forget this session. Try again.'
+          : state.phase === 'cleaning'
+            ? 'Removing temporary files…'
+            : state.phase === 'finalizing'
+              ? 'Finishing…'
+              : 'Forgetting session…'}
+      </span>
+    </p>
+  {/if}
+{/snippet}
 
 {#snippet sessionPlanContext(session: RelaySession)}
   {#if hasAssignedOrgPlan(session)}
@@ -246,18 +273,23 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <ul class="session-list" aria-label="Open sessions">
         {#each openSessions as session (session.id)}
           {@const details = managedSessionDetails(session)}
+          {@const forgetState = forgettingStates.get(session.id) ?? session.forgetOperation}
+          {@const forgetting = isSessionForgetting(forgetState)}
           {@const sessionStatus = isSessionStatus(session.sessionStatus)
             ? session.sessionStatus
             : null}
           <li
             class:current-session={session.id === selectedSessionId}
             class="managed-session open-session"
+            aria-busy={forgetting}
+            data-session-id={session.id}
           >
             <div class="session-actions" aria-label="Session actions">
               <AppControl
                 compact
                 full
                 current={session.id === selectedSessionId ? 'page' : undefined}
+                disabled={forgetting}
                 onclick={() => onselectopen(session.id)}>Open</AppControl
               >
               {#if session.resumeCommand && session.provider !== 'kimi'}
@@ -272,7 +304,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                     indicatorOnly
                     autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
                     controlId={`session-autopilot-${session.id}`}
-                    pending={autopilotPending.has(session.id)}
+                    pending={forgetting || autopilotPending.has(session.id)}
                     ontoggle={(enabled) => onautopilottoggle(session.id, enabled)}
                   />
                 {/if}
@@ -285,9 +317,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                   onopen={() => onactivityopen(session.id)}
                 />
               {/if}
-              <AppControl compact full onclick={() => requestClose(session.id)}>Close</AppControl>
+              <AppControl
+                compact
+                full
+                disabled={forgetting}
+                onclick={() => requestClose(session.id)}>Close</AppControl
+              >
+              {#if forgetState}
+                <AppControl compact full disabled={forgetting} onclick={() => onforget(session.id)}
+                  >{forgetState.phase === 'failed' ? 'Retry Forget' : 'Forget'}</AppControl
+                >
+              {/if}
             </div>
             <div class="session-details">
+              {@render forgettingStatus(forgetState)}
               {@render debugDetails(session)}
               <div class="session-summary">
                 {#if sessionStatus}
@@ -336,7 +379,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               <AutopilotAttention
                 attention={autopilotAttention.get(session.id) ?? null}
                 controlId={`session-attention-${session.id}`}
-                pending={autopilotPending.has(session.id)}
+                pending={forgetting || autopilotPending.has(session.id)}
                 onresolve={(action, guidance) => onautopilotresolve(session.id, action, guidance)}
                 ondebug={session.threadId && onattentiondebug
                   ? (requestId, trigger) => onattentiondebug?.(session.id, requestId, trigger)
@@ -347,7 +390,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
                 attention={autopilotAttention.get(session.id) ?? null}
                 controlId={`session-autopilot-safety-${session.id}`}
-                pending={autopilotPending.has(session.id)}
+                pending={forgetting || autopilotPending.has(session.id)}
                 onrecover={() => onautopilottoggle(session.id, true)}
                 ondisable={() => onautopilottoggle(session.id, false)}
               />
@@ -361,12 +404,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <ul class="session-list" aria-label="Saved sessions">
       {#each savedSessions as session (session.id)}
         {@const details = managedSessionDetails(session)}
-        <li class="managed-session">
+        {@const forgetState = forgettingStates.get(session.id) ?? session.forgetOperation}
+        {@const forgetting = isSessionForgetting(forgetState)}
+        <li class="managed-session" aria-busy={forgetting} data-session-id={session.id}>
           <div class="session-actions">
             <AppControl
               compact
               full
-              disabled={openingSessionId === session.id}
+              disabled={forgetting || openingSessionId === session.id}
               onclick={() => onopen(session.id)}
             >
               {openingSessionId === session.id ? 'Opening…' : 'Open'}
@@ -376,9 +421,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 >Copy CLI</AppControl
               >
             {/if}
-            <AppControl compact full onclick={() => onforget(session.id)}>Forget</AppControl>
+            <AppControl compact full disabled={forgetting} onclick={() => onforget(session.id)}
+              >{forgetState?.phase === 'failed' ? 'Retry Forget' : 'Forget'}</AppControl
+            >
           </div>
           <div class="session-details">
+            {@render forgettingStatus(forgetState)}
             {@render debugDetails(session)}
             {#if details.updatedAt !== null}
               <time datetime={new Date(details.updatedAt).toISOString()}>
@@ -659,6 +707,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     --agents-popup-width: 100%;
   }
   .session-list {
+    container-type: inline-size;
     display: grid;
     gap: 0.65rem;
     margin-block: 0 1.5rem;
@@ -690,6 +739,31 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .session-details {
     min-inline-size: 0;
+  }
+
+  .session-forget-status {
+    display: flex;
+    flex-basis: 100%;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin: 0 0 0.5rem;
+    overflow-wrap: anywhere;
+  }
+
+  .forget-spinner {
+    flex: none;
+    inline-size: 0.8em;
+    block-size: 0.8em;
+    border: 2px solid var(--theme-border);
+    border-block-start-color: var(--theme-text);
+    border-radius: 50%;
+    animation: forget-spin 1s linear infinite;
+  }
+
+  @keyframes forget-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .managed-session > .session-details {
@@ -989,6 +1063,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     color: var(--theme-error);
   }
 
+  @container (max-width: 18rem) {
+    .managed-session {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .managed-session > .session-actions {
+      grid-column: 1;
+      grid-row: 2;
+      flex-direction: row;
+      flex-wrap: wrap;
+    }
+    .managed-session > .session-actions > :global(*) {
+      flex: 1 1 5rem;
+      inline-size: auto;
+    }
+  }
+
   @media (max-width: 28rem) {
     .session-setting-labels,
     .session-setting-controls {
@@ -1009,6 +1099,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
   }
   @media (prefers-reduced-motion: reduce) {
+    .forget-spinner {
+      animation: none;
+    }
     .verdict-dot.live {
       animation: none;
     }

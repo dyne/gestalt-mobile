@@ -25,6 +25,47 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('AppHeader', () => {
+  it('places Clean TMP before Upgrade without a confirmation dialog', async () => {
+    const oncleantmp = vi.fn(async () => {});
+    render(AppHeader, { theme: 'dyne-org', onthemechange: () => {}, oncleantmp });
+    const menu = within(document.getElementById('configuration-panel')!);
+    const action = menu.getByRole('button', { name: /^Clean TMP$/, hidden: true });
+    expect(action.nextElementSibling?.textContent).toBe('Upgrade');
+    await fireEvent.click(action);
+    expect(oncleantmp).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('exposes pending cleanup and blocks duplicate or conflicting maintenance while other menu actions remain available', async () => {
+    const oncleantmp = vi.fn(async () => {});
+    const props = { theme: 'dyne-org' as const, onthemechange: () => {}, oncleantmp };
+    const { rerender } = render(AppHeader, { ...props, cleanTmpPending: true });
+    const menu = within(document.getElementById('configuration-panel')!);
+    const action = menu.getByRole('button', {
+      name: /^Clean TMP$/,
+      hidden: true,
+    }) as HTMLButtonElement;
+    expect(action.disabled).toBe(true);
+    expect(action.getAttribute('aria-busy')).toBe('true');
+    expect(menu.getByRole('status', { hidden: true }).textContent).toBe(
+      'Cleaning temporary files…',
+    );
+    action.click();
+    expect(oncleantmp).not.toHaveBeenCalled();
+    for (const name of ['Upgrade', 'Quit'])
+      expect((menu.getByRole('button', { name, hidden: true }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
+    expect(
+      (menu.getByRole('button', { name: 'Scratchpad', hidden: true }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+    await rerender({ ...props, cleanTmpPending: false });
+    expect(action.disabled).toBe(false);
+    expect(menu.queryByRole('status', { hidden: true })).toBeNull();
+    action.click();
+    expect(oncleantmp).toHaveBeenCalledOnce();
+  });
   it('keeps backend connection, failed indexer and stale coverage separate', async () => {
     const readiness = unknownReadiness();
     readiness.connection.state = 'ready';

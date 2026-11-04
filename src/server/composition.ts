@@ -17,6 +17,15 @@ import { SqliteTransportDiagnostics } from './platform/persistence/sqlite-transp
 import { buildApp } from './app.js';
 import { ManagedUpgrade } from './platform/maintenance/managed-upgrade.js';
 import { LocalHostTestRunner } from './platform/host-tests/runner.js';
+import { FilesystemSessionScratch } from './platform/scratch/filesystem-session-scratch.js';
+import { FilesystemScratchCleanup } from './platform/scratch/filesystem-scratch-cleanup.js';
+import { ForgetSession } from './features/sessions/forget-session/use-case.js';
+import { SqliteForgetOperationStore } from './platform/persistence/sqlite-forget-operation-store.js';
+import { CleanSessionScratch } from './features/sessions/clean-tmp/use-case.js';
+import {
+  withHistoryScratchContainment,
+  withScratchContainment,
+} from './platform/scratch/containment-fence.js';
 import { loadWorkspaceHostTestConfig, within } from './platform/host-tests/config.js';
 import { handleHostTestTool } from './features/host-tests/application/handle-tool.js';
 import { gestaltTestRunnerDynamicTool } from '../shared/contracts/host-tests.js';
@@ -276,6 +285,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     throw error;
   }
   const sessions = new SqliteSessionRepository(database);
+  const forgetOperations = new SqliteForgetOperationStore(database);
   // Only sessions found while opening the relay database belong to a previous
   // process. A listen hook can run after a new session has already started in
   // this process; detaching that live writer would make restore and activity
@@ -679,6 +689,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     databasePath,
   );
   const homeDirectory = options.homeDirectory ?? homedir();
+  const sessionScratch = new FilesystemSessionScratch((id) => forgetOperations.assertAvailable(id));
   // Constructing the manager is cheap (no spawn until `ensure`); building it
   // before the model catalog lets the catalog reuse the gestalt-owned servers.
   const kimiManager =
@@ -687,6 +698,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       ? new KimiWebServerManager({
           stateBase: kimiStateBase(homeDirectory),
           sourceShareDir: join(homeDirectory, '.kimi-code'),
+          serviceScratch: (profileKey) =>
+            sessionScratch.allocateService(root, `kimi-${profileKey}`),
         })
       : undefined);
   const kimiModels = new KimiModelCatalog(kimiManager ?? null, kimiManager != null);
@@ -723,11 +736,18 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     options.xerj === 'off'
       ? { check: async () => ({ status: 'absent' as const }) }
       : (options.retrievalCapability ?? new ManagedXerj());
-  const xerjIndexer = new XerjIndexer(root, options.xerj ?? 'manual', retrievalCapability);
+  const xerjIndexer = new XerjIndexer(
+    root,
+    options.xerj ?? 'manual',
+    retrievalCapability,
+    process.env,
+    console.warn,
+    () => sessionScratch.allocateService(root, 'xerj-indexer'),
+  );
   const xerj = new CodexXerj(retrievalCapability);
   const serenaInstallation = new ManagedSerena();
   const capabilities = new CodexCapabilities(xerj, new CodexSerena(serenaInstallation));
-  const playwright = new CodexPlaywright(new ManagedPlaywright());
+  const playwright = new CodexPlaywright(new ManagedPlaywright(), sessionScratch);
   const playwrightAuthority = (session: RelaySessionSnapshot): PlaywrightAuthority => {
     const plan = supervisedPlans.findCurrent(session.id);
     const active = plan?.steps[currentExecutableL1Index(plan)];
@@ -1830,6 +1850,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           assertCurrent();
           return { ...report.requested, assertCurrent };
         },
+        sessionScratch,
       )
     : null;
   const handleKimiNotification = (
@@ -1893,6 +1914,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   kimiRuntime = kimiManager
     ? new KimiSessionRuntime({
         servers: kimiManager,
+        scratch: sessionScratch,
         skillsFor: async (session) => {
           const config = await resolveSkills(session);
           return config?.map((entry) => ({
@@ -1928,6 +1950,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const saveSession = (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot,
   ) => {
+    if (forgetOperations.find(session.id)) return;
     const prior = sessions.find(session.id);
     sessions.save(session);
     events.publish(journal.append(session.id, 'session.updated', session, session.updatedAt));
@@ -1944,6 +1967,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       void activity.refresh(session.id);
     if (becameRuntimeReady) autopilot.restore(session.id);
   };
+  const publishSession = (
+    session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot,
+  ) => withScratchContainment(session.workspacePath, () => saveSession(session));
   if (kimiRuntime) {
     // A gestalt-owned kimi web process exited or its websocket dropped: stop
     // the durable session like the codex supervisor does, without a resume
@@ -1959,6 +1985,49 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   /** Routes a session to the runtime owning its provider's llm service. */
   const ownerRuntime = (session: Readonly<{ provider: LlmProvider }>) =>
     session.provider === 'kimi' ? kimiRuntime : runtime;
+  const scratchCleanup = new FilesystemScratchCleanup();
+  const cleanTmp = new CleanSessionScratch({
+    sessions: () => sessions.list(),
+    knownWorkspacePaths: async () => [root, ...sessions.knownWorkspacePaths()],
+    additionalWorkspacePaths: () => workspaces.knownWorkspacePaths(),
+    storage: scratchCleanup,
+  });
+  const forgetSessions = new ForgetSession({
+    operations: forgetOperations,
+    find: (id) => sessions.find(id),
+    now: () => new Date().toISOString(),
+    release: async (session) => {
+      providerRecovery.cancel(session.id);
+      autopilot.cancel(session.id, 'sessionEnded');
+      planMeasurementRefresh?.stop(session.id);
+      dismissPendingInteractions(session.id, new Date().toISOString());
+      activity.dispose(session.id);
+      await hostTests?.cancelSession(session.id);
+      await capacityRecoveryTasks.get(session.id)?.catch(() => undefined);
+      await ownerRuntime(session)?.releaseForForget(session);
+      await playwright.waitForRelease(session.id);
+    },
+    clean: (session, operationId) =>
+      scratchCleanup.cleanSession(
+        session,
+        () => {
+          const operation = forgetOperations.find(session.id);
+          return operation?.operationId === operationId && operation.phase === 'cleaning';
+        },
+        () => sessions.list(),
+      ),
+    changed: (operation) => {
+      if (sessions.find(operation.sessionId))
+        events.publish(
+          journal.append(
+            operation.sessionId,
+            'session.forget.updated',
+            operation,
+            operation.updatedAt,
+          ),
+        );
+    },
+  });
   if (runtime) {
     scheduleAgentCapacityRecovery = (sessionId, acknowledge) => {
       if (closing || capacityRecoveries.has(sessionId) || !acknowledge()) return false;
@@ -2118,6 +2187,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             throw new Error('Host test workspace is outside the configured root');
           return loadWorkspaceHostTestConfig(workspace);
         },
+        sessionScratch,
       );
       await hostTests.initialize();
     }
@@ -2202,9 +2272,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           list: () =>
             sessions.list().map((session) => {
               const plan = supervisedPlans.find(session.id);
+              const forgetOperation = forgetOperations.find(session.id);
               return {
                 ...withPendingInteractions(session)!,
                 ...(plan ? { plan } : {}),
+                ...(forgetOperation ? { forgetOperation } : {}),
               };
             }),
         },
@@ -2282,6 +2354,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                         createId: () => id,
                         now: () => new Date().toISOString(),
                         save: saveSession,
+                        publish: publishSession,
                         workspaces: debugCatalog,
                         profiles: options.profiles,
                         skillProfiles,
@@ -2310,9 +2383,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           }
         : undefined,
       sessionRoutes: {
+        forget: (id) => forgetSessions.execute(id),
+        forgetOperation: (id) => forgetOperations.find(id),
         createId: randomUUID,
         now: () => new Date().toISOString(),
         save: saveSession,
+        publish: publishSession,
         find: (id) => withPendingInteractions(sessions.find(id)),
         list: () => sessions.list().map((session) => withPendingInteractions(session)!),
         plan: (id) => supervisedPlans.find(id),
@@ -2451,6 +2527,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                   now: () => new Date().toISOString(),
                   list: () => sessions.list(),
                   save: saveSession,
+                  publish: (session) =>
+                    withHistoryScratchContainment(session.workspacePath, () =>
+                      saveSession(session),
+                    ),
                   read: (session) => {
                     const owner = ownerRuntime(session);
                     if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
@@ -2517,6 +2597,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           publishInteractionResolved(sessionId, requestId, occurredAt, outcome);
         },
       },
+      tmpCleanup: cleanTmp,
       sessionEvents: {
         exists: (id) => sessions.find(id) !== null,
         replay: (id, after) => {
@@ -2538,7 +2619,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         refresh: async (id) => {
           const refreshed = await planStatusSource.refresh(id);
           if (refreshed?.kind === 'updated') return refreshed.plan;
-          return refreshed ? null : supervisedPlans.find(id);
+          return refreshed ? null : supervisedPlans.findCurrent(id);
         },
         open: async (id, planName) => {
           const session = sessions.find(id);
@@ -2681,6 +2762,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         .filter((session) => persistedSessionIds.has(session.id) && session.threadId !== null),
       2,
       async (session) => {
+        if (forgetOperations.find(session.id)) return;
         // The status lease must repopulate the authoritative plan projection before
         // a durable coordinator is restored. Writer detachment is a process concern,
         // not a human disable: a later fenced continuation can reacquire it safely.
@@ -2698,6 +2780,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     );
   };
   app.addHook('onListen', async () => {
+    for (const id of forgetOperations.pendingIds())
+      void forgetSessions.execute(id).catch(() => undefined);
     if (options.xerj) xerjIndexer.start();
     const profile = (await options.profiles.list()).find((item) => item.state === 'ok')?.name;
     if (profile) await editorSkillCatalog.refresh('codex', profile, root);
@@ -2706,6 +2790,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     // enter KimiSkillCatalog through their normal operation paths instead.
     // Rehydrate durable attachments even when this relay does not launch Codex writers.
     for (const session of sessions.list()) {
+      if (forgetOperations.find(session.id)) continue;
       if (!persistedSessionIds.has(session.id) || session.provider === 'kimi') continue;
       if (session.lastOrgPlan?.attached && session.lastOrgPlan.path) {
         try {
@@ -2731,6 +2816,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     closing = true;
     providerRecovery.dispose();
     await hostTests?.close();
+    await forgetSessions.drain();
     await retrievalCapability.close?.();
     await xerjIndexer.close();
     for (const [sessionId, timer] of capacityRecoveryTimers) {
@@ -2762,6 +2848,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       }
     }
     runtime?.stopAll();
+    await runtime?.drainReleases();
     kimiRuntime?.stopAll();
     await kimiManager?.stopAll();
     planStatusSource.closeAll();

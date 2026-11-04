@@ -5,6 +5,7 @@
  */
 
 import { execFile } from 'node:child_process';
+import { withoutSessionScratch } from './platform/scratch/child-environment.js';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -111,7 +112,7 @@ export async function runStartupDoctor(cwd: string): Promise<{ ok: boolean; repo
   try {
     const result = await runFile('gestalt', ['doctor'], {
       cwd,
-      env: process.env,
+      env: withoutSessionScratch(),
       timeout: 60_000,
       maxBuffer: 1024 * 1024,
     });

@@ -5,6 +5,8 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
+import type { SessionScratch } from '../../features/sessions/application/session-scratch.js';
 
 import {
   RelaySession,
@@ -94,6 +96,7 @@ export class KimiSessionRuntime {
   public constructor(
     private readonly input: {
       servers: KimiWebServerManager;
+      scratch?: SessionScratch;
       skillsFor(
         session: RelaySessionSnapshot,
       ): Promise<SkillSelection | undefined> | SkillSelection | undefined;
@@ -150,6 +153,51 @@ export class KimiSessionRuntime {
     const resource = this.sessions.get(sessionId);
     if (resource) resource.explicitShutdown = true;
     await this.detach(sessionId);
+  }
+
+  public async releaseForForget(session: RelaySessionSnapshot): Promise<void> {
+    await this.writerAcquisitions.get(session.id)?.catch(() => undefined);
+    const resource = this.sessions.get(session.id);
+    if (!resource) return;
+    resource.explicitShutdown = true;
+    // Kimi scratch belongs to the shared service. Do not stop or relocate that
+    // service when retiring one relay claim; abort only this session's prompt.
+    const handle = this.input.servers.get(resource.profileKey);
+    if (!handle) throw new Error('SESSION_RELEASE_UNCONFIRMED');
+    const read = async () =>
+      (await handle.client.get(`/api/v1/sessions/${resource.threadId}`)) as {
+        main_turn_active?: boolean;
+        current_prompt_id?: unknown;
+      };
+    let status = await read();
+    const prompts = new Set(resource.pendingPrompts);
+    if (resource.activePromptId) prompts.add(resource.activePromptId);
+    if (status.main_turn_active === true) {
+      if (
+        typeof status.current_prompt_id !== 'string' ||
+        status.current_prompt_id.length > 256 ||
+        !status.current_prompt_id
+      )
+        throw new Error('SESSION_RELEASE_UNCONFIRMED');
+      prompts.add(status.current_prompt_id);
+    }
+    if (prompts.size > 64) throw new Error('SESSION_RELEASE_UNCONFIRMED');
+    for (const prompt of prompts)
+      await handle.client.post(
+        `/api/v1/sessions/${resource.threadId}/prompts/${encodeURIComponent(prompt)}:abort`,
+      );
+    for (
+      let attempt = 0;
+      prompts.size && status.main_turn_active === true && attempt < 50;
+      attempt++
+    ) {
+      await delay(20);
+      status = await read();
+    }
+    if (status.main_turn_active !== false) throw new Error('SESSION_RELEASE_UNCONFIRMED');
+    const connection = this.connections.get(resource.profileKey);
+    await connection?.client.unsubscribe([resource.threadId]);
+    await this.detach(session.id);
   }
 
   public async recycle(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
@@ -368,6 +416,7 @@ export class KimiSessionRuntime {
   }
 
   private async ensureServer(session: RelaySessionSnapshot): Promise<KimiServerHandle> {
+    await this.input.scratch?.allocate(session);
     // A recent thread imported from a running Kimi server carries that server's
     // profile key in `profile`, but no reconstructable effective skill selection.
     // Reuse its exact owner; never collapse it onto the default server or restart
@@ -402,6 +451,7 @@ export class KimiSessionRuntime {
     threadId: string,
     handle: KimiServerHandle,
   ): Promise<SessionResource> {
+    await this.input.scratch?.associateProviderThread(session, 'kimi', threadId);
     await this.detach(session.id);
     const resource: SessionResource = {
       sessionId: session.id,
@@ -625,6 +675,7 @@ export class KimiSessionRuntime {
   }
 
   private requireResource(session: RelaySessionSnapshot): SessionResource {
+    this.input.scratch?.assertAvailable?.(session.id);
     const resource = this.sessions.get(session.id);
     if (!resource || !session.threadId) throw new Error(KIMI_SESSION_NOT_RUNNING);
     return resource;

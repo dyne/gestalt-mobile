@@ -36,6 +36,7 @@ import {
 import { deviceNickname } from './features/auth/domain/device-nickname.js';
 import { workspaceId } from './platform/catalog/workspace-id.js';
 import {
+  FilesystemPlanStatusSource,
   planStatusDirectoryPath,
   planStatusFilePath,
 } from './platform/plans/filesystem-plan-status-source.js';
@@ -89,6 +90,11 @@ function liveAppServer(handles: LiveServerHandle[]) {
   return () => {
     const handle: LiveServerHandle = { calls: [], requests: [], pendingResponses: new Map() };
     handles.push(handle);
+    const close = () => {
+      for (const pending of handle.pendingResponses.values())
+        pending.reject(new Error('CODEX_SERVER_REQUEST_CANCELLED'));
+      handle.pendingResponses.clear();
+    };
     return {
       rpc: {
         request: async (method: string, params: unknown) => {
@@ -150,10 +156,11 @@ function liveAppServer(handles: LiveServerHandle[]) {
           };
         },
       },
-      close: () => {
-        for (const pending of handle.pendingResponses.values())
-          pending.reject(new Error('CODEX_SERVER_REQUEST_CANCELLED'));
-        handle.pendingResponses.clear();
+      close,
+      // This in-memory double owns no OS process. Cancelling its queued replies
+      // completes its resource lifetime; real process proof is tested separately.
+      closeAndWait: async () => {
+        close();
       },
       onExit: () => () => {},
     };
@@ -4370,100 +4377,103 @@ describe('production composition', () => {
             };
           },
         });
-        expect(
-          (
-            await fixture.app.inject({
-              method: 'PUT',
-              url: `/api/sessions/${fixture.sessionId}/autopilot`,
-              payload: { enabled: true },
-            })
-          ).statusCode,
-        ).toBe(200);
-        // Initial supervision schedules its control and keeps a separate,
-        // bounded reconciliation watchdog while activity is still stale.
-        await vi.waitFor(() => expect(timers).toHaveLength(2));
-        const staleTimer = timers[0];
-        if (action === 'close') {
-          await writeFile(
-            join(fixture.workspacePath, 'autopilot.org'),
-            completedAutopilotPlanText(),
-          );
-          await expect
-            .poll(
-              async () =>
-                (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/plan`)).json()
-                  .allDone,
-            )
-            .toBe(true);
+        try {
           expect(
             (
               await fixture.app.inject({
-                method: 'DELETE',
-                url: `/api/sessions/${fixture.sessionId}/plan`,
+                method: 'PUT',
+                url: `/api/sessions/${fixture.sessionId}/autopilot`,
+                payload: { enabled: true },
               })
             ).statusCode,
-          ).toBe(204);
-        } else if (action === 'replace') {
-          await installAutopilotPlan(
-            fixture.app,
-            fixture.sessionId,
-            fixture.workspacePath,
-            'replacement',
-          );
-        } else {
-          const method = action === 'delete' ? 'DELETE' : 'POST';
-          const suffix = action === 'delete' ? '' : `/${action}`;
-          expect(
-            (
-              await fixture.app.inject({
-                method,
-                url: `/api/sessions/${fixture.sessionId}${suffix}`,
-              })
-            ).statusCode,
-          ).toBeGreaterThanOrEqual(200);
-        }
-        if (action === 'delete') {
-          const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
-          const row = database
-            .prepare(
-              'SELECT state, requested_enabled, stop_reason FROM autopilot_sessions WHERE session_id = ?',
-            )
-            .get(fixture.sessionId) as {
-            state: string;
-            requested_enabled: number;
-            stop_reason: string;
-          };
-          database.close();
-          // Forgetting cascades the terminal row with the session itself; the
-          // absence is the durable proof that no queued control can be reopened.
-          expect(row).toBeUndefined();
-        } else if (action === 'replace') {
-          await vi.waitFor(() => expect(staleTimer.cancelled).toBe(true));
-          await vi.waitFor(async () =>
+          ).toBe(200);
+          // Initial supervision schedules its control and keeps a separate,
+          // bounded reconciliation watchdog while activity is still stale.
+          await vi.waitFor(() => expect(timers).toHaveLength(2));
+          const staleTimer = timers[0];
+          if (action === 'close') {
+            await writeFile(
+              join(fixture.workspacePath, 'autopilot.org'),
+              completedAutopilotPlanText(),
+            );
+            await expect
+              .poll(
+                async () =>
+                  (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/plan`)).json()
+                    .allDone,
+              )
+              .toBe(true);
             expect(
-              (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json(),
-            ).toMatchObject({
-              autopilot: { enabled: true, state: expect.stringMatching(/monitoring|backoff/) },
-            }),
+              (
+                await fixture.app.inject({
+                  method: 'DELETE',
+                  url: `/api/sessions/${fixture.sessionId}/plan`,
+                })
+              ).statusCode,
+            ).toBe(204);
+          } else if (action === 'replace') {
+            await installAutopilotPlan(
+              fixture.app,
+              fixture.sessionId,
+              fixture.workspacePath,
+              'replacement',
+            );
+          } else {
+            const method = action === 'delete' ? 'DELETE' : 'POST';
+            const suffix = action === 'delete' ? '' : `/${action}`;
+            const response = await fixture.app.inject({
+              method,
+              url: `/api/sessions/${fixture.sessionId}${suffix}`,
+            });
+            if (action === 'delete') expect(response.statusCode, response.body).toBe(204);
+            else expect(response.statusCode).toBeGreaterThanOrEqual(200);
+          }
+          if (action === 'delete') {
+            const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+            const row = database
+              .prepare(
+                'SELECT state, requested_enabled, stop_reason FROM autopilot_sessions WHERE session_id = ?',
+              )
+              .get(fixture.sessionId) as {
+              state: string;
+              requested_enabled: number;
+              stop_reason: string;
+            };
+            database.close();
+            // Forgetting cascades the terminal row with the session itself; the
+            // absence is the durable proof that no queued control can be reopened.
+            expect(row).toBeUndefined();
+          } else if (action === 'replace') {
+            await vi.waitFor(() => expect(staleTimer.cancelled).toBe(true));
+            await vi.waitFor(async () =>
+              expect(
+                (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json(),
+              ).toMatchObject({
+                autopilot: { enabled: true, state: expect.stringMatching(/monitoring|backoff/) },
+              }),
+            );
+          } else {
+            await vi.waitFor(async () =>
+              expect(
+                (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json(),
+              ).toMatchObject({
+                autopilot: {
+                  enabled: false,
+                  state: 'disabled',
+                  reason: action === 'close' ? 'planRemoved' : 'sessionEnded',
+                },
+              }),
+            );
+          }
+          expect(staleTimer.cancelled, action).toBe(true);
+          staleTimer.callback();
+          await Promise.resolve();
+          expect(fixture.handles.flatMap((candidate) => candidate.calls)).not.toContain(
+            'turn/start',
           );
-        } else {
-          await vi.waitFor(async () =>
-            expect(
-              (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json(),
-            ).toMatchObject({
-              autopilot: {
-                enabled: false,
-                state: 'disabled',
-                reason: action === 'close' ? 'planRemoved' : 'sessionEnded',
-              },
-            }),
-          );
+        } finally {
+          await fixture.app.close();
         }
-        expect(staleTimer.cancelled, action).toBe(true);
-        staleTimer.callback();
-        await Promise.resolve();
-        expect(fixture.handles.flatMap((candidate) => candidate.calls)).not.toContain('turn/start');
-        await fixture.app.close();
       }
     }, 15_000);
 
@@ -7041,7 +7051,11 @@ describe('production composition', () => {
         releaseRead?: () => void;
         rejectRead?: () => void;
         notify?: (notification: { method: string; params: unknown }) => void;
+        closed?: boolean;
       }> = [];
+      const reads: Promise<unknown>[] = [];
+      const releaseReads: Array<() => void> = [];
+      let finishing = false;
       const unhandled: unknown[] = [];
       const onUnhandled = (reason: unknown) => unhandled.push(reason);
       process.on('unhandledRejection', onUnhandled);
@@ -7064,6 +7078,9 @@ describe('production composition', () => {
         },
         launchAppServer: () => {
           const writer: (typeof writers)[number] = {};
+          const close = () => {
+            writer.closed = true;
+          };
           return {
             rpc: {
               request: async (method: string, params: unknown) => {
@@ -7071,11 +7088,16 @@ describe('production composition', () => {
                   writers.push(writer);
                   return { thread: { id: `thread-${writers.length}` } };
                 }
-                if (method === 'thread/read')
-                  return await new Promise((resolve, reject) => {
+                if (method === 'thread/read') {
+                  if (finishing) return { thread: { turns: [] } };
+                  const reading = new Promise((resolve, reject) => {
                     writer.releaseRead = () => resolve({ thread: { turns: [] } });
                     writer.rejectRead = () => reject(new Error('LATE_READ_FAILURE'));
+                    releaseReads.push(writer.releaseRead);
                   });
+                  reads.push(reading);
+                  return await reading;
+                }
                 if (method === 'thread/list') return { data: [] };
                 if (method === 'model/list') return { data: [{ id: 'gpt-5.6-terra' }] };
                 if (method === 'skills/list')
@@ -7090,34 +7112,48 @@ describe('production composition', () => {
               },
               onServerRequest: () => () => {},
             },
-            close: () => {},
+            close,
+            // There is no child process in this double. Keep the deliberately
+            // deferred reply independent so late reconciliation is still tested.
+            closeAndWait: async () => {
+              close();
+            },
             onExit: () => () => {},
           };
         },
       });
-      const forgottenId = await createComposedSession(app);
-      await vi.waitFor(() => expect(writers[0]?.releaseRead).toBeTypeOf('function'));
-      expect(
-        (await app.inject({ method: 'DELETE', url: `/api/sessions/${forgottenId}` })).statusCode,
-      ).toBe(204);
-      writers[0]!.rejectRead!();
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(unhandled).toEqual([]);
-      expect((await app.inject('/api/bootstrap')).statusCode).toBe(200);
+      try {
+        const forgottenId = await createComposedSession(app);
+        await vi.waitFor(() => expect(writers[0]?.releaseRead).toBeTypeOf('function'));
+        const forgotten = await app.inject({
+          method: 'DELETE',
+          url: `/api/sessions/${forgottenId}`,
+        });
+        expect(forgotten.statusCode, forgotten.body).toBe(204);
+        expect(writers[0]?.closed).toBe(true);
+        writers[0]!.rejectRead!();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(unhandled).toEqual([]);
+        expect((await app.inject('/api/bootstrap')).statusCode).toBe(200);
 
-      const liveId = await createComposedSession(app);
-      await vi.waitFor(() => expect(writers[1]?.notify).toBeTypeOf('function'));
-      writers[1]!.notify!({
-        method: 'thread/started',
-        params: { thread: { id: 'thread-2', status: { type: 'active' } } },
-      });
-      await vi.waitFor(async () =>
-        expect((await app.inject(`/api/sessions/${liveId}`)).json()).toMatchObject({
-          agentActivity: { root: { state: 'working' } },
-        }),
-      );
-      await app.close();
+        const liveId = await createComposedSession(app);
+        await vi.waitFor(() => expect(writers[1]?.notify).toBeTypeOf('function'));
+        writers[1]!.notify!({
+          method: 'thread/started',
+          params: { thread: { id: 'thread-2', status: { type: 'active' } } },
+        });
+        await vi.waitFor(async () =>
+          expect((await app.inject(`/api/sessions/${liveId}`)).json()).toMatchObject({
+            agentActivity: { root: { state: 'working' } },
+          }),
+        );
+      } finally {
+        finishing = true;
+        for (const release of releaseReads) release();
+        await Promise.allSettled(reads);
+        await app.close();
+      }
     });
 
     it('uses the relay root for detached history reads and Open never resumes', async () => {
@@ -7268,6 +7304,7 @@ describe('production composition', () => {
         ['GET', '/api/sessions/recent-threads', '/api/sessions/recent-threads', 'protected'],
         ['HEAD', '/api/sessions/recent-threads', '/api/sessions/recent-threads', 'protected'],
         ['GET', '/api/sessions/:id', '/api/sessions/session-1', 'protected'],
+        ['DELETE', '/api/sessions/:id', '/api/sessions/session-1', 'protected'],
         ['GET', '/api/sessions/:id/attention', '/api/sessions/session-1/attention', 'protected'],
         [
           'POST',
@@ -7429,6 +7466,7 @@ describe('production composition', () => {
         ],
         ['POST', '/api/git/clone', '/api/git/clone', 'protected'],
         ['POST', '/api/maintenance/quit', '/api/maintenance/quit', 'protected'],
+        ['POST', '/api/maintenance/clean-tmp', '/api/maintenance/clean-tmp', 'protected'],
         ['POST', '/api/maintenance/upgrade', '/api/maintenance/upgrade', 'protected'],
         ['GET', '/api/maintenance/upgrade', '/api/maintenance/upgrade', 'protected'],
         ['HEAD', '/api/maintenance/upgrade', '/api/maintenance/upgrade', 'protected'],
@@ -7650,6 +7688,61 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('sessions', () => {
+    it('does not return retained display history as current when an in-flight plan refresh is superseded by mandatory rejection', async () => {
+      const { app, sessionId, workspacePath } = await createProductionAutopilotFixture();
+      const url = `/api/sessions/${sessionId}/plan`;
+      const previous = (await app.inject(url)).json();
+      const actualRefresh = FilesystemPlanStatusSource.prototype.refresh;
+      let release: (() => void) | undefined;
+      const blocked = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const refresh = vi
+        .spyOn(FilesystemPlanStatusSource.prototype, 'refresh')
+        .mockImplementationOnce(async (id) => {
+          expect(id).toBe(sessionId);
+          await blocked;
+          // ActiveLease retires an older in-flight read with null after its policy
+          // selection revision changes; its existing filesystem test covers that gate.
+          return null;
+        });
+      const pending = app.inject(url).then((response) => response);
+      try {
+        await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+        const source = refresh.mock.contexts[0] as FilesystemPlanStatusSource;
+        await writeFile(
+          join(planStatusDirectoryPath(workspacePath, sessionId), 'unsupported.plan-status.json'),
+          JSON.stringify({
+            schemaVersion: 1,
+            modelPolicyVersion: 2,
+            requiredCapabilities: ['l1-model-policy-v2'],
+          }),
+        );
+        await actualRefresh.call(source, sessionId);
+        const rejected = (await app.inject(`/api/sessions/${sessionId}`)).json();
+        expect(rejected.autopilot.executionAdmission).toMatchObject({
+          allowed: false,
+          reason: 'POLICY_PROJECTION_UNAVAILABLE',
+        });
+        expect(rejected.lastOrgPlan.title).toBe(previous.title);
+        release?.();
+        expect((await pending).statusCode).toBe(204);
+        expect(
+          (
+            await app.inject({
+              method: 'PUT',
+              url: `/api/sessions/${sessionId}/autopilot`,
+              payload: { enabled: true },
+            })
+          ).statusCode,
+        ).toBe(409);
+      } finally {
+        release?.();
+        await pending;
+        refresh.mockRestore();
+        await app.close();
+      }
+    });
     it('persists replay-stable tool groups from runtime notifications without charging provider tokens', async () => {
       const homeDirectory = await mkdtemp(join(tmpdir(), 'gestalt-efficiency-home-'));
       ownTemporaryPaths(homeDirectory);

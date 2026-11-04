@@ -9,6 +9,8 @@ import { access, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { spawn } from 'node:child_process';
+import { withoutSessionScratch } from '../scratch/child-environment.js';
+import { stopOwnedProcessGroup } from '../scratch/owned-process-group.js';
 
 export const playwrightServerName = 'gestalt-playwright';
 export const playwrightTools = [
@@ -89,14 +91,17 @@ export class ManagedPlaywright {
     cwd: string,
     deadline: number,
     options: readonly string[] = [],
+    scratchEnvironment?: Readonly<Record<string, string>>,
   ): Promise<PlaywrightReadiness> {
     if (Date.now() >= deadline) return unknownReadiness();
+    const independent = withoutSessionScratch(this.environment);
     const env = Object.fromEntries(
-      ['PATH', 'HOME', 'TMPDIR', 'GESTALT_HOME']
-        .filter((key) => this.environment[key] !== undefined)
-        .map((key) => [key, this.environment[key]]),
+      ['PATH', 'HOME', 'GESTALT_HOME', 'TMPDIR', 'TMP', 'TEMP']
+        .filter((key) => independent[key] !== undefined)
+        .map((key) => [key, independent[key]]),
     );
-    return new Promise((resolve) => {
+    Object.assign(env, scratchEnvironment);
+    return new Promise((resolve, reject) => {
       const child = spawn(manager, ['playwright', 'doctor', '--json', '--cwd', cwd, ...options], {
         cwd,
         env,
@@ -107,7 +112,7 @@ export class ManagedPlaywright {
       let output = '',
         overflow = false;
       const kill = () => {
-        if (child.pid)
+        if (child.pid && child.exitCode === null && child.signalCode === null)
           try {
             process.kill(-child.pid, 'SIGKILL');
           } catch {
@@ -123,43 +128,50 @@ export class ManagedPlaywright {
       });
       child.once('error', () => {
         clearTimeout(timer);
-        resolve(unknownReadiness());
+        if (!child.pid) resolve(unknownReadiness());
+        else {
+          overflow = true;
+          kill();
+        }
       });
       child.once('close', (code) => {
         clearTimeout(timer);
-        kill();
-        try {
-          const value = JSON.parse(output);
-          if (overflow || value.schemaVersion !== 1 || value.contractVersion !== 1) {
+        void (async () => {
+          if (!(await stopOwnedProcessGroup(child, 0, 1000)))
+            throw new Error('SESSION_RELEASE_UNCONFIRMED');
+          try {
+            const value = JSON.parse(output);
+            if (overflow || value.schemaVersion !== 1 || value.contractVersion !== 1) {
+              resolve(unknownReadiness());
+              return;
+            }
+            const status = (ready: unknown) =>
+              ready === true
+                ? ('ready' as const)
+                : ready === false
+                  ? ('unavailable' as const)
+                  : ('unknown' as const);
+            resolve({
+              ready:
+                code === 0 &&
+                value.ready === true &&
+                value.package?.ready === true &&
+                value.chrome?.ready === true &&
+                value.node?.ready === true,
+              package: status(value.package?.ready),
+              chrome: status(value.chrome?.ready),
+              node: status(value.node?.ready),
+              chromeVersion:
+                typeof value.chrome?.version === 'string' &&
+                value.chrome.version.length <= 64 &&
+                /^\d+(?:\.\d+){1,3}$/.test(value.chrome.version)
+                  ? value.chrome.version
+                  : null,
+            });
+          } catch {
             resolve(unknownReadiness());
-            return;
           }
-          const status = (ready: unknown) =>
-            ready === true
-              ? ('ready' as const)
-              : ready === false
-                ? ('unavailable' as const)
-                : ('unknown' as const);
-          resolve({
-            ready:
-              code === 0 &&
-              value.ready === true &&
-              value.package?.ready === true &&
-              value.chrome?.ready === true &&
-              value.node?.ready === true,
-            package: status(value.package?.ready),
-            chrome: status(value.chrome?.ready),
-            node: status(value.node?.ready),
-            chromeVersion:
-              typeof value.chrome?.version === 'string' &&
-              value.chrome.version.length <= 64 &&
-              /^\d+(?:\.\d+){1,3}$/.test(value.chrome.version)
-                ? value.chrome.version
-                : null,
-          });
-        } catch {
-          resolve(unknownReadiness());
-        }
+        })().catch(reject);
       });
     });
   }

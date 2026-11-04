@@ -6,6 +6,8 @@
 
 import { readFile, realpath } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
+import { sessionScratchEnvironmentKeys } from '../scratch/child-environment.js';
+import type { SessionScratch } from '../../features/sessions/application/session-scratch.js';
 import type { RelaySessionSnapshot } from '../../features/sessions/model/relay-session.js';
 import type { AvailableSkill } from '../../features/skills/model/skill-profile.js';
 import { managedPlaywrightRequestSchema } from '../../../shared/contracts/managed-playwright.js';
@@ -57,7 +59,56 @@ type Prepared = {
 export class CodexPlaywright {
   private readonly bindings = new Map<string, Binding>();
   private readonly prepared = new WeakMap<CodexRetrievalState, Prepared>();
-  constructor(private readonly installation: Pick<ManagedPlaywright, 'check' | 'ready'>) {}
+  private readonly readinessWork = new Map<string, Set<Promise<PlaywrightReadiness>>>();
+  constructor(
+    private readonly installation: Pick<ManagedPlaywright, 'check' | 'ready'>,
+    private readonly scratch?: SessionScratch,
+  ) {}
+
+  private readiness(
+    session: RelaySessionSnapshot,
+    manager: string,
+    workspace: string,
+    deadline: number,
+    options: readonly string[],
+  ) {
+    const task = (async () => {
+      const context = await this.scratch?.allocate(session);
+      const lease = await this.scratch?.borrow?.(session);
+      let started = false;
+      try {
+        this.scratch?.assertAvailable?.(session.id);
+        started = true;
+        // Production ready() resolves only after its actual process group is absent.
+        const result = await this.installation.ready(
+          manager,
+          workspace,
+          deadline,
+          options,
+          context?.environment,
+        );
+        await lease?.release();
+        return result;
+      } catch (error) {
+        if (!started) await lease?.release();
+        throw error;
+      }
+    })();
+    const pending = this.readinessWork.get(session.id) ?? new Set();
+    pending.add(task);
+    this.readinessWork.set(session.id, pending);
+    void task
+      .finally(() => {
+        pending.delete(task);
+        if (!pending.size) this.readinessWork.delete(session.id);
+      })
+      .catch(() => undefined);
+    return task;
+  }
+
+  async waitForRelease(sessionId: string): Promise<void> {
+    await Promise.allSettled([...(this.readinessWork.get(sessionId) ?? [])]);
+  }
 
   private async binding(authority: PlaywrightAuthority): Promise<Binding> {
     const workspace = await realpath(authority.session.workspacePath);
@@ -313,7 +364,13 @@ export class CodexPlaywright {
             guidance = await beforeDeadline(readFile(skill.path, 'utf8'), input.deadline);
             if (guidance.length <= 16_384) {
               const readiness = await beforeDeadline(
-                this.installation.ready(manager, binding.workspace, input.deadline, options),
+                this.readiness(
+                  authority.session,
+                  manager,
+                  binding.workspace,
+                  input.deadline,
+                  options,
+                ),
                 input.deadline,
               );
               enabled = readiness.ready;
@@ -378,7 +435,7 @@ export class CodexPlaywright {
                   ...reserved,
                   ...disabled,
                   enabled: true,
-                  env_vars: ['GESTALT_HOME'],
+                  env_vars: ['GESTALT_HOME', ...sessionScratchEnvironmentKeys],
                   startup_readiness: 'connection',
                   startup_timeout_ms: Math.max(1, input.deadline - Date.now()),
                 }

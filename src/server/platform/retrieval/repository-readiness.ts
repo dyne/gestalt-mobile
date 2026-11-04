@@ -5,6 +5,7 @@
  */
 
 import { execFile } from 'node:child_process';
+import { withoutSessionScratch } from '../scratch/child-environment.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -78,7 +79,7 @@ async function git(cwd: string, args: string[]): Promise<string> {
       cwd,
       timeout: 2000,
       maxBuffer: 262144,
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+      env: { ...withoutSessionScratch(), GIT_OPTIONAL_LOCKS: '0' },
     })
   ).stdout;
 }

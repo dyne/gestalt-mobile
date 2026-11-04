@@ -35,6 +35,30 @@ function migrateWorkspaceGitDefaults(database: DatabaseSync): void {
 
 export function migrate(database: DatabaseSync): void {
   database.exec(schema);
+  database.exec(`CREATE TABLE IF NOT EXISTS session_forget_operations (
+    session_id TEXT PRIMARY KEY CHECK(length(session_id) BETWEEN 1 AND 256),
+    operation_id TEXT NOT NULL UNIQUE CHECK(length(operation_id) = 36),
+    phase TEXT NOT NULL CHECK(phase IN ('stopping','cleaning','finalizing','failed','completed')),
+    updated_at TEXT NOT NULL CHECK(length(updated_at) <= 32),
+    failure_code TEXT CHECK(failure_code IS NULL OR failure_code IN ('SESSION_RELEASE_UNCONFIRMED','SESSION_CLEANUP_FAILED','SESSION_FORGET_FAILED'))
+  );
+  CREATE TRIGGER IF NOT EXISTS forget_fence_insert BEFORE INSERT ON relay_sessions
+    WHEN EXISTS (SELECT 1 FROM session_forget_operations WHERE session_id = NEW.id)
+    BEGIN SELECT RAISE(IGNORE); END;
+  CREATE TRIGGER IF NOT EXISTS forget_fence_update BEFORE UPDATE ON relay_sessions
+    WHEN EXISTS (SELECT 1 FROM session_forget_operations WHERE session_id = NEW.id)
+    BEGIN SELECT RAISE(IGNORE); END;`);
+  database.exec(`CREATE TABLE IF NOT EXISTS scratch_known_workspaces (
+    workspace_path TEXT PRIMARY KEY
+  ); INSERT OR IGNORE INTO scratch_known_workspaces (workspace_path)
+    SELECT DISTINCT workspace_path FROM relay_sessions;
+  CREATE TRIGGER IF NOT EXISTS scratch_workspace_on_insert AFTER INSERT ON relay_sessions
+    BEGIN INSERT INTO scratch_known_workspaces VALUES (NEW.workspace_path)
+      ON CONFLICT(workspace_path) DO NOTHING; END;
+  CREATE TRIGGER IF NOT EXISTS scratch_workspace_on_update AFTER UPDATE OF workspace_path ON relay_sessions
+    WHEN NEW.workspace_path IS NOT OLD.workspace_path
+    BEGIN INSERT INTO scratch_known_workspaces VALUES (NEW.workspace_path)
+      ON CONFLICT(workspace_path) DO NOTHING; END;`);
   database.exec(
     'CREATE TABLE IF NOT EXISTS org_plan_retired_supervisors (plan_identity TEXT NOT NULL, session_id TEXT NOT NULL, stopped INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(plan_identity, session_id))',
   );

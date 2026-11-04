@@ -15,6 +15,12 @@ import type {
 } from '../../../shared/contracts/host-tests.js';
 import type { HostTestOwner, HostTestRunner } from '../../features/host-tests/application/ports.js';
 import { candidate } from './candidate.js';
+import type {
+  SessionScratch,
+  ServiceScratchLease,
+} from '../../features/sessions/application/session-scratch.js';
+import { stopOwnedProcessGroup } from '../scratch/owned-process-group.js';
+import { withoutSessionScratch } from '../scratch/child-environment.js';
 import { loadWorkspaceHostTestConfig, within, type HostTestSuite } from './config.js';
 
 // The host owns a lifetime pipe; even a host crash closes it. Tests cannot inherit
@@ -56,6 +62,7 @@ export class LocalHostTestRunner implements HostTestRunner {
     private readonly workspaceSuites: (
       workspace: string,
     ) => Promise<HostTestSuite[]> = loadWorkspaceHostTestConfig,
+    private readonly scratch?: SessionScratch,
   ) {}
 
   async initialize(): Promise<void> {
@@ -235,7 +242,21 @@ export class LocalHostTestRunner implements HostTestRunner {
         return structuredClone(result);
       }
       try {
-        this.launch(suite, result);
+        const scratch = await this.scratch?.allocate({
+          id: owner.sessionId,
+          workspacePath: owner.workspace,
+        });
+        const claim = await this.scratch?.borrow?.({
+          id: owner.sessionId,
+          workspacePath: owner.workspace,
+        });
+        try {
+          this.scratch?.assertAvailable?.(owner.sessionId);
+          this.launch(suite, result, scratch?.environment, claim);
+        } catch (error) {
+          await claim?.release();
+          throw error;
+        }
       } catch {
         result.state = 'interrupted';
         await this.persist(result);
@@ -247,16 +268,34 @@ export class LocalHostTestRunner implements HostTestRunner {
     }
   }
 
-  private launch(suite: HostTestSuite, result: HostTestResult): void {
+  private launch(
+    suite: HostTestSuite,
+    result: HostTestResult,
+    scratchEnvironment?: Readonly<Record<string, string>>,
+    scratchLease?: ServiceScratchLease,
+  ): void {
     const fd = openSync(result.logPath, 'wx', 0o600);
     const hash = createHash('sha256');
     // No provider keys, relay tokens, hooks, NODE_OPTIONS or shell startup variables.
     const env: NodeJS.ProcessEnv = {};
-    for (const key of ['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR']) {
-      if (process.env[key] !== undefined) env[key] = process.env[key];
+    const independent = withoutSessionScratch();
+    for (const key of [
+      'PATH',
+      'HOME',
+      'USER',
+      'LOGNAME',
+      'LANG',
+      'LC_ALL',
+      'TZ',
+      'TMPDIR',
+      'TMP',
+      'TEMP',
+    ]) {
+      if (independent[key] !== undefined) env[key] = independent[key];
     }
     env.CI = '1';
     env.NO_COLOR = '1';
+    Object.assign(env, scratchEnvironment);
     let child;
     try {
       child = spawn(
@@ -319,6 +358,13 @@ export class LocalHostTestRunner implements HostTestRunner {
       clearTimeout(timeout);
       closeSync(fd);
       void (async () => {
+        if (scratchLease) {
+          try {
+            if (await stopOwnedProcessGroup(child, 0, 1000)) await scratchLease.release();
+          } catch {
+            /* Unknown release remains a durable protected lease. */
+          }
+        }
         const terminal = structuredClone(result);
         terminal.outputSha256 = hash.digest('hex');
         try {

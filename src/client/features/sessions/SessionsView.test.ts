@@ -6,7 +6,7 @@
 
 /* @vitest-environment jsdom */
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkspaceOption } from '../catalog/bootstrap-client.js';
 import SessionsView from './SessionsView.svelte';
@@ -94,6 +94,97 @@ function renderView(overrides: Record<string, unknown> = {}) {
     onstart,
   };
 }
+
+describe.each([false, true])('forgetting in the session frame (rosterOnly=%s)', (rosterOnly) => {
+  const session = {
+    id: 'forget-owner',
+    state: 'released',
+    threadId: 'forget-history',
+    workspacePath: '/workspace/a-long-repository-name',
+    resumeCommand: 'codex resume forget-history',
+  };
+  const operation = (phase: 'stopping' | 'cleaning' | 'finalizing' | 'failed') => ({
+    operationId: 'forget-operation',
+    sessionId: session.id,
+    phase,
+    updatedAt: '2026-11-04T10:00:00Z',
+  });
+  it.each([
+    ['stopping', 'Forgetting session…'],
+    ['cleaning', 'Removing temporary files…'],
+    ['finalizing', 'Finishing…'],
+  ] as const)(
+    'retains the %s frame, disables duplicate/conflicting actions and leaves another owner usable',
+    async (phase, status) => {
+      const onforget = vi.fn();
+      const onopen = vi.fn();
+      renderView({
+        rosterOnly,
+        sessions: [
+          { ...session, forgetOperation: operation(phase) },
+          { ...session, id: 'other', workspacePath: '/another-workspace' },
+        ],
+        onforget,
+        onopen,
+      });
+      const row = document.querySelector('[data-session-id="forget-owner"]') as HTMLElement;
+      expect(row.getAttribute('aria-busy')).toBe('true');
+      expect(within(row).getByRole('status').textContent).toContain(status);
+      expect(
+        (within(row).getByRole('button', { name: 'Forget' }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+      expect(
+        (within(row).getByRole('button', { name: 'Open' }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+      // Native activation respects disabled controls; dispatchEvent does not.
+      (within(row).getByRole('button', { name: 'Forget' }) as HTMLButtonElement).click();
+      expect(onforget).not.toHaveBeenCalled();
+      await fireEvent.click(
+        within(document.querySelector('[data-session-id="other"]') as HTMLElement).getByRole(
+          'button',
+          { name: 'Open' },
+        ),
+      );
+      expect(onopen).toHaveBeenCalledExactlyOnceWith('other');
+    },
+  );
+
+  it('keeps a failure readable and allows retry without placing the owner in recent history', async () => {
+    const onforget = vi.fn();
+    const view = renderView({
+      rosterOnly,
+      sessions: [{ ...session, forgetOperation: operation('failed') }],
+      recentSessions: [{ id: session.threadId, cwd: session.workspacePath, recencyAt: null }],
+      onforget,
+    });
+    const row = document.querySelector('[data-session-id="forget-owner"]') as HTMLElement;
+    expect(row.getAttribute('aria-busy')).toBe('false');
+    expect(within(row).getByRole('status').textContent).toContain(
+      'Could not forget this session. Try again.',
+    );
+    expect((within(row).getByRole('button', { name: 'Open' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    await fireEvent.click(within(row).getByRole('button', { name: 'Retry Forget' }));
+    expect(onforget).toHaveBeenCalledExactlyOnceWith(session.id);
+    expect(screen.queryByRole('list', { name: 'Recent sessions' })).toBeNull();
+    await view.rerender({ forgettingStates: new Map([[session.id, { phase: 'requesting' }]]) });
+    expect(row.getAttribute('aria-busy')).toBe('true');
+  });
+
+  it('also fences an open session while a recovered backend operation is stopping', () => {
+    renderView({
+      rosterOnly,
+      sessions: [{ ...session, state: 'ready', forgetOperation: operation('stopping') }],
+    });
+    const row = document.querySelector('[data-session-id="forget-owner"]') as HTMLElement;
+    expect(row.getAttribute('aria-busy')).toBe('true');
+    expect((within(row).getByRole('button', { name: 'Close' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(within(row).getByRole('status').textContent).toContain('Forgetting session…');
+  });
+});
 
 describe('SessionsView session base tree', () => {
   it('reuses the session roster without creation or recent-session sections', async () => {

@@ -186,7 +186,16 @@ describe('native runtime retrieval', () => {
           enabled: true,
           enabled_tools: xerjTools,
           cwd: f.root,
-          env_vars: ['CODEX_HOME', 'GESTALT_HOME', 'XERJ_API_KEY', 'XERJ_AUTH'],
+          env_vars: [
+            'CODEX_HOME',
+            'GESTALT_HOME',
+            'XERJ_API_KEY',
+            'XERJ_AUTH',
+            'TMPDIR',
+            'TMP',
+            'TEMP',
+            'GESTALT_SESSION_TMP_CONTEXT',
+          ],
         },
       },
     });

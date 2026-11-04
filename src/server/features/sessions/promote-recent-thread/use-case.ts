@@ -25,6 +25,7 @@ export async function promoteRecentThread(
     now(): string;
     list(): RelaySessionSnapshot[];
     save(session: RelaySessionSnapshot): void;
+    publish?(session: RelaySessionSnapshot): Promise<void>;
     read(session: RelaySessionSnapshot): Promise<unknown>;
     executionPolicy?(thread: RecentThread): Promise<SessionExecutionPolicy | undefined>;
   },
@@ -49,6 +50,7 @@ async function promote(
     now(): string;
     list(): RelaySessionSnapshot[];
     save(session: RelaySessionSnapshot): void;
+    publish?(session: RelaySessionSnapshot): Promise<void>;
     read(session: RelaySessionSnapshot): Promise<unknown>;
     executionPolicy?(thread: RecentThread): Promise<SessionExecutionPolicy | undefined>;
   },
@@ -94,6 +96,7 @@ async function promote(
   } catch {
     throw new RecentThreadHistoryUnavailable();
   }
-  deps.save(imported);
+  if (deps.publish) await deps.publish(imported);
+  else deps.save(imported);
   return imported;
 }

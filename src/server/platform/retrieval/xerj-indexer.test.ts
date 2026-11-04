@@ -10,6 +10,10 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RetrievalCapabilityPort } from '../../features/skills/application/ports.js';
 import { XerjIndexer, xerjDefaultIgnores } from './xerj-indexer.js';
+import {
+  FilesystemSessionScratch,
+  scratchMarkerName,
+} from '../scratch/filesystem-session-scratch.js';
 
 const instances: XerjIndexer[] = [];
 const roots: string[] = [];
@@ -57,6 +61,82 @@ async function fixture(
 }
 
 describe('host-owned XERJ indexing', () => {
+  it('keeps exit75 scratch leased until the surviving owned group is confirmed stopped', async () => {
+    const f = await fixture(`setTimeout(()=>process.exit(75),50);`);
+    const scratch = new FilesystemSessionScratch();
+    const service = await scratch.allocateService(f.root, 'xerj-indexer');
+    const marker = JSON.parse(await readFile(join(service.directory, scratchMarkerName), 'utf8'));
+    const lease = join(service.directory, 'leases', marker.authority.leaseId + '.json');
+    const indexer = new XerjIndexer(
+      f.root,
+      'auto',
+      { check: f.check },
+      {
+        PATH: process.env.PATH,
+        ARGS_FILE: join(f.root, 'args.json'),
+        CODEX_HOME: join(f.root, '.home'),
+      },
+      f.report,
+      async () => service,
+    );
+    instances.push(indexer);
+    indexer.start();
+    await vi.waitFor(() => expect(indexer.status().state).toBe('shared'));
+    const pid = (await f.args()).pid;
+    expect(JSON.parse(await readFile(lease, 'utf8')).state).toBe('active');
+    // Model descendants remaining after the real wrapper leader exited/reaped.
+    let groupPresent = true;
+    const realKill = process.kill.bind(process);
+    const signal = vi.spyOn(process, 'kill').mockImplementation((selected, value) => {
+      if (selected !== -pid) return realKill(selected, value);
+      if (!groupPresent) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+      return true;
+    });
+    let closing: Promise<void> | undefined;
+    try {
+      closing = indexer.close();
+      await vi.waitFor(() => expect(signal).toHaveBeenCalledWith(-pid, 0));
+      expect(JSON.parse(await readFile(lease, 'utf8')).state).toBe('active');
+      groupPresent = false;
+      await closing;
+      expect(JSON.parse(await readFile(lease, 'utf8')).state).toBe('released');
+      expect(signal.mock.calls.every(([, value]) => value === 0)).toBe(true);
+    } finally {
+      groupPresent = false;
+      await closing;
+      signal.mockRestore();
+      await indexer.close();
+    }
+  });
+  it('owns independent service scratch and releases it only after watcher shutdown', async () => {
+    const f = await fixture(
+      `require('node:fs').writeFileSync(process.env.ARGS_FILE,JSON.stringify({context:process.env.GESTALT_SESSION_TMP_CONTEXT,tmp:process.env.TMPDIR})); setInterval(()=>{},1000);`,
+    );
+    const scratch = new FilesystemSessionScratch();
+    const service = await scratch.allocateService(f.root, 'xerj-indexer');
+    const indexer = new XerjIndexer(
+      f.root,
+      'auto',
+      { check: f.check },
+      {
+        PATH: process.env.PATH,
+        ARGS_FILE: join(f.root, 'args.json'),
+        CODEX_HOME: join(f.root, '.home'),
+        GESTALT_SESSION_TMP_CONTEXT: 'unrelated-session',
+      },
+      f.report,
+      async () => service,
+    );
+    instances.push(indexer);
+    indexer.start();
+    await vi.waitFor(async () => expect((await f.args()).tmp).toBe(service.directory));
+    expect(JSON.parse((await f.args()).context).ownerId).toBe(service.ownerId);
+    const marker = JSON.parse(await readFile(join(service.directory, scratchMarkerName), 'utf8'));
+    const lease = join(service.directory, 'leases', marker.authority.leaseId + '.json');
+    expect(JSON.parse(await readFile(lease, 'utf8')).state).toBe('active');
+    await indexer.close();
+    expect(JSON.parse(await readFile(lease, 'utf8')).state).toBe('released');
+  });
   it.each([
     [
       'warning',

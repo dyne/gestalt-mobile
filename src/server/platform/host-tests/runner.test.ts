@@ -15,6 +15,7 @@ import { candidate } from './candidate.js';
 import { loadWorkspaceHostTestConfig, type HostTestSuite } from './config.js';
 import { LocalHostTestRunner, parseTapCounts } from './runner.js';
 import type { HostTestResult } from '../../../shared/contracts/host-tests.js';
+import { FilesystemSessionScratch } from '../scratch/filesystem-session-scratch.js';
 const exec = promisify(execFile);
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -91,6 +92,46 @@ async function fixture(source = "console.log('# tests 1\\n# pass 1\\n# fail 0\\n
 }
 
 describe('host-owned tests', () => {
+  it('launches its guardian and test subprocess in the owning session scratch', async () => {
+    const f = await fixture(
+      `console.log(JSON.stringify({context:process.env.GESTALT_SESSION_TMP_CONTEXT,tmp:process.env.TMPDIR,node:require('node:os').tmpdir()})); console.log('# tests 1\\n# pass 1\\n# fail 0\\n# skipped 0');`,
+    );
+    const scratch = new FilesystemSessionScratch();
+    const runner = new LocalHostTestRunner(
+      join(f.root, 'scratch-evidence'),
+      undefined,
+      loadWorkspaceHostTestConfig,
+      scratch,
+    );
+    await runner.initialize();
+    cleanups.push(() => runner.close());
+    vi.stubEnv('TMPDIR', '/ambient-other-session');
+    vi.stubEnv('GESTALT_SESSION_TMP_CONTEXT', 'ambient-other-session');
+    const run = (await runner.request(f.owner, {
+      operation: 'start',
+      suite: 'full',
+      requestId: randomUUID(),
+    })) as HostTestResult;
+    let result: HostTestResult;
+    await vi.waitFor(
+      async () => {
+        result = (await runner.request(f.owner, {
+          operation: 'status',
+          runId: run.runId,
+        })) as HostTestResult;
+        expect(result.state).toBe('passed');
+      },
+      { timeout: 8000 },
+    );
+    const capture = JSON.parse((await readFile(result!.logPath, 'utf8')).split('\n')[0]);
+    const context = await scratch.allocate({
+      id: f.owner.sessionId,
+      workspacePath: f.owner.workspace,
+    });
+    expect(capture.tmp).toBe(context.directory);
+    expect(capture.node).toBe(context.directory);
+    expect(JSON.parse(capture.context).ownerId).toBe(context.ownerId);
+  });
   it('retains an unread completion across restart until its owner reads the result', async () => {
     const f = await fixture();
     const run = (await f.start()) as HostTestResult;

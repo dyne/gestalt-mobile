@@ -22,6 +22,9 @@ export function registerGetSession(
     id: string,
   ) => import('../../../../shared/contracts/tool-efficiency.js').ToolEfficiencySnapshot,
   currentSequence?: (id: string) => number,
+  forgetOperation?: (
+    id: string,
+  ) => import('../../../../shared/contracts/session-forget.js').SessionForgetOperation | null,
 ): void {
   app.get('/api/sessions/:id', async (request, reply) => {
     const session = find((request.params as { id: string }).id);
@@ -31,6 +34,7 @@ export function registerGetSession(
     const retainedPlan = plan?.(session.id) ?? null;
     return reply.send({
       ...session,
+      ...(forgetOperation?.(session.id) ? { forgetOperation: forgetOperation(session.id) } : {}),
       ...(currentSequence ? { currentSequence: currentSequence(session.id) } : {}),
       ...(activitySnapshot ? { agentActivity: toAgentActivityDto(activitySnapshot) } : {}),
       ...(autopilotSnapshot ? { autopilot: autopilotSnapshot } : {}),

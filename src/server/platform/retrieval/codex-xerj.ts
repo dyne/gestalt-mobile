@@ -5,6 +5,7 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import { sessionScratchEnvironmentKeys } from '../scratch/child-environment.js';
 import {
   parseXerjStartupReason,
   type XerjStartupReason,
@@ -158,7 +159,13 @@ export class CodexXerj {
             command: ready.manager,
             args: ['xerj', 'mcp', '--url', ready.endpoint],
             cwd: input.cwd,
-            env_vars: ['CODEX_HOME', 'GESTALT_HOME', 'XERJ_API_KEY', 'XERJ_AUTH'],
+            env_vars: [
+              'CODEX_HOME',
+              'GESTALT_HOME',
+              'XERJ_API_KEY',
+              'XERJ_AUTH',
+              ...sessionScratchEnvironmentKeys,
+            ],
             enabled: true,
             required: false,
             startup_readiness: 'connection',

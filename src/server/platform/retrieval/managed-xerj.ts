@@ -5,6 +5,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { withoutSessionScratch } from '../scratch/child-environment.js';
 import { access } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
@@ -80,7 +81,7 @@ export class ManagedXerj implements RetrievalCapabilityPort {
     return new Promise<RetrievalCapability>((resolve) => {
       const child = spawn(manager, ['xerj', operation], {
         cwd,
-        env: { ...this.environment, XERJ_READY_TIMEOUT_MS: String(timeout) },
+        env: { ...withoutSessionScratch(this.environment), XERJ_READY_TIMEOUT_MS: String(timeout) },
         shell: false,
         stdio: ['ignore', 'pipe', 'ignore'],
       });

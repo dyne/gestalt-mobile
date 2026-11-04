@@ -35,6 +35,12 @@ const relayMessages = {
   ORG_EXECUTOR_PROFILE_INVALID:
     'The Org-plan executor profile has invalid model settings. Repair the installed profile and try again.',
   SESSION_CLOSE_FAILED: 'The session could not be closed. Try again.',
+  SESSION_FORGET_FAILED:
+    'The session could not be forgotten. It remains in Sessions; try Forget again.',
+  SESSION_RELEASE_UNCONFIRMED:
+    'Session work could not be stopped. The session is retained; try Forget again.',
+  SESSION_CLEANUP_FAILED:
+    'Temporary files could not be removed. The session is retained; try Forget again.',
   SESSION_COPY_FAILED:
     'The CLI resume command could not be copied. Check clipboard access and try again.',
   SESSION_DEFAULTS_READ_FAILED:
@@ -54,6 +60,7 @@ const relayMessages = {
   WORKSPACE_FOLDER_CREATE_FAILED: 'The folder could not be created. Check the name and try again.',
   WORKSPACE_FOLDER_EXISTS: 'An item with that name already exists. Choose a different folder name.',
   QUIT_FAILED: 'Gestalt Mobile could not quit cleanly. Try again or stop it from the terminal.',
+  TMP_CLEANUP_UNAVAILABLE: 'Temporary files could not be checked. Try Clean TMP again.',
   UPGRADE_FAILED:
     'Gestalt could not complete the upgrade and reconnect. Check update-restart.log and reload when Mobile is ready.',
   UPGRADE_UNAVAILABLE: 'Start Mobile with gestalt mobile to enable upgrades.',
