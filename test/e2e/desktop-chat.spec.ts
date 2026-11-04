@@ -113,6 +113,118 @@ async function install(page: Page) {
   return { fixture, plans };
 }
 
+test('a delayed reconnect roster preserves the loaded plan, accepted updates and detach without moving selection or scroll', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const { fixture, plans } = await install(page);
+  fixture.snapshot(
+    'alpha',
+    chatSnapshot({
+      items: Array.from({ length: 40 }, (_, index) => ({
+        id: `alpha-history-${index}`,
+        kind: 'user' as const,
+        text: `Alpha history ${index}. ${'Conversation detail. '.repeat(20)}`,
+        turnId: 'alpha',
+      })),
+    }),
+  );
+  const gates = [deferred<Array<Record<string, unknown>>>()];
+  let listGate = gates[0]!;
+  const settled: Promise<void>[] = [];
+  let listRequests = 0;
+  await page.route('**/api/sessions', async (route) => {
+    const gate = listGate;
+    const done = deferred<void>();
+    settled.push(done.promise);
+    listRequests++;
+    try {
+      await route.fulfill({ json: await gate.promise });
+    } finally {
+      done.resolve();
+    }
+  });
+  try {
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Chat', exact: true }).click();
+    const left = page.getByRole('complementary', { name: 'Chat sessions and usage' });
+    const right = page.getByRole('complementary', { name: 'Chat plan summary' });
+    const alpha = left.locator('[data-session-id="alpha"]');
+    const beta = left.locator('[data-session-id="beta"]');
+    await expect(right.getByRole('heading', { name: 'Alpha plan', exact: true })).toBeVisible();
+    await expect(
+      alpha.getByRole('progressbar', { name: 'Plan progress for Alpha plan', exact: true }),
+    ).toBeVisible();
+    await expect(alpha.locator('.agents summary')).toBeVisible();
+    await expect.poll(() => listRequests).toBeGreaterThan(0);
+    // The initial plan is already published while every reconnect list remains held.
+    listGate.resolve(
+      fixture.sessions.map((row) => ({
+        ...row,
+        workspacePath: `${row.workspacePath}/after-initial-list`,
+      })),
+    );
+    await expect(alpha).toContainText('/workspace/alpha/after-initial-list');
+    await expect(
+      alpha.getByRole('progressbar', { name: 'Plan progress for Alpha plan', exact: true }),
+    ).toBeVisible();
+    await expect(alpha.locator('.agents summary')).toBeVisible();
+    await expect(right.getByRole('heading', { name: 'Alpha plan', exact: true })).toBeVisible();
+
+    await page.evaluate(() => window.scrollTo(0, 350));
+    const before = await page.evaluate(() => window.scrollY);
+    const updated = { ...plan('Alpha plan updated'), currentStepId: 'review', doneSteps: 2 };
+    plans.set('alpha', updated);
+    fixture.event('alpha', 1, 'plan.updated', { plan: updated, reason: null });
+    await expect(right.getByRole('heading', { name: updated.title, exact: true })).toBeVisible();
+    await expect(
+      alpha.getByRole('progressbar', { name: `Plan progress for ${updated.title}`, exact: true }),
+    ).toHaveAttribute('value', '2');
+    await expect(right.locator('details[data-step-id="review"]')).toHaveJSProperty('open', true);
+    expect(Math.abs((await page.evaluate(() => window.scrollY)) - before)).toBeLessThanOrEqual(2);
+
+    // Detach is newer than a held roster carrying an obsolete embedded plan and
+    // attached metadata. Neither that list nor a later session switch may revive it.
+    plans.set('alpha', null);
+    fixture.event('alpha', 2, 'plan.closed', {});
+    await expect(right).toContainText('No retained plan for this session.');
+    await expect(alpha.locator('.agents')).toHaveCount(0);
+    const requestedBeforeDetach = listRequests;
+    listGate = deferred<Array<Record<string, unknown>>>();
+    gates.push(listGate);
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await expect.poll(() => listRequests).toBeGreaterThan(requestedBeforeDetach);
+    listGate.resolve(
+      fixture.sessions.map((row) => ({
+        ...row,
+        workspacePath: `${row.workspacePath}/after-detach-list`,
+        ...(row.id === 'alpha'
+          ? {
+              plan: plan('Obsolete Alpha plan'),
+              lastOrgPlan: { filename: 'obsolete.org', title: 'Obsolete Alpha', attached: true },
+            }
+          : {}),
+      })),
+    );
+    await expect(alpha).toContainText('/workspace/alpha/after-detach-list');
+    await expect(alpha.locator('.session-plan-progress')).toHaveCount(0);
+    await expect(alpha.locator('.agents')).toHaveCount(0);
+    await expect(alpha).not.toContainText('Org plan attached');
+    await beta.getByRole('button', { name: 'Open', exact: true }).click();
+    await expect(right.getByRole('heading', { name: 'Beta plan', exact: true })).toBeVisible();
+    await expect(
+      beta.getByRole('progressbar', { name: 'Plan progress for Beta plan', exact: true }),
+    ).toBeVisible();
+    await expect(beta.locator('[aria-current="page"]')).toHaveCount(1);
+    await expect(alpha.locator('.session-plan-progress')).toHaveCount(0);
+    await expect(right).not.toContainText('Obsolete Alpha');
+    await expectNoHorizontalOverflow(page);
+  } finally {
+    gates.forEach((gate) => gate.resolve(fixture.sessions));
+    await Promise.allSettled(settled);
+  }
+});
+
 test('a slow skills catalog cannot hide open sessions or overwrite a newly created session', async ({
   page,
 }) => {

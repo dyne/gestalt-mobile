@@ -25,6 +25,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   import AppHeader from './components/AppHeader.svelte';
   import { waitForUpgrade } from './features/maintenance/upgrade.js';
+  import { cleanTmpFeedback } from './features/maintenance/clean-tmp-feedback.js';
   import DebugDialog from './features/self-debug/DebugDialog.svelte';
   import { visibleHeaderActions } from './features/sessions/header-actions.js';
   import type { DebugConfirmation } from '../shared/contracts/self-debug.js';
@@ -108,11 +109,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { copyText } from './features/sessions/clipboard.js';
   import { createIdempotencyKey } from './features/sessions/idempotency-key.js';
   import { createPlanController, type PlanState } from './features/plans/plan-controller.js';
-  import {
-    isRelayPlanUpdate,
-    isSupervisedPlan,
-    type SupervisedPlan,
-  } from './features/plans/contracts.js';
+  import type { SupervisedPlan } from './features/plans/contracts.js';
   import { weeklyQuotaRemaining } from './features/plans/weekly-quota.js';
   import { workspacePlanNameFromHref } from './features/plans/org-plan-link.js';
   import PlansView, { type PlansCatalogState } from './features/plans/PlansView.svelte';
@@ -122,6 +119,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     type PendingDraftOperation,
   } from './features/sessions/session-cache.js';
   import SessionsView from './features/sessions/SessionsView.svelte';
+  import {
+    SessionForgetting,
+    type SessionForgetState,
+  } from './features/sessions/session-forgetting.js';
   import { validateStartForm } from './features/sessions/start-form.js';
   import {
     SessionStartController,
@@ -284,6 +285,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let sessionExpandedIds = $state<Set<string>>(new Set());
   let sessionId = $state<string | null>(null);
   let sessions = $state<RelaySession[]>([]);
+  let forgettingStates = $state.raw<ReadonlyMap<string, SessionForgetState>>(new Map());
+  let selectedSessionForgetting = $derived(sessionId ? forgettingStates.get(sessionId) : undefined);
   let activitySnapshots = $state.raw<ReadonlyMap<string, AgentActivitySnapshot>>(new Map());
   let efficiencySnapshots = $state.raw<ReadonlyMap<string, ToolEfficiencySnapshot>>(new Map());
   let autopilotState = $state.raw<AutopilotClientState>({
@@ -292,9 +295,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     pending: new Set(),
     errors: new Map(),
   });
-  // A sequenced socket projection is newer than an unsequenced list response.
-  // Keep the exact owning-session plan until the next socket event supersedes it.
-  let latestSessionPlans = $state.raw<ReadonlyMap<string, SupervisedPlan | undefined>>(new Map());
+  // Accepted plan reads/events own this projection, including an explicit absence.
+  // A later unsequenced roster cannot replace it or undo an observed detach.
+  let latestSessionPlans = $state.raw<
+    ReadonlyMap<string, Readonly<{ plan: SupervisedPlan | undefined; detached: boolean }>>
+  >(new Map());
   let sessionListEpoch = 0;
   let sessionRosterRevision = 0;
   let sessionListAbort: AbortController | null = null;
@@ -438,12 +443,39 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     return '';
   });
   const relay = createRelayClient((input, init) => authorizedFetch(input, init));
+  const sessionForgetting = new SessionForgetting({
+    relay,
+    publish: (next) => (forgettingStates = next),
+    onComplete: (forgottenSession) => {
+      const id = forgottenSession.id;
+      sessions = sessions.filter((session) => session.id !== id);
+      sessionRosterRevision += 1;
+      recentSessions = retainForgottenSession(recentSessions, forgottenSession);
+      if (sessionId === id) {
+        chatController.select(null);
+        activityController.select(null);
+        sessionId = null;
+        tab = 'sessions';
+        void sessionCache.saveSelectedSession(null);
+        planController.select(null);
+      }
+      void refreshSessionLists().then(() => {
+        recentSessions = retainForgottenSession(recentSessions, forgottenSession);
+      });
+    },
+    onError: (error) => {
+      shellStatus = reportRelayError(error, 'SESSION_FORGET_FAILED');
+    },
+  });
   const autopilotController = new AutopilotController(relay, (next) => (autopilotState = next));
   const activityController = new AgentActivityController({
     relay,
     publish: (next) => (activitySnapshots = new Map(next)),
     publishEfficiency: (next) => (efficiencySnapshots = new Map(next)),
-    onEvent: (id, event) => autopilotController.observe(id, event),
+    onEvent: (id, event) => {
+      autopilotController.observe(id, event);
+      if (event.type === 'session.forget.updated') sessionForgetting.observe(id, event.payload);
+    },
     onAuthoritativeSnapshot: (id, snapshot) => autopilotController.applyAuthoritative(id, snapshot),
   });
   const chatController = new ChatController({
@@ -451,7 +483,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     cache: createChatCache(),
     publish: (next) => (chatView = next),
     onConnectionChange: (connected) => {
-      if (connected && sessionId) void activityController.hydrate(sessionId);
+      if (connected && sessionId) {
+        void activityController.hydrate(sessionId);
+        void refreshSessionLists();
+      }
       if (!connected) {
         readinessAbort?.abort();
         retrievalStatus = null;
@@ -531,14 +566,40 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     (error, code) => reportRelayError(error, code),
   );
   const deviceClient = createDeviceClient((input, init) => authorizedFetch(input, init));
+  function withSessionPlan(session: RelaySession): RelaySession {
+    const projection = latestSessionPlans.get(session.id);
+    if (!projection) return session;
+    return {
+      ...session,
+      plan: projection.plan,
+      ...(projection.detached && session.lastOrgPlan
+        ? { lastOrgPlan: { ...session.lastOrgPlan, attached: false } }
+        : {}),
+    };
+  }
+
+  function rememberSessionPlan(
+    id: string,
+    plan: SupervisedPlan | undefined,
+    detached = false,
+  ): void {
+    latestSessionPlans = new Map(latestSessionPlans).set(id, { plan, detached });
+    sessions = sessions.map((item) => (item.id === id ? withSessionPlan(item) : item));
+  }
+
   const planController = createPlanController(
     { getPlan: relay.getPlan, closePlan: relay.closePlan },
     (next) => {
       planState = next;
-      if (next.kind === 'ready' || next.kind === 'closing')
-        sessions = sessions.map((item) =>
-          item.id === next.sessionId ? { ...item, plan: next.plan } : item,
+      if (next.kind === 'ready' || next.kind === 'closing') {
+        rememberSessionPlan(next.sessionId, next.plan);
+      } else if (next.kind === 'unavailable' && next.sessionId) {
+        rememberSessionPlan(
+          next.sessionId,
+          undefined,
+          latestSessionPlans.get(next.sessionId)?.detached,
         );
+      }
     },
   );
   const sessionCache = createSessionCache();
@@ -595,6 +656,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     void tick().then(() => document.querySelector<HTMLButtonElement>('.menu-trigger')?.focus());
   }
 
+  let cleanTmpPending = $state(false);
+  async function cleanTmp(): Promise<void> {
+    if (cleanTmpPending) return;
+    cleanTmpPending = true;
+    try {
+      toastQueue.enqueue(cleanTmpFeedback(await relay.cleanTmp()));
+    } catch (error) {
+      reportRelayError(error, 'TMP_CLEANUP_UNAVAILABLE');
+    } finally {
+      cleanTmpPending = false;
+    }
+  }
+
   async function quit(): Promise<void> {
     try {
       await relay.quit();
@@ -629,7 +703,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       const bootstrap = await loadBootstrap(authorizedFetch);
       // Publish the roster before optional catalogs or local storage can delay it.
       // Preserve a roster updated since bootstrap began, even if another refresh fails.
-      if (sessionRosterRevision === bootstrapRevision) sessions = bootstrap.sessions;
+      if (sessionRosterRevision === bootstrapRevision)
+        sessions = sessionForgetting.reconcile(bootstrap.sessions).map(withSessionPlan);
       sessionWorkspaceId =
         refreshSelection(
           sessionWorkspaceId || null,
@@ -748,6 +823,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     plansCatalogRequest?.abort();
     passivePlanRequest?.abort();
     chatController.dispose();
+    sessionForgetting.dispose();
     activityController.dispose();
     autopilotController.dispose();
     planController.dispose();
@@ -898,10 +974,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     try {
       const next = await relay.listSessions(abort.signal);
       if (epoch !== sessionListEpoch || abort.signal.aborted) return;
-      sessions = next.map((session) => {
-        if (!latestSessionPlans.has(session.id)) return session;
-        return { ...session, plan: latestSessionPlans.get(session.id) };
-      });
+      sessions = sessionForgetting.reconcile(next).map(withSessionPlan);
       sessionRosterRevision += 1;
       const active = observedSessions(
         sessions.filter((session) => ['ready', 'turnActive'].includes(session.state)),
@@ -919,6 +992,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function toggleAutopilot(id: string, enabled: boolean): Promise<void> {
+    if (sessionForgetting.isBusy(id)) return;
     await autopilotController.toggle(id, enabled);
     if (id === sessionId) void refreshSessions().catch(() => {});
   }
@@ -933,6 +1007,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     action: 'resume' | 'disableAutopilot',
     guidance?: string,
   ): Promise<void> {
+    if (sessionForgetting.isBusy(id)) return;
     await autopilotController.resolve(id, action, guidance);
     if (id === sessionId) void refreshSessions().catch(() => {});
   }
@@ -954,6 +1029,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function openSession(id: string) {
+    if (sessionForgetting.isBusy(id)) return;
     shellStatus = 'Opening session…';
     openingSessionId = id;
     const generation = ++openGeneration;
@@ -999,6 +1075,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function closeSession(id: string) {
+    if (sessionForgetting.isBusy(id)) return;
     shellStatus = 'Closing session…';
     try {
       await relay.releaseSession(id);
@@ -1047,20 +1124,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   async function forgetSession(id: string) {
     const forgottenSession = sessions.find((session) => session.id === id);
-    try {
-      await relay.forgetSession(id);
-      if (sessionId === id) {
-        chatController.select(null);
-        activityController.select(null);
-        sessionId = null;
-        void sessionCache.saveSelectedSession(null);
-        planController.select(null);
-      }
-      await refreshSessionLists();
-      recentSessions = retainForgottenSession(recentSessions, forgottenSession);
-    } catch (error) {
-      shellStatus = `Could not forget session: ${errorMessage(error)}`;
-    }
+    if (forgottenSession) await sessionForgetting.forget(forgottenSession);
   }
 
   async function copyResumeCommand(command: string) {
@@ -1073,7 +1137,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function selectSessionModel(model: string): Promise<void> {
-    if (!sessionId || chatView?.activeTurnId) return;
+    if (!sessionId || sessionForgetting.isBusy(sessionId) || chatView?.activeTurnId) return;
     try {
       const updated = await relay.selectModel(sessionId, model);
       sessions = sessions.map((session) =>
@@ -1087,7 +1151,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function submitDraft(kind: 'send' | 'queue' | 'interrupt-send'): Promise<void> {
-    if (!sessionId || !message.trim() || !chatController.canSubmit(kind)) return;
+    if (
+      !sessionId ||
+      sessionForgetting.isBusy(sessionId) ||
+      !message.trim() ||
+      !chatController.canSubmit(kind)
+    )
+      return;
     const duplicate = [...pendingDraftSubmissions.values()].some(
       (entry) => entry.sessionId === sessionId && entry.revision === draftRevision,
     );
@@ -1767,6 +1837,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   function handleChatMetadataEvent(event: ProjectionEvent): void {
     const selectedId = sessionId;
     if (!selectedId) return;
+    if (event.type === 'session.forget.updated') {
+      sessionForgetting.observe(selectedId, event.payload);
+      return;
+    }
     if (event.type === 'agent.activity.updated') {
       return;
     }
@@ -1791,22 +1865,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       return;
     }
     if (event.type !== 'plan.updated' && event.type !== 'plan.closed') return;
+    const previous = planState;
     planController.applyEvent(selectedId, event);
-    if (event.type === 'plan.closed') {
-      latestSessionPlans = new Map(latestSessionPlans).set(selectedId, undefined);
-      sessions = sessions.map((item) =>
-        item.id === selectedId ? { ...item, plan: undefined } : item,
-      );
-      return;
+    // applyEvent publishes synchronously only when its session/sequence fences
+    // accept the event. Never reapply a rejected replay outside that authority.
+    if (event.type === 'plan.closed' && planState !== previous) {
+      rememberSessionPlan(selectedId, undefined, true);
     }
-    const plan = isRelayPlanUpdate(event.payload)
-      ? event.payload.plan
-      : isSupervisedPlan(event.payload)
-        ? event.payload
-        : null;
-    if (plan) latestSessionPlans = new Map(latestSessionPlans).set(selectedId, plan);
-    if (plan)
-      sessions = sessions.map((item) => (item.id === selectedId ? { ...item, plan } : item));
   }
 </script>
 
@@ -1820,6 +1885,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         message: 'Could not refresh Codex allowance. Retrying automatically.',
       })}
     {sessions}
+    {forgettingStates}
     {recentSessions}
     selectedSessionId={sessionId}
     {activitySnapshots}
@@ -1930,6 +1996,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         ondevices={() => (devicesOpen = true)}
         onnotifications={() => (notificationsOpen = true)}
         onscratchpad={openScratchpad}
+        oncleantmp={cleanTmp}
+        {cleanTmpPending}
         onquit={quit}
         onupgrade={upgrade}
         onthemechange={setTheme}
@@ -1998,7 +2066,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               {interactionAnnouncement}
             </p>
             {#if sessionId}
-              <div class="chat-composer">
+              <div
+                class="chat-composer"
+                inert={selectedSessionForgetting !== undefined &&
+                  selectedSessionForgetting.phase !== 'failed'}
+              >
                 <Composer
                   newEmpty={chatView?.newEmpty ?? false}
                   status={chatView?.status ?? shellStatus}

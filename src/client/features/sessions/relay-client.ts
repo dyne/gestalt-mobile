@@ -8,6 +8,7 @@ import type { HistoryObservation } from '../../../shared/contracts/chat-transpor
 import type { SupervisedPlan } from '../plans/contracts.js';
 import type { UpgradeStatus } from '../../../shared/contracts/upgrade.js';
 import type { CleanTmpResult } from '../../../shared/contracts/tmp-cleanup.js';
+import type { SessionForgetOperation } from '../../../shared/contracts/session-forget.js';
 import type {
   ChatSnapshot,
   SafeInteractionOutcome,
@@ -54,6 +55,7 @@ export type RelayWorkspaceDirectory = Readonly<{
 export type RelaySession = {
   id: string;
   state: string;
+  forgetOperation?: SessionForgetOperation;
   workspaceId?: string;
   workspacePath?: string;
   provider?: LlmProvider;

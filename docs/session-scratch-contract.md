@@ -226,7 +226,43 @@ failures contribute to the unavailable reason without inventing folder or
 workspace counts. Partial/inaccessible results remain distinct from complete
 scans. Paths, directory listings and filesystem diagnostics are never returned.
 Missing cleanup support or an unexpected operation failure returns a bounded 503;
-the response is not cached. The typed client exposes this action for later UI work.
+the response is not cached. The configuration menu's **Clean TMP** action calls
+this endpoint without a path or workspace option. The backend's complete durable
+discovery scope applies regardless of the selected browser session or tab.
+
+### Menu feedback and component responsibilities
+
+Clean TMP remains labeled exactly that while pending, with a disabled button and
+the status “Cleaning temporary files…”. Repeated activation joins no new request.
+Other sessions remain usable. Upgrade and Quit are unavailable from the menu
+during cleanup; cleanup is unavailable while those maintenance operations run.
+No extra confirmation dialog is required. The native menu can be closed while
+the request runs; a completion never takes focus away from another session.
+
+Shared notifications distinguish complete, empty, protected-only and partial
+results. Protected folders are a subset of skipped folders; the UI reports other
+skips separately. Removed workspace counts mean workspaces with actual removals,
+not the sum of overlapping cleaned/skipped/failed categories. A partial outcome
+keeps successful removal counts and reports failed folders and unavailable
+workspaces. Discovery-only failures may have no known workspace count, so the
+notification states that some locations could not be checked without inventing a
+count. Request errors make no removal claim. Partial and request failures use the
+shared error toast with retry guidance; completed results use the success toast.
+Notifications remain available in the existing notification history.
+
+| Component                                             | Allocation and execution responsibility                                                                                                                                                       | Cleanup authority and limits                                                                                                                                                                                                                  |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mobile                                                | Canonical selected workspace, stable relay owner, explicit provider associations; durable workspace locators and roster; process/service leases                                               | Clean TMP scans all durable/catalog workspaces under fences. Every roster state protects its owner. Forget releases actual owned work before attributed deletion and roster retirement.                                                       |
+| Launcher (`5f36e7abe81cabd29ad9e14d6b3e0a698199c025`) | Validates inherited Mobile context; allocates standalone CLI/service UUID owners and publishes leases before native work; forwards context to managed children and scrubs unrelated discovery | Releases only proven stopped consumers; unknown/crashed leases stay protected. Allocation, borrower metadata and a prefix alone never grant deletion authority. See Launcher `docs/session-scratch.md`.                                       |
+| Agents (`c159a5a181a05971532efa734f4d9cd7dcec88cc`)   | Validates the same context; generated scripts and transient execution use isolated `.ctx-mode-*` children inside that owner; foreground completion removes only its invocation child          | Does not allocate or retire session ownership. Background/crash leftovers remain attributed to their owner until authoritative cleanup. Persistent context-mode state keeps its existing storage rules. See Agents `docs/session-scratch.md`. |
+
+Standalone execution without a context retains its documented operator/OS
+fallback; a present invalid context fails visibly rather than falling back.
+Destination-local atomic install staging, dependency/runtime installations and
+provider state remain persistent or transaction-owned. This contract does not
+grant cleanup authority over them. Verified earlier Mobile v1 allocations use
+the same marker validation; unmarked historical tool prefixes remain ambiguous
+retained candidates as documented in [legacy provenance](legacy-scratch-provenance.md).
 
 ## Durable Forget operations
 
@@ -264,4 +300,9 @@ after deletion and atomic roster/operation finalization. Failure returns 503 wit
 thread identity for recovery/retry. Repeated completed requests remain idempotent.
 Promoting forgotten provider history creates a new relay identity and fresh
 scratch. Filesystem deletion and SQLite finalization are separate failure domains;
-no cross-resource transaction is claimed. UI rendering is a later milestone.
+no cross-resource transaction is claimed. The Sessions and roster/sidebar frames
+render this durable operation with an indeterminate status and conflicting owner
+controls disabled. A frame stays visible until confirmed successful retirement;
+failure keeps it retryable and uses shared error feedback. Reconnect and reload
+rehydrate the operation from backend list/get/bootstrap models, independent of
+the original request or socket lifetime.

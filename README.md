@@ -490,6 +490,28 @@ defaults. Other explicit policy combinations are preserved.
 Use **Open** to relaunch a released, stopped, or attention-required
 relay session from the browser.
 
+Use **Clean TMP** in the configuration menu to remove eligible temporary folders
+across all known workspaces. You can keep using other sessions while it runs.
+The notification reports removed folders, protected or skipped folders, and any
+partial failures. An unavailable workspace or discovery failure means cleanup is
+incomplete; the notification does not claim those locations were checked.
+
+Running, open, stopped and saved/reopenable sessions keep their temporary files.
+**Stop** retains them. **Forget** waits for owned work to stop, then removes the
+session's attributed temporary files and retires its saved entry. Its frame shows
+progress until confirmed completion; a failure retains the entry and offers a
+retry. Reloading recovers the backend operation's state.
+
+Mobile allocates temporary storage in each selected workspace. The Launcher
+validates and forwards that ownership context to managed tools, and Agents uses
+it for generated execution files. Standalone CLI and shared service owners use
+explicit leases. Cleanup preserves active or uncertain ownership, ambiguous old
+folders, and persistent source, Git state, history, authentication, installations,
+caches, browser profiles and indexes. It never sweeps the operating system's
+temporary directory. See the [shared session scratch contract](docs/session-scratch-contract.md)
+and [legacy provenance limits](docs/legacy-scratch-provenance.md) for the complete
+allocation, ownership and cleanup rules across all three components.
+
 If an upgrade has removed the Codex rollout for a saved session, **Open** keeps
 the relay session and its settings but creates and binds a replacement Codex
 thread. The client shows that the earlier Codex history is unavailable; other

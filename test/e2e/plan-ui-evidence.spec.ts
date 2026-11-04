@@ -255,7 +255,7 @@ for (const configuration of evidenceConfigurations())
         await navigation.evaluate(
           (element) => getComputedStyle(element.querySelector('button')!).transitionDuration,
         ),
-      ).toContain('1e-05s');
+      ).toBe('0s');
 
       if (statePlan && !options.close) {
         const live = page.locator('[aria-live="polite"][aria-atomic="true"]');

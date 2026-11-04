@@ -2272,9 +2272,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           list: () =>
             sessions.list().map((session) => {
               const plan = supervisedPlans.find(session.id);
+              const forgetOperation = forgetOperations.find(session.id);
               return {
                 ...withPendingInteractions(session)!,
                 ...(plan ? { plan } : {}),
+                ...(forgetOperation ? { forgetOperation } : {}),
               };
             }),
         },

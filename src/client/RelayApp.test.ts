@@ -13,6 +13,7 @@ let controllerOptions: {
   onSendAccepted?(sessionId: string, operationId: string): void;
   onHistoryPromptAccepted?(sessionId: string, operationId: string): void;
   onSessionEvent?(event: unknown): void;
+  onConnectionChange?(connected: boolean): void;
 } | null = null;
 let fakeController: {
   selected: string | null;
@@ -91,6 +92,7 @@ vi.mock('./features/agent-activity/agent-activity-controller.js', () => ({
     bootstrap = vi.fn();
     sync = vi.fn();
     select = vi.fn();
+    hydrate = vi.fn(async () => {});
     observe = vi.fn();
     dispose = vi.fn();
   },
@@ -154,6 +156,9 @@ vi.mock('./features/chat/chat-controller.js', () => ({
 
 import RelayApp from './RelayApp.svelte';
 import { NOTIFICATION_HISTORY_STORAGE_KEY } from './features/feedback/toast-queue.js';
+import type { SessionForgetOperation } from '../shared/contracts/session-forget.js';
+import type { CleanTmpResult } from '../shared/contracts/tmp-cleanup.js';
+import type { SupervisedPlan } from './features/plans/contracts.js';
 
 const chatView = (id: string, text: string) => ({
   sessionId: id,
@@ -217,6 +222,538 @@ async function renderChat(
 }
 
 describe('RelayApp chat controller composition', () => {
+  function planRaceFixture() {
+    const plan = (title: string): SupervisedPlan => ({
+      title,
+      steps: [],
+      totalSteps: 1,
+      doneSteps: 0,
+      allDone: false,
+      currentStepId: 'work',
+    });
+    const deferred = <T>() => {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((done) => {
+        resolve = done;
+      });
+      return { promise, resolve };
+    };
+    const roster = [
+      { id: 'a', state: 'ready', workspacePath: '/a', threadId: 'thread-a' },
+      { id: 'b', state: 'ready', workspacePath: '/b', threadId: 'thread-b' },
+    ];
+    const reads = { a: deferred<SupervisedPlan | null>(), b: deferred<SupervisedPlan | null>() };
+    const lists: Array<ReturnType<typeof deferred<Array<Record<string, unknown>>>>> = [];
+    let listRevision = 0;
+    const fetcher = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const path = String(input);
+      if (path === '/api/sessions') {
+        const read = deferred<Array<Record<string, unknown>>>();
+        lists.push(read);
+        return new Response(JSON.stringify(await read.promise));
+      }
+      if (path === '/api/sessions/a/plan' || path === '/api/sessions/b/plan') {
+        const value = await reads[path.includes('/a/') ? 'a' : 'b'].promise;
+        return value ? new Response(JSON.stringify(value)) : new Response(null, { status: 204 });
+      }
+      return new Response(
+        JSON.stringify(
+          path === '/api/bootstrap'
+            ? { workspaces: [], profiles: [], models: { codex: [], kimi: [] }, sessions: roster }
+            : path === '/api/skill-profiles'
+              ? { profiles: [] }
+              : [],
+        ),
+      );
+    });
+    const view = render(RelayApp, {
+      authorizedFetch: fetcher,
+      passkeyAuthEnabled: false,
+      theme: 'dyne-org',
+      onlock: vi.fn(),
+    });
+    return {
+      plan,
+      roster,
+      reads,
+      lists,
+      fetcher,
+      row: (id: string) => document.querySelector(`[data-session-id="${id}"]`) as HTMLElement,
+      reconnect: () => {
+        controllerOptions?.onConnectionChange?.(true);
+        return lists.at(-1)!;
+      },
+      finishList: async (read: (typeof lists)[number], rows: Array<Record<string, unknown>>) => {
+        const marker = `/observed-list-${++listRevision}`;
+        read.resolve(
+          rows.map((row) => ({ ...row, workspacePath: `${row.workspacePath}${marker}` })),
+        );
+        await vi.waitFor(() =>
+          expect(document.querySelector('[data-session-id="a"]')?.textContent).toContain(marker),
+        );
+      },
+      dispose: () => {
+        view.unmount();
+        reads.a.resolve(null);
+        reads.b.resolve(null);
+        lists.forEach((read) => read.resolve(roster));
+      },
+    };
+  }
+
+  it('keeps the initial selected plan and Agents control when a delayed reconnect roster arrives afterwards', async () => {
+    const f = planRaceFixture();
+    try {
+      await vi.waitFor(() => expect(fakeController?.selected).toBe('a'));
+      const list = f.reconnect();
+      f.reads.a.resolve(f.plan('Initially loaded plan'));
+      await vi.waitFor(() =>
+        expect(
+          f.row('a').querySelector('.session-plan-progress progress')?.getAttribute('aria-label'),
+        ).toContain('Initially loaded plan'),
+      );
+      expect(f.row('a').querySelector('.agents')).not.toBeNull();
+      await f.finishList(list, f.roster);
+      await vi.waitFor(() =>
+        expect(
+          f.row('a').querySelector('.session-plan-progress progress')?.getAttribute('aria-label'),
+        ).toContain('Initially loaded plan'),
+      );
+      expect(f.row('a').querySelector('.agents')).not.toBeNull();
+      expect(f.row('b').querySelector('.session-plan-progress')).toBeNull();
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('keeps explicit plan absence and accepted detach through stale rosters and rejects older socket plan replays', async () => {
+    const f = planRaceFixture();
+    try {
+      await vi.waitFor(() => expect(fakeController?.selected).toBe('a'));
+      f.reads.a.resolve(null);
+      await vi.waitFor(() => expect(f.row('a').querySelector('.agents')).toBeNull());
+      const first = f.reconnect();
+      await f.finishList(
+        first,
+        f.roster.map((row) =>
+          row.id === 'a' ? { ...row, plan: f.plan('Stale roster plan') } : row,
+        ),
+      );
+      await vi.waitFor(() => expect(f.row('a').querySelector('.session-plan-progress')).toBeNull());
+      fakeController?.metadata('a', {
+        sequence: 10,
+        type: 'plan.updated',
+        payload: { plan: f.plan('Newer socket plan'), reason: null },
+      });
+      await vi.waitFor(() =>
+        expect(
+          f.row('a').querySelector('.session-plan-progress progress')?.getAttribute('aria-label'),
+        ).toContain('Newer socket plan'),
+      );
+      fakeController?.metadata('a', {
+        sequence: 9,
+        type: 'plan.updated',
+        payload: f.plan('Rejected replay'),
+      });
+      const newer = f.reconnect();
+      await f.finishList(newer, f.roster);
+      await vi.waitFor(() =>
+        expect(
+          f.row('a').querySelector('.session-plan-progress progress')?.getAttribute('aria-label'),
+        ).toContain('Newer socket plan'),
+      );
+      fakeController?.metadata('a', { sequence: 11, type: 'plan.closed', payload: {} });
+      await vi.waitFor(() => expect(f.row('a').querySelector('.agents')).toBeNull());
+      fakeController?.metadata('a', {
+        sequence: 10,
+        type: 'plan.updated',
+        payload: f.plan('Rejected resurrection'),
+      });
+      const detached = f.reconnect();
+      await f.finishList(
+        detached,
+        f.roster.map((row) =>
+          row.id === 'a'
+            ? {
+                ...row,
+                plan: f.plan('Stale attached plan'),
+                lastOrgPlan: { filename: 'old.org', title: 'Old plan', attached: true },
+              }
+            : row,
+        ),
+      );
+      await vi.waitFor(() => expect(f.row('a').querySelector('.agents')).toBeNull());
+      expect(f.row('a').querySelector('.session-plan-progress')).toBeNull();
+      expect(f.row('a').textContent).not.toContain('Org plan attached');
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('does not publish a late initial plan into a newly selected session or erase the selected session plan with a list', async () => {
+    const f = planRaceFixture();
+    try {
+      await vi.waitFor(() => expect(fakeController?.selected).toBe('a'));
+      await fireEvent.click(within(f.row('b')).getByRole('button', { name: /^Open$/ }));
+      await vi.waitFor(() => expect(fakeController?.selected).toBe('b'));
+      await fireEvent.click(screen.getByRole('button', { name: /^Sessions$/ }));
+      f.reads.b.resolve(f.plan('Selected B plan'));
+      f.reads.a.resolve(f.plan('Late A plan'));
+      f.lists.slice(0, -1).forEach((list) => list.resolve(f.roster));
+      await f.finishList(f.lists.at(-1)!, f.roster);
+      await vi.waitFor(() =>
+        expect(
+          f.row('b').querySelector('.session-plan-progress progress')?.getAttribute('aria-label'),
+        ).toContain('Selected B plan'),
+      );
+      expect(f.row('a').querySelector('.session-plan-progress')).toBeNull();
+      expect(f.row('b').textContent).not.toContain('Late A plan');
+      expect(fakeController?.selected).toBe('b');
+    } finally {
+      f.dispose();
+    }
+  });
+  function cleanupFixture() {
+    let release!: (value: Response) => void;
+    const replies: Promise<Response>[] = [];
+    const defer = () =>
+      replies.push(
+        new Promise<Response>((resolve) => {
+          release = resolve;
+        }),
+      );
+    defer();
+    const roster = [
+      { id: 'a', state: 'ready', workspacePath: '/a' },
+      { id: 'b', state: 'ready', workspacePath: '/b' },
+    ];
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === '/api/maintenance/clean-tmp' && init?.method === 'POST') return replies.shift()!;
+      return new Response(
+        JSON.stringify(
+          path === '/api/bootstrap'
+            ? { workspaces: [], profiles: [], models: { codex: [], kimi: [] }, sessions: roster }
+            : path === '/api/sessions'
+              ? roster
+              : path === '/api/skill-profiles'
+                ? { profiles: [] }
+                : [],
+        ),
+      );
+    });
+    render(RelayApp, {
+      authorizedFetch: fetcher,
+      passkeyAuthEnabled: false,
+      theme: 'dyne-org',
+      onlock: vi.fn(),
+    });
+    return { fetcher, finish: (response: Response) => release(response), defer };
+  }
+
+  it.each(['complete', 'partial'] as const)(
+    'keeps another session usable through delayed Clean TMP and reports %s counts in the shared toast',
+    async (status) => {
+      const f = cleanupFixture();
+      await vi.waitFor(() => expect(fakeController?.selected).toBe('a'));
+      const menu = within(document.getElementById('configuration-panel')!);
+      const action = menu.getByRole('button', {
+        name: /^Clean TMP$/,
+        hidden: true,
+      }) as HTMLButtonElement;
+      action.click();
+      action.click();
+      await vi.waitFor(() => expect(action.disabled).toBe(true));
+      expect(
+        f.fetcher.mock.calls.filter(([path]) => String(path) === '/api/maintenance/clean-tmp'),
+      ).toHaveLength(1);
+      expect(action.getAttribute('aria-busy')).toBe('true');
+      await fireEvent.click(screen.getByRole('button', { name: /^Sessions$/ }));
+      await fireEvent.click(
+        within(screen.getByRole('list', { name: 'Open sessions' })).getAllByRole('button', {
+          name: /^Open$/,
+        })[1]!,
+      );
+      await vi.waitFor(() => expect(fakeController?.selected).toBe('b'));
+      const result: CleanTmpResult = {
+        status,
+        folders: { removed: 2, skipped: 3, failed: status === 'partial' ? 1 : 0 },
+        workspaces: {
+          cleaned: 0,
+          removed: 2,
+          skipped: 2,
+          failed: status === 'partial' ? 1 : 0,
+          unavailable: 0,
+        },
+        reasons: {
+          protected: 2,
+          busy: 0,
+          lease: 0,
+          unrecognized: 1,
+          unsafe: 0,
+          unavailable: 0,
+          io: status === 'partial' ? 1 : 0,
+        },
+      };
+      f.finish(new Response(JSON.stringify(result)));
+      await vi.waitFor(() => expect(action.disabled).toBe(false));
+      const toast = document.querySelector('.toast')!;
+      expect(document.querySelectorAll('.toast')).toHaveLength(1);
+      expect(toast.getAttribute('role')).toBe(status === 'partial' ? 'alert' : 'status');
+      expect(toast.textContent).toContain(
+        'Removed 2 temporary folders in 2 workspaces. Kept 2 protected folders. Skipped 1 other folder.',
+      );
+      if (status === 'partial')
+        expect(toast.textContent).toContain('Could not remove 1 folder. Try Clean TMP again.');
+      expect(fakeController?.selected).toBe('b');
+    },
+  );
+
+  it('restores cleanup controls after a shared request error and permits a truthful empty retry', async () => {
+    const f = cleanupFixture();
+    await vi.waitFor(() => expect(fakeController?.selected).toBe('a'));
+    const action = within(document.getElementById('configuration-panel')!).getByRole('button', {
+      name: /^Clean TMP$/,
+      hidden: true,
+    }) as HTMLButtonElement;
+    action.click();
+    f.finish(
+      new Response(
+        JSON.stringify({ code: 'TMP_CLEANUP_UNAVAILABLE', detail: 'private filesystem details' }),
+        { status: 503 },
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain(
+        'Temporary files could not be checked. Try Clean TMP again.',
+      ),
+    );
+    expect(action.disabled).toBe(false);
+    expect(screen.getByRole('alert').textContent).not.toContain('private');
+    await fireEvent.click(screen.getByRole('button', { name: 'Dismiss error notification' }));
+    f.defer();
+    action.click();
+    f.finish(
+      new Response(
+        JSON.stringify({
+          status: 'complete',
+          folders: { removed: 0, skipped: 0, failed: 0 },
+          workspaces: { cleaned: 2, removed: 0, skipped: 0, failed: 0, unavailable: 0 },
+          reasons: {
+            protected: 0,
+            busy: 0,
+            lease: 0,
+            unrecognized: 0,
+            unsafe: 0,
+            unavailable: 0,
+            io: 0,
+          },
+        }),
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(document.querySelector('.toast')?.textContent).toContain(
+        'No temporary folders to remove.',
+      ),
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(
+      f.fetcher.mock.calls.filter(([path]) => String(path) === '/api/maintenance/clean-tmp'),
+    ).toHaveLength(2);
+  });
+  function forgettingFixture(initialPhase?: SessionForgetOperation['phase']) {
+    const owner = {
+      id: 'a',
+      state: 'released',
+      threadId: 'thread-a',
+      workspacePath: '/forget-me',
+      resumeCommand: 'codex resume thread-a',
+    };
+    const other = {
+      id: 'b',
+      state: 'ready',
+      threadId: 'thread-b',
+      workspacePath: '/other-session',
+    };
+    let phase = initialPhase;
+    let removed = false;
+    let release!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    const operation = (): SessionForgetOperation | undefined =>
+      phase
+        ? {
+            operationId: 'durable-forget',
+            sessionId: owner.id,
+            phase,
+            updatedAt: '2026-11-04T10:00:00.000Z',
+            ...(phase === 'failed' ? { failureCode: 'SESSION_CLEANUP_FAILED' as const } : {}),
+          }
+        : undefined;
+    const roster = () => [...(removed ? [] : [{ ...owner, forgetOperation: operation() }]), other];
+    const fetcher = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const path = String(input);
+        if (path === '/api/sessions/a' && init?.method === 'DELETE') {
+          phase = 'stopping';
+          return pending;
+        }
+        return new Response(
+          JSON.stringify(
+            path === '/api/bootstrap'
+              ? {
+                  workspaces: [],
+                  profiles: [],
+                  models: { codex: [], kimi: [] },
+                  sessions: roster(),
+                }
+              : path === '/api/sessions'
+                ? roster()
+                : path === '/api/sessions/a'
+                  ? { ...owner, forgetOperation: operation() }
+                  : path === '/api/skill-profiles'
+                    ? { profiles: [] }
+                    : [],
+          ),
+        );
+      },
+    );
+    const view = render(RelayApp, {
+      authorizedFetch: fetcher,
+      passkeyAuthEnabled: false,
+      theme: 'minimal-dark',
+      onlock: vi.fn(),
+    });
+    return {
+      view,
+      fetcher,
+      release,
+      phase: (next: NonNullable<typeof phase>) => {
+        phase = next;
+        fakeController?.metadata('a', {
+          sequence: 1,
+          type: 'session.forget.updated',
+          payload: operation(),
+        });
+      },
+      finish: () => {
+        removed = true;
+        release(new Response(null, { status: 204 }));
+      },
+    };
+  }
+
+  it('renders immediately through delayed stop/deletion, prevents duplicate forgets and keeps another session usable until history placement', async () => {
+    const f = forgettingFixture();
+    try {
+      await vi.waitFor(() => expect(screen.getByRole('button', { name: /^Forget$/ })).toBeTruthy());
+      const row = () => document.querySelector('[data-session-id="a"]') as HTMLElement;
+      const forget = within(row()).getByRole('button', { name: /^Forget$/ });
+      await fireEvent.click(forget);
+      expect(row().getAttribute('aria-busy')).toBe('true');
+      expect(within(row()).getByRole('status').textContent).toContain('Forgetting session…');
+      await fireEvent.click(forget);
+      expect(
+        f.fetcher.mock.calls.filter(
+          ([path, init]) => String(path) === '/api/sessions/a' && init?.method === 'DELETE',
+        ),
+      ).toHaveLength(1);
+      expect(screen.queryByRole('list', { name: 'Recent sessions' })).toBeNull();
+      f.phase('cleaning');
+      await vi.waitFor(() =>
+        expect(within(row()).getByRole('status').textContent).toContain(
+          'Removing temporary files…',
+        ),
+      );
+      await fireEvent.click(
+        within(document.querySelector('[data-session-id="b"]') as HTMLElement).getByRole('button', {
+          name: /^Open$/,
+        }),
+      );
+      await vi.waitFor(() => expect(fakeController?.selected).toBe('b'));
+      const prompt = screen.getByRole('textbox', { name: 'Prompt' });
+      await fireEvent.input(prompt, { target: { value: 'Other session stays usable' } });
+      await fireEvent.click(screen.getByRole('button', { name: 'Send prompt' }));
+      expect(submittedSessionId).toBe('b');
+      f.finish();
+      await fireEvent.click(screen.getByRole('button', { name: /^Sessions$/ }));
+      await vi.waitFor(() => expect(document.querySelector('[data-session-id="a"]')).toBeNull());
+      expect(
+        within(screen.getByRole('list', { name: 'Recent sessions' })).getByText('/forget-me'),
+      ).toBeTruthy();
+    } finally {
+      f.finish();
+      f.view.unmount();
+    }
+  });
+
+  it('restores failed controls with a shared error toast, and retries the retained frame', async () => {
+    const f = forgettingFixture();
+    try {
+      await vi.waitFor(() => expect(screen.getByRole('button', { name: /^Forget$/ })).toBeTruthy());
+      await fireEvent.click(screen.getByRole('button', { name: /^Forget$/ }));
+      f.phase('failed');
+      f.release(new Response(JSON.stringify({ code: 'SESSION_FORGET_FAILED' }), { status: 503 }));
+      await vi.waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Retry Forget' })).toBeTruthy(),
+      );
+      expect(screen.getByRole('alert').textContent).toContain(
+        'Temporary files could not be removed',
+      );
+      const row = document.querySelector('[data-session-id="a"]') as HTMLElement;
+      expect(row.getAttribute('aria-busy')).toBe('false');
+      expect(
+        (within(row).getByRole('button', { name: /^Open$/ }) as HTMLButtonElement).disabled,
+      ).toBe(false);
+      await vi.waitFor(() =>
+        expect(
+          f.fetcher.mock.calls.some(
+            ([path, init]) => String(path) === '/api/sessions/a' && !init?.method,
+          ),
+        ).toBe(true),
+      );
+      await fireEvent.click(screen.getByRole('button', { name: 'Retry Forget' }));
+      await vi.waitFor(() =>
+        expect(
+          f.fetcher.mock.calls.filter(
+            ([path, init]) => String(path) === '/api/sessions/a' && init?.method === 'DELETE',
+          ),
+        ).toHaveLength(2),
+      );
+      expect(screen.queryByRole('list', { name: 'Recent sessions' })).toBeNull();
+    } finally {
+      f.finish();
+      f.view.unmount();
+    }
+  });
+
+  it.each(['stopping', 'failed'] as const)(
+    'rehydrates %s from backend bootstrap after reload',
+    async (phase) => {
+      const f = forgettingFixture(phase);
+      try {
+        await vi.waitFor(() =>
+          expect(document.querySelector('[data-session-id="a"]')).not.toBeNull(),
+        );
+        const row = document.querySelector('[data-session-id="a"]') as HTMLElement;
+        expect(row.getAttribute('aria-busy')).toBe(String(phase !== 'failed'));
+        expect(within(row).getByRole('status').textContent).toContain(
+          phase === 'failed' ? 'Could not forget' : 'Forgetting session…',
+        );
+        expect(f.fetcher.mock.calls.filter(([, init]) => init?.method === 'DELETE')).toHaveLength(
+          0,
+        );
+        if (phase === 'failed')
+          expect(screen.getByRole('alert').textContent).toContain(
+            'Temporary files could not be removed',
+          );
+      } finally {
+        f.view.unmount();
+      }
+    },
+  );
+
   it('copies the selected Chat session and removes the header action on other tabs', async () => {
     const writeText = vi.fn(async () => {});
     const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
