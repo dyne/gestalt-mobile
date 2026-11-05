@@ -1965,7 +1965,9 @@ describe('production composition', () => {
           }),
         },
       });
-      const sessions = await Promise.all([createComposedSession(app), createComposedSession(app)]);
+      onTestFinished(() => app.close());
+      // Managed TMPDIR fixtures share an ancestor publication fence during session creation.
+      const sessions = [await createComposedSession(app), await createComposedSession(app)];
       await vi.waitFor(async () =>
         expect(
           await Promise.all(

@@ -1612,6 +1612,13 @@ export class CodexSessionRuntime {
       } catch (error) {
         if (!canRebindMissingRollout(session, error)) throw error;
         missingRollout = error;
+        // The retained rollout is absent: this authorized replacement is a
+        // fresh instruction boundary, using the already-owned capability state.
+        // Do not replay provider preparation, leases or scratch allocation.
+        if (resource.retrieval?.prepareFreshStartup) {
+          await resource.retrieval.prepareFreshStartup();
+          resource.modelConfig = resource.retrieval.config;
+        }
         const replacementThreadId = await this.startThread(
           resource.process,
           session,
