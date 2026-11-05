@@ -7,6 +7,7 @@
 import { readFile, realpath } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { sessionScratchEnvironmentKeys } from '../scratch/child-environment.js';
+import { withCapabilityInstructions } from './instruction-blocks.js';
 import type { SessionScratch } from '../../features/sessions/application/session-scratch.js';
 import type { RelaySessionSnapshot } from '../../features/sessions/model/relay-session.js';
 import type { AvailableSkill } from '../../features/skills/model/skill-profile.js';
@@ -403,6 +404,10 @@ export class CodexPlaywright {
     };
     let available = enabled;
     const state: CodexRetrievalState = {
+      get startup() {
+        return base.startup;
+      },
+      prepareFreshStartup: base.prepareFreshStartup?.bind(base),
       get ready() {
         return base.ready || available;
       },
@@ -425,8 +430,17 @@ export class CodexPlaywright {
         );
       },
       get config() {
-        return {
-          ...base.config,
+        const baseConfig = base.config;
+        const instructions =
+          typeof baseConfig.developer_instructions === 'string'
+            ? baseConfig.developer_instructions
+            : typeof native.developer_instructions === 'string'
+              ? native.developer_instructions
+              : compatible
+                ? ''
+                : undefined;
+        const config: Record<string, unknown> = {
+          ...baseConfig,
           mcp_servers: {
             ...(base.config.mcp_servers as object),
             ...mcp,
@@ -447,8 +461,15 @@ export class CodexPlaywright {
               { name: 'gestalt:playwright', enabled: false },
             ],
           },
-          developer_instructions: `${base.config.developer_instructions ?? ''}\n<gestalt_playwright_unavailable>Browser guidance is inactive until this host verifies connected standard tools. Use gestalt_managed_playwright for session-scoped requests. Installation or a plan declaration never grants consent. Pending activation requires a safe owned-runtime resume.</gestalt_playwright_unavailable>`,
         };
+        if (instructions !== undefined)
+          config.developer_instructions = withCapabilityInstructions(
+            instructions,
+            'playwright',
+            '<gestalt_playwright_unavailable>Browser guidance is inactive until this host verifies connected standard tools. Use gestalt_managed_playwright for session-scoped requests. Installation or a plan declaration never grants consent. Pending activation requires a safe owned-runtime resume.</gestalt_playwright_unavailable>',
+          );
+        else delete config.developer_instructions;
+        return config;
       },
       // Each verifier already disables only its failed connection. A shared
       // fallback must not disable a healthy browser after an XERJ/Serena failure.

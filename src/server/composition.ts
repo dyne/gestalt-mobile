@@ -1784,6 +1784,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               skills: catalog.skills,
               skillsConfig: selected.skillsConfig,
               start: true,
+              startup: !session.threadId,
             });
             return playwright.prepare(state, playwrightAuthority(session), {
               rpc,
