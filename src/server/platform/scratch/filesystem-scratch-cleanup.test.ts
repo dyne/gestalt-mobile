@@ -694,7 +694,19 @@ describe('managed scratch cleanup', () => {
     expect(await readFile(target, 'utf8')).toBe(contents);
   });
 
-  it.each(['workspace', 'tmp', 'container', 'owner', 'child'])(
+  it('cleans payload directory symlinks without deleting their external targets', async () => {
+    const f = await fixture();
+    const context = await f.scratch.allocate(f.session());
+    const outside = join(f.root, 'outside');
+    await mkdir(outside);
+    await writeFile(join(outside, 'keep'), 'keep');
+    await symlink(outside, join(context.directory, 'link'));
+    expect((await f.cleanup()).folders).toMatchObject({ removed: 1, skipped: 0, failed: 0 });
+    await expect(lstat(context.directory)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(outside, 'keep'), 'utf8')).toBe('keep');
+  });
+
+  it.each(['workspace', 'tmp', 'container', 'owner'])(
     'retains symlinked %s paths without deleting their targets',
     async (part) => {
       const f = await fixture();
@@ -702,8 +714,7 @@ describe('managed scratch cleanup', () => {
       const outside = join(f.root, 'outside');
       await mkdir(outside);
       await writeFile(join(outside, 'keep'), 'keep');
-      if (part === 'child') await symlink(outside, join(context.directory, 'link'));
-      else if (part === 'workspace') {
+      if (part === 'workspace') {
         const alias = join(f.root, 'alias');
         await symlink(f.workspacePath, alias);
         f.known.splice(0, f.known.length, alias);

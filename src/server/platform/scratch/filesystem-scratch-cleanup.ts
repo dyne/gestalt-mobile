@@ -113,7 +113,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
           protectedSessions,
           authorized,
         );
-        await this.noLinks(directory);
+        await this.validatePayload(directory);
         await privateDirectory(directory, false);
         await containment.revalidate();
         if (name === ownerId) {
@@ -264,7 +264,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
     }
   }
 
-  private async noLinks(
+  private async validatePayload(
     directory: string,
     root = directory,
     depth = 0,
@@ -292,13 +292,15 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
       const path = join(directory, child);
       const info = await lstat(path);
       if (
-        info.isSymbolicLink() ||
         (process.getuid && info.uid !== process.getuid()) ||
-        (!info.isDirectory() && !info.isFile()) ||
+        (!info.isDirectory() && !info.isFile() && !info.isSymbolicLink()) ||
         (info.isFile() && info.nlink !== 1)
       )
         reject('unsafe');
-      if (info.isDirectory()) await this.noLinks(path, root, depth + 1, budget);
+      // Payload symlinks (for example npm's .bin entries) are disposable links.
+      // lstat never follows them, and rm unlinks them without deleting their targets.
+      // Owner paths and authority metadata retain their separate no-link checks.
+      if (info.isDirectory()) await this.validatePayload(path, root, depth + 1, budget);
     }
   }
 }
