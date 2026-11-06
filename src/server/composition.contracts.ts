@@ -8126,7 +8126,40 @@ describe('production composition', () => {
       const analytics = replay.events.filter((event) => event.type === 'tool.efficiency.updated');
       expect(analytics).toHaveLength(6);
       expect(analytics.at(-1)?.payload).toEqual(snapshot);
-      expect(JSON.stringify(analytics)).not.toMatch(/secret|synthetic command|500|1000|nested/);
+      const assertPayloadPrivacy = (value: unknown): void => {
+        if (typeof value === 'number') expect([500, 1000]).not.toContain(value);
+        else if (value && typeof value === 'object') {
+          for (const [key, child] of Object.entries(value)) {
+            expect(key).not.toMatch(
+              /token|usage|^(arguments|command|aggregatedOutput|contentItems|text|prompt|output|code)$/i,
+            );
+            assertPayloadPrivacy(child);
+          }
+        }
+      };
+      const assertAnalyticsPrivacy = (events: typeof analytics) => {
+        expect(JSON.stringify(events)).not.toMatch(/secret|synthetic command|nested/);
+        for (const event of events) assertPayloadPrivacy(event.payload);
+      };
+      assertAnalyticsPrivacy(analytics);
+      // Milliseconds are valid observation metadata, not numeric provider usage.
+      assertAnalyticsPrivacy([
+        {
+          ...analytics[0]!,
+          occurredAt: '2026-11-06T19:32:00.500Z',
+          payload: { ...snapshot, observedAt: '2026-11-06T19:32:00.500Z' },
+        },
+      ]);
+      // Keep the privacy guard sensitive to usage fields and values at any depth.
+      for (const payload of [
+        { groups: [{ totalTokens: 1 }] },
+        { tokenUsage: { last: { value: 1 } } },
+        { groups: [{ durationMs: { value: 500 } }] },
+        { groups: [{ durationMs: { value: 1000 } }] },
+        { groups: [{ command: 'otherwise innocuous' }] },
+        { groups: [{ description: 'secret synthetic command nested' }] },
+      ])
+        expect(() => assertAnalyticsPrivacy([{ ...analytics[0]!, payload }])).toThrow();
       const sameEvents = journal.currentSequence(sessionId);
       notify(wrapper);
       expect((await app.inject(`/api/sessions/${sessionId}`)).json().toolEfficiency).toEqual(
@@ -8317,20 +8350,63 @@ describe('production composition', () => {
       stage('journal');
       const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
       const journal = new SqliteEventJournal(database);
-      for (let index = 0; index < 250; index++)
-        journal.append(
+      let activity: ReturnType<SqliteEventJournal['append']>;
+      try {
+        // Replay size is the precondition; per-append transaction throughput is not under test.
+        database.exec('BEGIN IMMEDIATE');
+        let firstSequence: number;
+        try {
+          const row = database
+            .prepare('SELECT next_sequence AS sequence FROM relay_sessions WHERE id = ?')
+            .get(sessionId) as { sequence: number };
+          firstSequence = row.sequence;
+          expect(firstSequence).toBe(journal.currentSequence(sessionId) + 1);
+          const insert = database.prepare(
+            'INSERT INTO session_events (session_id,sequence,occurred_at,type,payload_json) VALUES (?,?,?,?,?)',
+          );
+          const payload = JSON.stringify({ synthetic: 'x'.repeat(4096) });
+          for (let index = 0; index < 250; index++)
+            insert.run(
+              sessionId,
+              firstSequence + index,
+              new Date().toISOString(),
+              'agent.activity.updated',
+              payload,
+            );
+          expect(
+            database
+              .prepare('UPDATE relay_sessions SET next_sequence = ? WHERE id = ?')
+              .run(firstSequence + 250, sessionId).changes,
+          ).toBe(1);
+          expect(
+            database
+              .prepare(
+                "SELECT COUNT(*) AS count, SUM(length(CAST(payload_json AS BLOB))) AS bytes, MIN(sequence) AS first, MAX(sequence) AS last FROM session_events WHERE session_id = ? AND type = 'agent.activity.updated' AND sequence >= ? AND sequence < ?",
+              )
+              .get(sessionId, firstSequence, firstSequence + 250),
+          ).toMatchObject({
+            count: 250,
+            bytes: Buffer.byteLength(payload) * 250,
+            first: firstSequence,
+            last: firstSequence + 249,
+          });
+          expect(Buffer.byteLength(payload) * 250).toBeGreaterThan(1_000_000);
+          database.exec('COMMIT');
+        } catch (error) {
+          database.exec('ROLLBACK');
+          throw error;
+        }
+        activity = journal.append(
           sessionId,
-          'agent.activity.updated',
-          { synthetic: 'x'.repeat(4096) },
+          'activity.updated',
+          { id: 'command', label: 'Command', detail: 'completed' },
           new Date().toISOString(),
         );
-      const activity = journal.append(
-        sessionId,
-        'activity.updated',
-        { id: 'command', label: 'Command', detail: 'completed' },
-        new Date().toISOString(),
-      );
-      database.close();
+        expect(activity.sequence).toBe(firstSequence + 250);
+        expect(journal.currentSequence(sessionId)).toBe(activity.sequence);
+      } finally {
+        database.close();
+      }
       const fullRead = vi.spyOn(SqliteEventJournal.prototype, 'since').mockImplementation(() => {
         throw new Error('Unbounded journal reads must not be used by Chat');
       });

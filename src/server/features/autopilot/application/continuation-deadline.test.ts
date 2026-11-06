@@ -52,7 +52,7 @@ describe('continuation deadline across reconciliation', () => {
     });
     const events: string[] = [];
     let controlNumber = 0;
-    const coordinator = new AutopilotCoordinator({
+    const dependencies: ConstructorParameters<typeof AutopilotCoordinator>[0] = {
       store,
       now,
       policy: { ...defaultAutopilotPolicy, backoffMs: () => 4_000 },
@@ -107,10 +107,13 @@ describe('continuation deadline across reconciliation', () => {
         events.push(type);
         journal.append(sessionId, type, payload, at, outboxId);
       },
-    });
+    };
+    let coordinator = new AutopilotCoordinator(dependencies);
     coordinator.enable('s');
     return {
-      coordinator,
+      get coordinator() {
+        return coordinator;
+      },
       database,
       store,
       activity,
@@ -120,6 +123,10 @@ describe('continuation deadline across reconciliation', () => {
       events,
       block: () => {
         pendingInteraction = true;
+      },
+      restart: () => {
+        coordinator.dispose('s');
+        coordinator = new AutopilotCoordinator(dependencies);
       },
       close: () => {
         coordinator.dispose('s');
@@ -303,26 +310,64 @@ describe('continuation deadline across reconciliation', () => {
     }
   });
 
-  it('recovers a completed run after restoring its durable wait', () => {
+  it('recovers a completed run after restoring its durable wait', async () => {
     let result: 'running' | 'completed' = 'running';
-    const f = fixture(undefined, 'idle', () => result);
+    const f = fixture(undefined, 'idle', () => result, true);
+    const runId = '00000000-0000-4000-8000-000000000001';
     try {
+      const clock = new Date().toISOString();
+      f.activity.rootThreadId = 'root';
+      f.activity.subagents = [
+        {
+          id: 'child',
+          threadId: 'child',
+          canonicalPosition: 'L1',
+          canonicalTaskName: 'l1',
+          taskPath: '/root/l1',
+          continuationGeneration: 1,
+          state: 'idle',
+          outcome: 'partial',
+          reason: 'turnCompleted',
+          observedAt: clock,
+          lastActivityAt: clock,
+          ownedProcesses: [],
+        },
+      ];
+      expect(f.coordinator.reconcileExecutorBinding('s').status).toBe('ready');
+      const assigned = f.store.find('s')!.executor!;
       expect(
         f.coordinator.registerProactiveWait('s', {
           id: 'restored-run',
           leaseId: 'restored-wait',
-          runId: '00000000-0000-4000-8000-000000000001',
+          runId,
           maxWaitMs: 60_000,
           wakeConditions: ['processResultAvailable'],
         }),
       ).toBe(true);
-      f.coordinator.dispose('s');
+      // Discard every coordinator-local cache/subscription, retaining only SQLite state.
+      const previous = f.coordinator;
+      f.restart();
+      expect(f.coordinator).not.toBe(previous);
       result = 'completed';
       f.coordinator.restore('s');
       expect(f.events.filter((type) => type === 'autopilot.wait-woken')).toHaveLength(1);
       expect(f.store.find('s')!.supervision?.waitLease).toBeNull();
+      expect(f.store.find('s')!.supervision?.wakeCause?.runId).toBe(runId);
+      expect(f.coordinator.rootProcessCompleted('s', runId)).toBe(false);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(f.start).toHaveBeenCalledOnce();
+      expect(f.resume).not.toHaveBeenCalled();
+      expect(f.store.find('s')!.executor).toMatchObject({
+        threadId: assigned.threadId,
+        taskPath: assigned.taskPath,
+        continuationGeneration: assigned.continuationGeneration,
+        assignment: assigned.assignment,
+      });
+      expect(f.store.find('s')!.supervision?.wakeCause).toBeNull();
+      expect(f.events.filter((type) => type === 'autopilot.wait-woken')).toHaveLength(1);
     } finally {
       f.close();
+      expect(vi.getTimerCount()).toBe(0);
     }
   });
 
