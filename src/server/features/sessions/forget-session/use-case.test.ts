@@ -140,6 +140,34 @@ async function fixture() {
 }
 
 describe('durable Forget orchestration', () => {
+  it('retries Forget successfully when a retained Self DEBUG workspace no longer exists', async () => {
+    const f = await fixture();
+    const forget = f.make(
+      async () => {},
+      async () => {
+        throw new Error('SESSION_CLEANUP_FAILED');
+      },
+    );
+    expect((await forget.execute(f.session.id))?.phase).toBe('failed');
+    await rm(f.workspacePath, { recursive: true });
+    const retry = f.make();
+    const app = fastify();
+    registerForgetSession(app, {
+      find: (id) => f.sessions.find(id),
+      forget: (id) => retry.execute(id),
+    });
+    try {
+      const reply = await app.inject({ method: 'DELETE', url: `/api/sessions/${f.session.id}` });
+      expect(reply.statusCode, reply.body).toBe(204);
+      expect(f.operations.find(f.session.id)?.phase).toBe('completed');
+      expect(f.sessions.find(f.session.id)).toBeNull();
+      await expect(lstat(f.workspacePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await app.close();
+      await retry.drain();
+    }
+  });
+
   it('forgets npm-style scratch symlinks without following external, dangling or cyclic targets', async () => {
     const f = await fixture();
     const outside = join(f.root, 'outside');

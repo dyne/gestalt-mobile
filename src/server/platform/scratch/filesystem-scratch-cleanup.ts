@@ -36,6 +36,17 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
     authorized: () => boolean,
     protectedSessions: () => readonly ScratchSessionOwner[],
   ) {
+    // A retained session can outlive its workspace (including Self DEBUG).
+    // Only an absent workspace is already clean; existing links and invalid
+    // paths must still pass the normal canonical-path checks below.
+    if (isAbsolute(session.workspacePath)) {
+      try {
+        await lstat(session.workspacePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+        throw error;
+      }
+    }
     const counts = await this.cleanWorkspace(
       session.workspacePath,
       protectedSessions,
