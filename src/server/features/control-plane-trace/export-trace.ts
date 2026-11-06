@@ -59,6 +59,7 @@ const diagnosticFields = new Set([
   'reason',
   'code',
   'rpcCode',
+  'disposition',
   'providerFailure',
   'actor',
   'retryAttempt',
@@ -105,7 +106,15 @@ export function redactDiagnosticPayload(value: unknown, depth = 0): unknown {
   if (!value || typeof value !== 'object') return null;
   return Object.fromEntries(
     Object.entries(value)
-      .filter(([key]) => diagnosticFields.has(key))
+      .filter(
+        ([key, item]) =>
+          diagnosticFields.has(key) &&
+          (key !== 'disposition' ||
+            (typeof item === 'string' &&
+              ['acceptedWait', 'rejectedFinal', 'unknownWait', 'executorResumeRecovery'].includes(
+                item,
+              ))),
+      )
       .map(([key, item]) => [key, redactDiagnosticPayload(item, depth + 1)]),
   );
 }
@@ -127,31 +136,164 @@ function correlation(payload: Record<string, unknown>): string | null {
   return null;
 }
 
+function handoffIdentity(payload: Record<string, unknown>, key: string): string | null {
+  const value = payload[key];
+  return typeof value === 'string' && value && value !== '[redacted]' ? value : null;
+}
+
+function matchesHandoff(checkpoint: TraceRow, event: TraceRow): boolean {
+  let matched = false;
+  for (const key of ['traceId', 'handoffId']) {
+    const selected = handoffIdentity(checkpoint.payload, key);
+    const observed = handoffIdentity(event.payload, key);
+    if (selected && observed) {
+      if (selected !== observed) return false;
+      matched = true;
+    }
+  }
+  return matched;
+}
+
+function conflictsWithHandoff(left: TraceRow, right: TraceRow): boolean {
+  return ['traceId', 'handoffId'].some((key) => {
+    const a = handoffIdentity(left.payload, key);
+    const b = handoffIdentity(right.payload, key);
+    return a !== null && b !== null && a !== b;
+  });
+}
+
+function matchesAttempt(failure: TraceRow, event: TraceRow): boolean {
+  return (
+    ['requestId', 'threadId'].every((key) => {
+      const id = handoffIdentity(failure.payload, key);
+      return id !== null && id === handoffIdentity(event.payload, key);
+    }) &&
+    Number.isSafeInteger(failure.payload.generation) &&
+    Number(failure.payload.generation) > 0 &&
+    failure.payload.generation === event.payload.generation &&
+    !conflictsWithHandoff(failure, event)
+  );
+}
+
 function diagnose(events: readonly TraceRow[]): string[] {
   const diagnoses: string[] = [];
   if (!events.length) return ['no control-plane events found for this session'];
   const checkpointIndex = events.findLastIndex((event) => event.type.endsWith('-checkpointed'));
   const currentHandoff = checkpointIndex < 0 ? events : events.slice(checkpointIndex);
-  const types = new Set(currentHandoff.map((event) => event.type));
+  const checkpoint = checkpointIndex < 0 ? undefined : events[checkpointIndex];
+  const hasIdentity =
+    checkpoint && ['traceId', 'handoffId'].some((key) => handoffIdentity(checkpoint.payload, key));
+  // Legacy rows retain their chronological diagnostics, but cannot establish
+  // matching coverage. A shared turn alone is not a handoff identity.
+  if (checkpoint && !hasIdentity)
+    diagnoses.push(
+      'checkpoint correlation unavailable; matching handoff evidence cannot be established',
+    );
+  const selected = currentHandoff.filter(
+    (event) => !hasIdentity || matchesHandoff(checkpoint!, event),
+  );
+  // A control-only cancellation/outcome can close only the control actually
+  // linked by a retained selected schedule/issue event. Conflicting handoff
+  // identifiers must not be rescued by a shared control ID.
+  const controls = new Set(
+    selected
+      .filter((event) =>
+        ['autopilot.continuation-scheduled', 'autopilot.control-issued'].includes(event.type),
+      )
+      .map((event) => handoffIdentity(event.payload, 'controlId'))
+      .filter((id) => id !== null),
+  );
+  const matching = currentHandoff.filter(
+    (event) =>
+      selected.includes(event) ||
+      (checkpoint &&
+        !conflictsWithHandoff(checkpoint, event) &&
+        ['autopilot.control-cancelled', 'autopilot.turn-started', 'autopilot.turn-failed'].includes(
+          event.type,
+        ) &&
+        controls.has(handoffIdentity(event.payload, 'controlId') ?? '')),
+  );
+  const types = new Set(matching.map((event) => event.type));
+  const closedAfter = (boundary: TraceRow, outcomes: readonly string[]) =>
+    matching.some(
+      (event) =>
+        event.sequence > boundary.sequence &&
+        outcomes.includes(event.type) &&
+        !conflictsWithHandoff(boundary, event) &&
+        (!handoffIdentity(boundary.payload, 'controlId') ||
+          boundary.payload.controlId === event.payload.controlId),
+    );
+  const scheduled = matching.findLast((event) => event.type === 'autopilot.continuation-scheduled');
+  const issued = matching.findLast((event) => event.type === 'autopilot.control-issued');
+  // Terminal supervision closes with a matching report, not another turn.
+  const terminalCheckpoint = checkpoint?.type === 'org-plan.terminal-review-checkpointed';
+  if (terminalCheckpoint && !types.has('org-plan.terminal-review-reported'))
+    diagnoses.push('terminal checkpoint persisted, but no report was observed');
   if (
+    !terminalCheckpoint &&
     (types.has('org-plan.step-checkpointed') || types.has('org-plan.milestone-checkpointed')) &&
     !types.has('autopilot.continuation-scheduled')
   )
     diagnoses.push('checkpoint persisted, but no continuation was scheduled');
   if (
-    types.has('autopilot.continuation-scheduled') &&
-    !types.has('autopilot.control-issued') &&
-    !types.has('autopilot.executor-resumed')
+    scheduled &&
+    !closedAfter(scheduled, [
+      'autopilot.control-issued',
+      'autopilot.executor-resumed',
+      'autopilot.control-cancelled',
+    ])
   )
     diagnoses.push('continuation scheduled, but no control or executor dispatch was observed');
   if (
-    types.has('autopilot.control-issued') &&
-    !types.has('autopilot.turn-started') &&
-    !types.has('autopilot.turn-failed')
+    issued &&
+    !closedAfter(issued, [
+      'autopilot.turn-started',
+      'autopilot.turn-failed',
+      'autopilot.control-cancelled',
+    ])
   )
     diagnoses.push('control issued, but no turn acceptance or failure was observed');
   if (types.has('org-plan.checkpoint-handoff-failed'))
     diagnoses.push('checkpoint response handoff failed; inspect the matching trace ID');
+  const resumeFailure = matching.findLast(
+    (event) =>
+      event.type === 'autopilot.operation-failed' && event.payload.kind === 'executorResume',
+  );
+  if (resumeFailure) {
+    diagnoses.push('executor resume failure cause is unknown in retained evidence');
+    const recoverySchedule = matching.find(
+      (event) =>
+        event.sequence > resumeFailure.sequence &&
+        event.type === 'autopilot.continuation-scheduled' &&
+        event.payload.disposition === 'executorResumeRecovery' &&
+        matchesAttempt(resumeFailure, event),
+    );
+    const recovered =
+      recoverySchedule &&
+      matching.some(
+        (event) =>
+          event.sequence > recoverySchedule.sequence &&
+          event.type === 'autopilot.turn-started' &&
+          event.payload.disposition === 'executorResumeRecovery' &&
+          matchesAttempt(resumeFailure, event) &&
+          handoffIdentity(recoverySchedule.payload, 'controlId') !== null &&
+          event.payload.controlId === recoverySchedule.payload.controlId,
+      );
+    diagnoses.push(
+      recovered
+        ? 'root continuation observed after executor resume failure; executor outcome remains unconfirmed'
+        : 'executor resume failed; no matching root recovery continuation was observed; executor outcome remains unconfirmed',
+    );
+  }
+  if (
+    matching.some(
+      (event) =>
+        event.type === 'autopilot.final-rejected' &&
+        event.payload.reason === 'incompletePlan' &&
+        !['acceptedWait', 'rejectedFinal'].includes(String(event.payload.disposition)),
+    )
+  )
+    diagnoses.push('incomplete final disposition is unknown in retained evidence');
   if (currentHandoff.some((event) => event.type === 'agent.activity.updated'))
     diagnoses.push(
       'backend agent projection was recorded; browser delivery still requires the client event cursor',
@@ -262,8 +404,12 @@ export function formatControlPlaneTrace(trace: ControlPlaneTrace): string {
             : ''
         }`
       : '';
+    const dispositionLabel =
+      typeof event.payload.disposition === 'string'
+        ? ` disposition=${event.payload.disposition}`
+        : '';
     lines.push(
-      `${String(event.sequence).padStart(6)}  ${event.occurredAt}  ${event.type}${correlationLabel}${startupLabel}`,
+      `${String(event.sequence).padStart(6)}  ${event.occurredAt}  ${event.type}${correlationLabel}${startupLabel}${dispositionLabel}`,
     );
   }
   lines.push('', 'Diagnosis:');

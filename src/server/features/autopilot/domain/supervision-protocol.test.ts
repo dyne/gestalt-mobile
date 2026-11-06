@@ -60,6 +60,43 @@ it('validates run-scoped durable leases and consumes only a matching process eve
   expect(consumeObservableWake(parked, { ...event, runId }).waitLease).toBeNull();
 });
 
+it('round-trips optional wait ownership and failed-attempt diagnostics without inventing legacy metadata', () => {
+  const legacy = startSupervisionProtocol('initial');
+  const recovery = {
+    requestId: 'command-1',
+    threadId: 'executor-1',
+    generation: 2,
+    traceId: 'handoff-1',
+    controlId: 'root-control',
+  };
+  const parked = registerProactiveWait(legacy, {
+    id: 'report',
+    leaseId: 'lease',
+    wakeConditions: ['processExited'],
+    resumeAt: '2026-11-06T20:00:00Z',
+  });
+  const persisted = {
+    ...parked,
+    diagnosticRecovery: recovery,
+    waitLease: { ...parked.waitLease, turnId: 'root-turn' },
+  };
+  expect(parseSupervisionProtocolState(JSON.parse(JSON.stringify(persisted)))).toMatchObject(
+    persisted,
+  );
+  const parsedLegacy = parseSupervisionProtocolState(legacy)!;
+  expect(parsedLegacy).not.toHaveProperty('diagnosticRecovery');
+  expect(parsedLegacy.waitLease).toBeNull();
+  const malformed = parseSupervisionProtocolState({
+    ...persisted,
+    diagnosticRecovery: { ...recovery, generation: -1 },
+    waitLease: { ...persisted.waitLease, turnId: { prompt: 'private' } },
+  });
+  expect(malformed).toMatchObject({ outcome: 'parked' });
+  expect(malformed).not.toHaveProperty('diagnosticRecovery');
+  expect(malformed?.waitLease).not.toHaveProperty('turnId');
+  expect(JSON.stringify(malformed)).not.toContain('private');
+});
+
 const facts = (change: Partial<SemanticProgressFacts> = {}): SemanticProgressFacts => ({
   plan: { identity: 'plan-a', fingerprint: 'fingerprint-1', currentPosition: 'L1.1' },
   review: { status: 'UNREVIEWED' },

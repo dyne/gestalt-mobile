@@ -531,17 +531,46 @@ describe('managed Mobile Playwright session', () => {
     const f = await fixture();
     await f.control('start');
     const rpc = {
-      request: (method: string) =>
+      request: vi.fn((method: string) =>
         method === 'config/read' ? Promise.resolve({ config: f.native }) : new Promise(() => {}),
+      ),
     };
+    const deadline = Date.now() + 1000;
     const state = await f.adapter.prepare(f.base, f.authority, {
       rpc,
       skills: f.skills,
-      deadline: Date.now() + 50,
+      deadline,
     });
-    expect(await f.adapter.verify(rpc, 'root-a', state)).toBe(false);
+    const servers = state.config.mcp_servers as Record<string, { enabled?: boolean }> | undefined;
+    const diagnostic = {
+      enabled: servers?.[playwrightServerName]?.enabled === true,
+      readinessCalled: f.installation.ready.mock.calls.length > 0,
+      deadlineRemaining: Date.now() < deadline,
+    };
+    expect(diagnostic.enabled, JSON.stringify(diagnostic)).toBe(true);
+    expect(diagnostic.readinessCalled, JSON.stringify(diagnostic)).toBe(true);
+    // Preparation uses the fixture's usual bounded budget. Give only the
+    // intended stalled verification the final 50 ms; its timeout stays real.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(deadline - 50);
+      expect(await f.adapter.verify(rpc, 'root-a', state)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(rpc.request).toHaveBeenCalledWith('mcpServerStatus/list', {
+      threadId: 'root-a',
+      serverName: playwrightServerName,
+      detail: 'full',
+    });
     expect(state.ready).toBe(true);
     expect(state.turnInstructions).toBe('');
+    expect(state.capabilities).toContainEqual({
+      skillName: 'gestalt:serena',
+      serverName: 'gestalt-serena',
+      ready: true,
+    });
+    expect(state.config.mcp_servers).toMatchObject({ unrelated: { command: 'keep' } });
   });
   it('binds an unavailable fresh declaration without resuming its unpersisted first root', async () => {
     const f = await fixture();

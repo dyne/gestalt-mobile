@@ -177,8 +177,17 @@ async function createComposedSession(app: Awaited<ReturnType<typeof composeAutho
     url: '/api/sessions',
     payload: { workspaceId: workspace.id, profile: 'default', provider: 'codex' },
   });
-  expect(created.statusCode).toBe(202);
-  return created.json().id as string;
+  const response = created.json() as { id?: string; code?: unknown; retryable?: unknown };
+  const diagnostic = {
+    status: created.statusCode,
+    code:
+      typeof response.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(response.code)
+        ? response.code
+        : null,
+    retryable: typeof response.retryable === 'boolean' ? response.retryable : null,
+  };
+  expect(created.statusCode, JSON.stringify(diagnostic)).toBe(202);
+  return response.id as string;
 }
 
 const autopilotPlanText = (childState: 'TODO' | 'DONE' = 'TODO') => `#+TITLE: Autopilot fixture
@@ -256,6 +265,63 @@ async function installAutopilotPlan(
     (await app.inject({ method: 'POST', url: `/api/sessions/${sessionId}/restore` })).statusCode,
   ).toBe(200);
   return planPath;
+}
+
+function ownRuntimeRecycles(sessionId: string, app: { close(): Promise<unknown> }) {
+  const owned: Array<ReturnType<CodexSessionRuntime['recycle']>> = [];
+  const pending = new Set<ReturnType<CodexSessionRuntime['recycle']>>();
+  const owners = new Set<CodexSessionRuntime>();
+  const recycle = CodexSessionRuntime.prototype.recycle;
+  const observer = vi.spyOn(CodexSessionRuntime.prototype, 'recycle').mockImplementation(function (
+    this: CodexSessionRuntime,
+    session,
+    now,
+  ) {
+    const result = recycle.call(this, session, now);
+    if (session.id === sessionId && (owners.size === 0 || owners.has(this))) {
+      owners.add(this);
+      owned.push(result);
+      pending.add(result);
+      void result.finally(() => pending.delete(result)).catch(() => {});
+    }
+    return result;
+  });
+  const drain = async () => {
+    const results: Array<
+      PromiseSettledResult<Awaited<ReturnType<CodexSessionRuntime['recycle']>>>
+    > = [];
+    while (results.length < owned.length)
+      results.push(...(await Promise.allSettled(owned.slice(results.length))));
+    return results;
+  };
+  let closing: ReturnType<typeof close> | undefined;
+  function close(): Promise<Awaited<ReturnType<typeof drain>>> {
+    return (closing ??= (async () => {
+      try {
+        const results: Awaited<ReturnType<typeof drain>> = [];
+        let joined: number | undefined;
+        try {
+          results.push(...(await drain()));
+          joined = owned.length;
+        } finally {
+          try {
+            await app.close();
+          } finally {
+            await drain();
+          }
+        }
+        expect(pending.size).toBe(0);
+        expect(owned.length).toBe(joined);
+        return results;
+      } finally {
+        observer.mockRestore();
+      }
+    })());
+  }
+  onTestFinished(async () => {
+    await close();
+  });
+  return { owned, pending, close };
 }
 
 async function createProductionAutopilotFixture(
@@ -4044,53 +4110,65 @@ describe('production composition', () => {
           };
         },
       });
-      const { handle, response, startsBefore, writersBefore } = await holdCheckpointRequest(
-        fixture,
-        timers,
-        992,
-      );
-      const starts = () =>
-        fixture.handles
-          .flatMap((candidate) => candidate.requests)
-          .filter((request) => request.method === 'turn/start').length;
-      const failures = () => {
-        const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
-        const count = database
-          .prepare(
-            "SELECT count(*) AS count FROM session_events WHERE type = 'org-plan.checkpoint-handoff-failed'",
-          )
-          .get() as { count: number };
-        database.close();
-        return count.count;
-      };
-      if (scenario === 'resultWritten-before-timeout') {
-        handle.responseSettled!({ id: 992, outcome: 'resultWritten' });
-        await expect(response).resolves.toEqual(toOrgPlanCheckpointToolResponse('recorded'));
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        expect(fixture.handles).toHaveLength(writersBefore);
-        expect(failures()).toBe(0);
-      } else if (scenario === 'duplicate-settlement') {
-        handle.responseSettled!({ id: 992, outcome: 'resultWritten' });
-        handle.responseSettled!({ id: 992, outcome: 'resultWritten' });
-        await expect(response).resolves.toEqual(toOrgPlanCheckpointToolResponse('recorded'));
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        expect(fixture.handles).toHaveLength(writersBefore);
-        expect(failures()).toBe(0);
-      } else {
-        if (scenario === 'writeFailed')
-          handle.responseSettled!({ id: 992, outcome: 'writeFailed' });
-        const lateSettlement = handle.responseSettled;
-        await expect(response).rejects.toThrow('CODEX_SERVER_REQUEST_CANCELLED');
-        await vi.waitFor(() => expect(fixture.handles.length).toBeGreaterThan(writersBefore), {
-          timeout: 1_000,
-        });
-        if (scenario === 'timeout-before-late-resultWritten')
-          lateSettlement!({ id: 992, outcome: 'resultWritten' });
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        expect(failures()).toBe(1);
+      const recovery = ownRuntimeRecycles(fixture.sessionId, fixture.app);
+      try {
+        const { handle, response, startsBefore, writersBefore } = await holdCheckpointRequest(
+          fixture,
+          timers,
+          992,
+        );
+        const starts = () =>
+          fixture.handles
+            .flatMap((candidate) => candidate.requests)
+            .filter((request) => request.method === 'turn/start').length;
+        const failures = () => {
+          const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+          const count = database
+            .prepare(
+              "SELECT count(*) AS count FROM session_events WHERE type = 'org-plan.checkpoint-handoff-failed'",
+            )
+            .get() as { count: number };
+          database.close();
+          return count.count;
+        };
+        if (scenario === 'resultWritten-before-timeout') {
+          handle.responseSettled!({ id: 992, outcome: 'resultWritten' });
+          await expect(response).resolves.toEqual(toOrgPlanCheckpointToolResponse('recorded'));
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          expect(fixture.handles).toHaveLength(writersBefore);
+          expect(failures()).toBe(0);
+        } else if (scenario === 'duplicate-settlement') {
+          handle.responseSettled!({ id: 992, outcome: 'resultWritten' });
+          handle.responseSettled!({ id: 992, outcome: 'resultWritten' });
+          await expect(response).resolves.toEqual(toOrgPlanCheckpointToolResponse('recorded'));
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          expect(fixture.handles).toHaveLength(writersBefore);
+          expect(failures()).toBe(0);
+        } else {
+          if (scenario === 'writeFailed')
+            handle.responseSettled!({ id: 992, outcome: 'writeFailed' });
+          const lateSettlement = handle.responseSettled;
+          await expect(response).rejects.toThrow('CODEX_SERVER_REQUEST_CANCELLED');
+          await vi.waitFor(() => expect(fixture.handles.length).toBeGreaterThan(writersBefore), {
+            timeout: 1_000,
+          });
+          expect(recovery.owned).toHaveLength(1);
+          await expect(recovery.owned[0]).resolves.toMatchObject({
+            id: fixture.sessionId,
+            state: 'ready',
+          });
+          if (scenario === 'timeout-before-late-resultWritten')
+            lateSettlement!({ id: 992, outcome: 'resultWritten' });
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          expect(failures()).toBe(1);
+        }
+        expect(recovery.owned).toHaveLength(
+          scenario === 'writeFailed' || scenario === 'timeout-before-late-resultWritten' ? 1 : 0,
+        );
+        expect(starts()).toBe(startsBefore);
+      } finally {
+        await recovery.close();
       }
-      expect(starts()).toBe(startsBefore);
-      await fixture.app.close();
     });
 
     it('does not apply checkpoint deadlines to quiz or approval requests', async () => {
@@ -5340,9 +5418,144 @@ describe('production composition', () => {
       },
     );
 
+    it.each([false, true, 'otherTurn', 'expired', 'missingOwner'] as const)(
+      'production trace distinguishes an incomplete final from accepted wait yield (wait: %s)',
+      async (wait) => {
+        const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+        let coordinator!: import('./features/autopilot/application/service.js').AutopilotCoordinator;
+        const fixture = await createProductionAutopilotFixture({
+          onAutopilotCoordinator: (value) => {
+            coordinator = value;
+          },
+          autopilotSchedule: (callback) => {
+            const timer = { callback, cancelled: false };
+            timers.push(timer);
+            return () => {
+              timer.cancelled = true;
+            };
+          },
+        });
+        onTestFinished(() => fixture.app.close());
+        timers.find((timer) => !timer.cancelled)!.callback();
+        await vi.waitFor(async () =>
+          expect(
+            (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().activeTurnId,
+          ).toEqual(expect.any(String)),
+        );
+        const session = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+        const handle = fixture.handles.find((candidate) =>
+          candidate.requests.some((request) => request.method === 'turn/start'),
+        )!;
+        if (wait) {
+          const result = (await handle.request!({
+            id: 9180,
+            method: 'item/tool/call',
+            params: {
+              threadId: session.threadId,
+              turnId: session.activeTurnId,
+              tool: 'gestalt_autopilot_wait_lease',
+              arguments: {
+                version: 2,
+                reportId: 'trace-wait-report',
+                leaseId: 'trace-wait-lease',
+                wakeConditions: ['processExited'],
+                maxWaitMs: 60_000,
+              },
+            },
+          })) as { contentItems: Array<{ text: string }> };
+          expect(JSON.parse(result.contentItems[0]!.text)).toMatchObject({ accepted: true });
+        }
+        if (typeof wait === 'string') {
+          const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+          try {
+            const row = database
+              .prepare('SELECT lifecycle_json FROM autopilot_sessions WHERE session_id = ?')
+              .get(fixture.sessionId) as { lifecycle_json: string };
+            const lifecycle = JSON.parse(row.lifecycle_json);
+            if (wait === 'otherTurn')
+              lifecycle.supervision.waitLease.turnId = 'unrelated-root-turn';
+            if (wait === 'expired')
+              lifecycle.supervision.waitLease.resumeAt = '2000-01-01T00:00:00Z';
+            if (wait === 'missingOwner') delete lifecycle.supervision.waitLease.turnId;
+            database
+              .prepare('UPDATE autopilot_sessions SET lifecycle_json = ? WHERE session_id = ?')
+              .run(JSON.stringify(lifecycle), fixture.sessionId);
+          } finally {
+            database.close();
+          }
+        }
+        expect(coordinator.turnCompleted(fixture.sessionId, session.activeTurnId)).toBe(false);
+        const path = join(fixture.dataDir, 'relay.sqlite');
+        const trace = exportControlPlaneTrace(path, fixture.sessionId);
+        const final = trace.events.findLast((event) => event.type === 'autopilot.final-rejected')!;
+        expect(final.payload).toMatchObject({
+          reason: 'incompletePlan',
+          disposition:
+            wait === true
+              ? 'acceptedWait'
+              : wait === 'missingOwner'
+                ? 'unknownWait'
+                : 'rejectedFinal',
+          turnId: session.activeTurnId,
+        });
+        if (wait === true) {
+          expect(final.payload.leaseId).toBe('trace-wait-lease');
+          expect(trace.events.some((event) => event.type === 'autopilot.wait-registered')).toBe(
+            true,
+          );
+        } else expect(final.payload).not.toHaveProperty('leaseId');
+        expect(trace.diagnoses).not.toContain(
+          'continuation scheduled, but no control or executor dispatch was observed',
+        );
+        expect(trace.diagnoses).not.toContain(
+          'control issued, but no turn acceptance or failure was observed',
+        );
+      },
+    );
+
+    it('production trace treats a cancelled scheduled root control as settled', async () => {
+      const fixture = await createProductionAutopilotFixture({ autopilotSchedule: () => () => {} });
+      onTestFinished(() => fixture.app.close());
+      expect(
+        (
+          await fixture.app.inject({
+            method: 'PUT',
+            url: `/api/sessions/${fixture.sessionId}/autopilot`,
+            payload: { enabled: false },
+          })
+        ).statusCode,
+      ).toBe(200);
+      const trace = exportControlPlaneTrace(
+        join(fixture.dataDir, 'relay.sqlite'),
+        fixture.sessionId,
+      );
+      const cancellation = trace.events.find(
+        (event) => event.type === 'autopilot.control-cancelled',
+      )!;
+      expect(cancellation.payload).toMatchObject({
+        controlId: expect.any(String),
+        reason: 'manualDisabled',
+      });
+      expect(
+        trace.events.some(
+          (event) =>
+            event.type === 'autopilot.continuation-scheduled' &&
+            event.payload.controlId === cancellation.payload.controlId,
+        ),
+      ).toBe(true);
+      expect(trace.diagnoses).not.toContain(
+        'continuation scheduled, but no control or executor dispatch was observed',
+      );
+      expect(trace.diagnoses).not.toContain(
+        'control issued, but no turn acceptance or failure was observed',
+      );
+    });
+
     it.each([
       ['transport-lost', new Error('CODEX_CONNECTION_LOST'), false],
       ['ambiguous RPC failure', new CodexJsonRpcError(-32603, 'internal error'), false],
+      ['invalid request', new CodexJsonRpcError(-32600, 'private provider request detail'), false],
+      ['unknown error', new Error('private provider request detail'), false],
       ['manual Off after RPC failure', new CodexJsonRpcError(-32603, 'internal error'), true],
     ])(
       'production recovers through the root after %s without replaying or replacing the executor',
@@ -5432,7 +5645,7 @@ describe('production composition', () => {
         if (failure instanceof CodexJsonRpcError)
           expect(JSON.parse(operation.payload_json)).toMatchObject({
             kind: 'executorResume',
-            rpcCode: -32603,
+            rpcCode: failure.code,
           });
         else expect(JSON.parse(operation.payload_json)).not.toHaveProperty('rpcCode');
         const replacements = database
@@ -5484,6 +5697,36 @@ describe('production composition', () => {
           ),
         ).toHaveLength(1);
         expect(rootStarts()).toHaveLength(disableBeforeRecovery ? 0 : 1);
+        const trace = exportControlPlaneTrace(
+          join(fixture.dataDir, 'relay.sqlite'),
+          fixture.sessionId,
+        );
+        const exportedFailure = trace.events.find(
+          (event) => event.type === 'autopilot.operation-failed',
+        )!;
+        expect(exportedFailure.payload).toMatchObject({
+          kind: 'executorResume',
+          reason: failure instanceof CodexJsonRpcError ? 'CODEX_JSON_RPC_ERROR' : 'UNKNOWN',
+          requestId: expect.any(String),
+          threadId: 'child-1',
+          generation: expect.any(Number),
+        });
+        expect(exportedFailure.payload.requestId).not.toBe('');
+        expect(JSON.stringify(trace)).not.toContain('private provider request detail');
+        expect(trace.diagnoses).toContain(
+          disableBeforeRecovery
+            ? 'executor resume failed; no matching root recovery continuation was observed; executor outcome remains unconfirmed'
+            : 'root continuation observed after executor resume failure; executor outcome remains unconfirmed',
+        );
+        const settledDatabase = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+        try {
+          const row = settledDatabase
+            .prepare('SELECT lifecycle_json FROM autopilot_sessions WHERE session_id = ?')
+            .get(fixture.sessionId) as { lifecycle_json: string };
+          expect(JSON.parse(row.lifecycle_json).supervision.diagnosticRecovery).toBeNull();
+        } finally {
+          settledDatabase.close();
+        }
         await fixture.app.close();
       },
     );
@@ -6262,20 +6505,56 @@ describe('production composition', () => {
       );
       await fixture.app.close();
     });
-    it('bounds a wedged attention acknowledgement writer without losing durable attention', async () => {
+    async function exerciseWedgedAttention(
+      failAfterRejection = false,
+      cleanup = { owned: -1, pending: -1, ready: false, closed: false, restored: false },
+    ) {
       const fixture = await createProductionAutopilotFixture({
         attentionAcknowledgementDeadlineMs: 100,
       });
-      const handle = fixture.handles.find((candidate) => candidate.request)!;
-      handle.deferResponseSettlement = true;
-      const response = handle.request!(attentionCall(699));
-      const rejected = expect(response).rejects.toThrow('CODEX_SERVER_REQUEST_CANCELLED');
-      await vi.waitFor(() => expect(handle.pendingResponses.has(699)).toBe(true));
-      await rejected;
-      expect(
-        (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/attention`)).json(),
-      ).toMatchObject({ requestId: '699', attention: { reason: 'hardBlock' } });
-      await fixture.app.close();
+      const recovery = ownRuntimeRecycles(fixture.sessionId, fixture.app);
+      const { owned, pending } = recovery;
+      try {
+        const handle = fixture.handles.find((candidate) => candidate.request)!;
+        handle.deferResponseSettlement = true;
+        const response = handle.request!(attentionCall(699));
+        const rejected = expect(response).rejects.toThrow('CODEX_SERVER_REQUEST_CANCELLED');
+        await vi.waitFor(() => expect(handle.pendingResponses.has(699)).toBe(true));
+        await rejected;
+        expect(owned).toHaveLength(1);
+        if (failAfterRejection) {
+          expect(pending.size).toBe(1);
+          throw new Error('injected assertion-path failure');
+        }
+        await expect(owned[0]).resolves.toMatchObject({ id: fixture.sessionId, state: 'ready' });
+        expect(
+          (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/attention`)).json(),
+        ).toMatchObject({ requestId: '699', attention: { reason: 'hardBlock' } });
+      } finally {
+        const settled = await recovery.close();
+        const result = settled[0];
+        cleanup.owned = owned.length;
+        cleanup.pending = pending.size;
+        cleanup.ready =
+          settled.length === 1 &&
+          result?.status === 'fulfilled' &&
+          result.value.id === fixture.sessionId &&
+          result.value.state === 'ready';
+        cleanup.closed = true;
+        cleanup.restored = true;
+      }
+    }
+
+    it('bounds a wedged attention acknowledgement writer without losing durable attention', async () => {
+      await exerciseWedgedAttention();
+    });
+
+    it('drains owned acknowledgement recovery after an assertion-path failure before closing its app', async () => {
+      const cleanup = { owned: -1, pending: -1, ready: false, closed: false, restored: false };
+      await expect(exerciseWedgedAttention(true, cleanup)).rejects.toThrow(
+        'injected assertion-path failure',
+      );
+      expect(cleanup).toEqual({ owned: 1, pending: 0, ready: true, closed: true, restored: true });
     });
 
     it('returns a bounded failure when durable attention persistence fails', async () => {
@@ -6300,6 +6579,7 @@ describe('production composition', () => {
           }),
         },
       });
+      onTestFinished(() => app.close());
       await createComposedSession(app);
       const handle = await vi.waitFor(() => {
         const candidate = handles.find((item) => item.request);
@@ -8006,10 +8286,35 @@ describe('production composition', () => {
       );
       expect(JSON.stringify(messages)).not.toMatch(/TOKEN|secret|stderr/);
     });
-    it('hydrates chat and resyncs a large replay without materializing the journal', async () => {
+    it('hydrates chat and resyncs a large replay without materializing the journal', async (context) => {
+      const diagnostic = {
+        stage: 'fixture',
+        elapsedMs: { fixture: 0 } as Record<string, number>,
+        upgradeSeen: false,
+        teardownStarted: false,
+        closeBeforeTeardown: false,
+        errorBeforeTeardown: false,
+        opened: false,
+        message: false,
+        closed: false,
+        error: false,
+      };
+      const began = performance.now();
+      const stamp = (stage: string) => {
+        diagnostic.elapsedMs[stage] = Math.round(performance.now() - began);
+      };
+      const stage = (value: string) => {
+        diagnostic.stage = value;
+        stamp(value);
+      };
+      onTestFinished(() => {
+        if (context.task.result?.state === 'fail')
+          console.info('large-replay-diagnostic', JSON.stringify(diagnostic));
+      });
       const fixture = await createProductionAutopilotFixture();
       const { app, sessionId } = fixture;
       onTestFinished(() => app.close());
+      stage('journal');
       const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
       const journal = new SqliteEventJournal(database);
       for (let index = 0; index < 250; index++)
@@ -8030,6 +8335,7 @@ describe('production composition', () => {
         throw new Error('Unbounded journal reads must not be used by Chat');
       });
       onTestFinished(() => fullRead.mockRestore());
+      stage('history');
       const history = await app.inject(`/api/sessions/${sessionId}/history`);
       expect(history.statusCode).toBe(200);
       expect(history.json()).toMatchObject({
@@ -8039,27 +8345,91 @@ describe('production composition', () => {
         ]),
       });
       expect(history.json().baseSequence).toBeGreaterThanOrEqual(activity.sequence);
+      stage('listen');
       await app.listen({ host: '127.0.0.1', port: 0 });
       const address = app.server.address();
       if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
+      const upgradeMarker = `large-replay-${sessionId}`;
+      const observeUpgrade = (request: import('node:http').IncomingMessage) => {
+        if (
+          request.url === `/api/sessions/${sessionId}/events?after=0` &&
+          request.headers['x-test-replay-id'] === upgradeMarker
+        ) {
+          diagnostic.upgradeSeen = true;
+          stamp('upgrade');
+        }
+      };
+      app.server.on('upgrade', observeUpgrade);
+      onTestFinished(() => {
+        app.server.off('upgrade', observeUpgrade);
+      });
       const socket = new WebSocket(
         `ws://127.0.0.1:${address.port}/api/sessions/${sessionId}/events?after=0`,
         {
           headers: {
             origin: relyingParty.publicOrigin,
             cookie: 'gestalt_mobile_session=test-session',
+            'x-test-replay-id': upgradeMarker,
           },
         },
       );
+      stage('socket');
+      const closeSocket = () => {
+        if (!diagnostic.teardownStarted) {
+          diagnostic.teardownStarted = true;
+          stamp('teardown');
+        }
+        socket.close();
+      };
+      onTestFinished(closeSocket);
+      socket.on('open', () => {
+        diagnostic.opened = true;
+        stamp('socketOpen');
+      });
+      socket.on('close', () => {
+        diagnostic.closed = true;
+        diagnostic.closeBeforeTeardown ||= !diagnostic.teardownStarted;
+        stamp('socketClose');
+      });
+      socket.on('error', () => {
+        diagnostic.error = true;
+        diagnostic.errorBeforeTeardown ||= !diagnostic.teardownStarted;
+        stamp('socketError');
+      });
       try {
-        const [data] = await once(socket, 'message');
+        const data = await new Promise<WebSocket.RawData>((resolve, reject) => {
+          const cleanup = () => {
+            socket.off('message', message);
+            socket.off('close', closed);
+            socket.off('error', failed);
+          };
+          const message = (data: WebSocket.RawData) => {
+            stage('message');
+            diagnostic.message = true;
+            cleanup();
+            resolve(data);
+          };
+          const closed = () => {
+            cleanup();
+            reject(new Error(`REPLAY_SOCKET_CLOSED_BEFORE_MESSAGE ${JSON.stringify(diagnostic)}`));
+          };
+          const failed = () => {
+            cleanup();
+            reject(new Error(`REPLAY_SOCKET_ERROR_BEFORE_MESSAGE ${JSON.stringify(diagnostic)}`));
+          };
+          socket.once('message', message);
+          socket.once('close', closed);
+          socket.once('error', failed);
+        });
         expect(JSON.parse(String(data))).toMatchObject({
           type: 'relay.resyncRequired',
           currentSequence: expect.any(Number),
         });
         expect(fullRead).not.toHaveBeenCalled();
+        stage('asserted');
       } finally {
-        socket.close();
+        app.server.off('upgrade', observeUpgrade);
+        closeSocket();
       }
     });
     it('starts Self DEBUG with the configured executor model and exact source skill profile', async () => {

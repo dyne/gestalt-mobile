@@ -184,6 +184,15 @@ function compareBy<Key extends string>(key: Key) {
 }
 
 export type SupervisionProtocolState = Readonly<{
+  /** Diagnostic provenance only; never an input to supervision policy. */
+  diagnosticRecovery?: Readonly<{
+    /** Durable executor command identity, not a provider JSON-RPC request ID. */
+    requestId: string;
+    threadId: string;
+    generation: number;
+    traceId?: string;
+    controlId?: string;
+  }> | null;
   /** Runtime acceptance acknowledges observation, never task completion or provider usage. */
   acknowledgedRevision?: Readonly<{ revision: string; controlId: string; turnId: string }>;
   wakeCause?: Readonly<{
@@ -200,6 +209,8 @@ export type SupervisionProtocolState = Readonly<{
   lastReportId: string | null;
   waitLease: Readonly<{
     id: string;
+    /** Diagnostic owner only; legacy leases do not establish an owning turn. */
+    turnId?: string;
     runId?: string;
     probeKey: string;
     wakeConditions: readonly ObservableWakeCondition[];
@@ -494,8 +505,14 @@ export function parseSupervisionProtocolState(
     candidate.safetyPauseReason !== 'invalidProbeReport'
   )
     return undefined;
+  const diagnosticRecovery = parseDiagnosticRecovery(candidate.diagnosticRecovery);
   return {
     ...base,
+    ...(candidate.diagnosticRecovery === null
+      ? { diagnosticRecovery: null }
+      : diagnosticRecovery
+        ? { diagnosticRecovery }
+        : {}),
     ...(wakeCause !== undefined ? { wakeCause: parsedWake ?? null } : {}),
     ...(parsedAcknowledgement ? { acknowledgedRevision: parsedAcknowledgement } : {}),
     outcome: candidate.outcome,
@@ -558,10 +575,41 @@ function parseWaitLease(value: unknown): SupervisionProtocolState['waitLease'] |
     return undefined;
   return {
     id: candidate.id,
+    ...(diagnosticId(candidate.turnId) ? { turnId: candidate.turnId as string } : {}),
     probeKey: candidate.probeKey,
     wakeConditions,
     ...(typeof resumeAt === 'string' ? { resumeAt } : {}),
     ...(typeof runId === 'string' ? { runId } : {}),
+  };
+}
+
+function diagnosticId(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 200 &&
+    /^[a-zA-Z0-9_.:@+-]+$/.test(value)
+  );
+}
+
+function parseDiagnosticRecovery(value: unknown): SupervisionProtocolState['diagnosticRecovery'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (
+    !diagnosticId(candidate.requestId) ||
+    !diagnosticId(candidate.threadId) ||
+    !Number.isSafeInteger(candidate.generation) ||
+    Number(candidate.generation) < 1 ||
+    (candidate.traceId !== undefined && !diagnosticId(candidate.traceId)) ||
+    (candidate.controlId !== undefined && !diagnosticId(candidate.controlId))
+  )
+    return undefined;
+  return {
+    requestId: candidate.requestId,
+    threadId: candidate.threadId,
+    generation: Number(candidate.generation),
+    ...(diagnosticId(candidate.traceId) ? { traceId: candidate.traceId } : {}),
+    ...(diagnosticId(candidate.controlId) ? { controlId: candidate.controlId } : {}),
   };
 }
 
