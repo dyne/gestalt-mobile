@@ -6,7 +6,7 @@
 
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -140,6 +140,39 @@ async function fixture() {
 }
 
 describe('durable Forget orchestration', () => {
+  it('forgets npm-style scratch symlinks without following external, dangling or cyclic targets', async () => {
+    const f = await fixture();
+    const outside = join(f.root, 'outside');
+    await mkdir(outside);
+    await writeFile(join(outside, 'keep'), 'persistent');
+    const modules = join(f.context.directory, 'node_modules');
+    await mkdir(join(modules, '.bin'), { recursive: true });
+    await writeFile(join(modules, 'tool.js'), 'disposable');
+    await symlink('../tool.js', join(modules, '.bin', 'tool'));
+    await symlink(outside, join(f.context.directory, 'external-directory'));
+    await symlink(join(outside, 'keep'), join(f.context.directory, 'external-file'));
+    await symlink(join(outside, 'missing'), join(f.context.directory, 'dangling'));
+    await symlink('.', join(f.context.directory, 'cycle'));
+    const forget = f.make();
+    const app = fastify();
+    registerForgetSession(app, {
+      find: (id) => f.sessions.find(id),
+      forget: (id) => forget.execute(id),
+    });
+    try {
+      const reply = await app.inject({ method: 'DELETE', url: `/api/sessions/${f.session.id}` });
+      expect(reply.statusCode, reply.body).toBe(204);
+      expect(f.operations.find(f.session.id)?.phase).toBe('completed');
+      expect(f.sessions.find(f.session.id)).toBeNull();
+      await expect(lstat(f.context.directory)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await readFile(join(outside, 'keep'), 'utf8')).toBe('persistent');
+      await expect(lstat(join(outside, 'missing'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await app.close();
+      await forget.drain();
+    }
+  });
+
   it('keeps outer Forget retryable with503 while another durable inner workspace is protected', async () => {
     const f = await fixture();
     const workspacePath = join(f.context.directory, 'selected-workspace');
