@@ -366,6 +366,30 @@ describe('control-plane trace export', () => {
       'checkpoint persisted, but no continuation was scheduled',
     );
   });
+
+  it('does not require another continuation after a reported terminal review', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-terminal-trace-'));
+    directories.push(directory);
+    const path = join(directory, 'relay.sqlite');
+    const database = new DatabaseSync(path);
+    database.exec(
+      'CREATE TABLE session_events (session_id TEXT, sequence INTEGER, occurred_at TEXT, type TEXT, payload_json TEXT)',
+    );
+    const insert = database.prepare('INSERT INTO session_events VALUES (?,?,?,?,?)');
+    // Completion status can be absent from the retained status tail. The
+    // terminal boundary itself establishes that no next step is expected.
+    for (const [index, type] of [
+      'org-plan.terminal-review-checkpointed',
+      'org-plan.terminal-review-reported',
+    ].entries())
+      insert.run('s1', index + 1, `2026-01-01T00:00:0${index}.000Z`, type, '{}');
+    database.close();
+    const trace = exportControlPlaneTrace(path, 's1');
+    expect(trace.events).toHaveLength(2);
+    expect(trace.diagnoses).not.toContain(
+      'checkpoint persisted, but no continuation was scheduled',
+    );
+  });
 });
 
 it('exports persisted transport observations separately from conversation/control events', async () => {

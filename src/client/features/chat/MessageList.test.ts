@@ -13,6 +13,32 @@ import MessageList from './MessageList.svelte';
 import { mcpStartupActivity } from '../../../shared/contracts/mcp-startup-failure.js';
 
 describe('MessageList', () => {
+  it('assigns long-session activities once instead of rescanning them for every answer', () => {
+    let ownershipReads = 0;
+    const messages = Array.from({ length: 80 }, (_, index) => ({
+      id: `answer-${index}`,
+      role: 'assistant' as const,
+      turnId: `turn-${index}`,
+      text: `Answer ${index}`,
+      complete: true,
+    }));
+    const activities = Array.from({ length: 800 }, (_, index) => ({
+      id: `activity-${index}`,
+      label: 'Command · completed',
+      detail: `Task ${index}`,
+      get turnId() {
+        ownershipReads++;
+        return `turn-${index % 80}`;
+      },
+    }));
+    const view = render(MessageList, { messages, activities });
+    expect(view.container.querySelectorAll('.answer-turn')).toHaveLength(80);
+    expect(view.container.querySelectorAll('.work-details')).toHaveLength(80);
+    expect(screen.getAllByText('Work details · 10 activities')).toHaveLength(80);
+    expect(view.container.textContent).toContain('Answer 79');
+    expect(ownershipReads).toBeLessThan(10_000);
+  });
+
   it.each([undefined, null, 'other-turn'])(
     'keeps commentary without an answer expanded when active turn is %j, then folds it inside the answer',
     async (activeTurnId) => {

@@ -134,7 +134,7 @@ function diagnose(events: readonly TraceRow[]): string[] {
   const currentHandoff = checkpointIndex < 0 ? events : events.slice(checkpointIndex);
   const types = new Set(currentHandoff.map((event) => event.type));
   if (
-    [...types].some((type) => type.endsWith('-checkpointed')) &&
+    (types.has('org-plan.step-checkpointed') || types.has('org-plan.milestone-checkpointed')) &&
     !types.has('autopilot.continuation-scheduled')
   )
     diagnoses.push('checkpoint persisted, but no continuation was scheduled');
