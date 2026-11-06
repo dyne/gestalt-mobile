@@ -34,8 +34,9 @@ Set `PLAYWRIGHT_JSON_OUTPUT_NAME` to a private report filename when retaining
 either JSON report. `PLAYWRIGHT_PORT` controls the Vite port (default 4173),
 `PLAYWRIGHT_OUTPUT_ID` distinguishes the `test-results/browser-smoke-*` output
 directory, and `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` optionally selects an
-existing Chromium executable. Standard `PLAYWRIGHT_BROWSERS_PATH` selects the
-installed browser cache. No real provider, passkey, account, CLI or credential
+installed Chrome executable. Every lane defaults to the system Chrome channel;
+`PLAYWRIGHT_BROWSERS_PATH` never selects a bundled fallback. Missing Chrome fails
+the run. No real provider, passkey, account, CLI or credential
 is required: Vite serves the client, `mockAuthenticatedStatus` intercepts auth,
 and each case installs local HTTP/WebSocket fixtures.
 

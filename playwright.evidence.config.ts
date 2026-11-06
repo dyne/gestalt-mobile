@@ -5,6 +5,7 @@
  */
 
 import { defineConfig } from '@playwright/test';
+import { installedChrome } from './scripts/installed-chrome.js';
 
 import { browserEvidenceSpecs } from './scripts/test-lanes.mjs';
 
@@ -13,7 +14,7 @@ export default defineConfig({
   testDir: './test/e2e',
   testMatch: browserEvidenceSpecs,
   outputDir: 'test-results/browser-evidence',
-  use: { baseURL: 'http://127.0.0.1:4173', trace: 'retain-on-failure' },
+  use: { ...installedChrome(), baseURL: 'http://127.0.0.1:4173', trace: 'retain-on-failure' },
   webServer: {
     command: 'npm run dev:client -- --host 127.0.0.1 --port 4173 --strictPort',
     port: 4173,

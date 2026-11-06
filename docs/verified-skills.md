@@ -56,8 +56,9 @@ export VERIFIED_SKILLS_EVIDENCE_DIR=/absolute/path/to/private/test-evidence
 npm run test:e2e -- --config playwright.verified-skills.config.ts
 ```
 
-Use an installed test browser, or set
-`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to its executable. `VERIFIED_SKILLS_CODEX`
+The browser uses installed system Chrome. Set
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` for a custom installed Chrome executable;
+there is no bundled-browser fallback. `VERIFIED_SKILLS_CODEX`
 can select an existing Codex executable; `VERIFIED_SKILLS_PORT` defaults to 4187.
 The test creates fresh homes under the evidence directory and serves only on
 loopback. It does not touch a running Mobile instance, personal browser profile,

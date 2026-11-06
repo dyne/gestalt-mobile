@@ -684,17 +684,19 @@ and select **run_slow_tests**, or run:
 gh workflow run ci.yml --ref YOUR_BRANCH -f run_slow_tests=true
 ```
 
-To run browser tests locally with an existing Chrome installation:
+Browser tests always use an existing system Chrome installation:
 
 ```sh
 npm ci
 npm run build:client
-PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/absolute/path/to/chrome npm run test:e2e
+npm run test:e2e
 ```
 
 Use the lane commands below for functional, visual-evidence or real-auth tests.
-The optional GitHub browser jobs explicitly install a disposable test browser;
-ordinary application/session startup never does. Run the relevant browser suite
+Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/absolute/path/to/chrome` for a custom
+installed executable. All browser lanes use the Chrome channel by default and
+fail if Chrome is missing; they never fall back to Playwright's bundled Chromium.
+GitHub browser jobs verify the runner's installed Chrome. Run the relevant browser suite
 manually when changing browser behavior. The actual CLI/Mobile managed-browser
 integration has separate installed-runtime prerequisites and remains opt-in;
 see [Managed browser access](docs/managed-playwright.md#manual-integration-tests).

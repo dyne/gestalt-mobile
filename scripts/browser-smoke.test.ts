@@ -149,6 +149,7 @@ describe('browser smoke workflow contract', () => {
     expect(ci.on).toHaveProperty('pull_request');
     expect(ci.on.push.branches).toContain('main');
     expect(ci.permissions).toEqual({ contents: 'read' });
+    expect(ci.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD).toBe('1');
     const smoke = ci.jobs['browser-smoke'];
     expect(smoke.name).toBe('Browser smoke');
     expect(smoke.if).toBeUndefined();
@@ -164,11 +165,16 @@ describe('browser smoke workflow contract', () => {
       expect.arrayContaining([
         'npm ci',
         'npm run build:client',
-        'npx playwright install --with-deps chromium',
+        'google-chrome --version',
         'npm run test:lanes',
         'npm run test:e2e:smoke',
       ]),
     );
+    for (const id of ['browser-smoke', 'browser-functional', 'browser-evidence', 'real-auth']) {
+      const commands = ci.jobs[id].steps.flatMap((step: { run?: string }) => step.run ?? []);
+      expect(commands).toContain('google-chrome --version');
+      expect(commands.some((command: string) => /playwright install/.test(command))).toBe(false);
+    }
     expect(
       smoke.steps.find((step: { uses?: string }) =>
         step.uses?.startsWith('actions/upload-artifact@'),

@@ -16,10 +16,5 @@ export default defineConfig(functional, {
   outputDir: `test-results/browser-smoke-${process.env.PLAYWRIGHT_OUTPUT_ID ?? 'local'}`,
   use: {
     screenshot: 'only-on-failure',
-    launchOptions: {
-      ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
-        ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
-        : {}),
-    },
   },
 });
