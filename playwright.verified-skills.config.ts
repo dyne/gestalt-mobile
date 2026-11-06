@@ -5,6 +5,7 @@
  */
 
 import { defineConfig } from '@playwright/test';
+import { installedChrome } from './scripts/installed-chrome.js';
 
 const port = Number(process.env.VERIFIED_SKILLS_PORT ?? 4187);
 
@@ -15,14 +16,10 @@ export default defineConfig({
   workers: 1,
   timeout: 180_000,
   use: {
+    ...installedChrome(),
     baseURL: `http://127.0.0.1:${port}`,
     viewport: { width: 390, height: 844 },
     trace: 'retain-on-failure',
-    launchOptions: {
-      ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
-        ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
-        : {}),
-    },
   },
   webServer: {
     command: 'node --import tsx test/e2e/verified-skills-installed-server.ts',

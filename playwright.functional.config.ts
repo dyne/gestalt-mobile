@@ -5,6 +5,7 @@
  */
 
 import { defineConfig } from '@playwright/test';
+import { installedChrome } from './scripts/installed-chrome.js';
 
 const port = Number(process.env.PLAYWRIGHT_PORT ?? 4173);
 const outputId = process.env.PLAYWRIGHT_OUTPUT_ID ?? 'local';
@@ -14,7 +15,7 @@ export default defineConfig({
   testDir: './test/e2e',
   testIgnore: 'real-auth-journey.spec.ts',
   outputDir: `test-results/browser-functional-${outputId}`,
-  use: { baseURL: `http://127.0.0.1:${port}`, trace: 'retain-on-failure' },
+  use: { ...installedChrome(), baseURL: `http://127.0.0.1:${port}`, trace: 'retain-on-failure' },
   webServer: {
     command: `npm run dev:client -- --host 127.0.0.1 --port ${port} --strictPort`,
     port,

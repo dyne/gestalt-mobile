@@ -5,6 +5,7 @@
  */
 
 import { defineConfig } from '@playwright/test';
+import { installedChrome } from './scripts/installed-chrome.js';
 
 export default defineConfig({
   testDir: './test/e2e',
@@ -15,6 +16,7 @@ export default defineConfig({
   workers: 1,
   timeout: 60_000,
   use: {
+    ...installedChrome(),
     baseURL: 'http://localhost:4173',
     trace: 'retain-on-failure',
     viewport: { width: 390, height: 844 },

@@ -18,6 +18,9 @@ on:
 permissions:
   contents: read
 
+env:
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
 # Superseded PR checks need not consume another runner; main releases are never cancelled.
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
@@ -93,8 +96,8 @@ jobs:
         run: npm ci
       - name: Build relay client
         run: npm run build:client
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+      - name: Verify installed Chrome
+        run: google-chrome --version
       - name: Verify test lanes
         run: npm run test:lanes
       - name: Run required browser smoke
@@ -143,8 +146,8 @@ jobs:
         run: npm ci
       - name: Build relay client
         run: npm run build:client
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+      - name: Verify installed Chrome
+        run: google-chrome --version
       - name: Run browser tests
         run: npx playwright test --config playwright.functional.config.ts --shard=${{ matrix.shard }}
       - name: Upload failed Playwright traces
@@ -165,7 +168,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: 24, cache: npm }
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - run: google-chrome --version
       - run: npm run test:e2e:real-auth
       - if: always() && hashFiles('test-results/auth-real-artifacts/**') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -180,7 +183,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: 24, cache: npm }
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - run: google-chrome --version
       - run: npm run test:e2e:evidence
       - if: always() && hashFiles('test-results/browser-evidence/**', 'output/playwright/**') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
