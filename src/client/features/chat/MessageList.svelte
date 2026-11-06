@@ -209,10 +209,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     displayGroups.filter((group) => group.kind === 'assistant').toReversed(),
   );
   let latestAssistantId = $derived(assistantGroups.at(-1)?.id);
+  let assistantByTurn = $derived(
+    new Map(
+      assistantGroups.filter((group) => group.turnId).map((group) => [group.turnId, group.id]),
+    ),
+  );
+  let promptByTurn = $derived(
+    new Map(promptGroups.filter((group) => group.turnId).map((group) => [group.turnId, group.id])),
+  );
   function activityAnswerOwnerId(activity: HistoryActivity): string | null {
     if (activity.turnId) {
-      const exact = assistantGroups.findLast((group) => group.turnId === activity.turnId);
-      if (exact) return exact.id;
+      const exact = assistantByTurn.get(activity.turnId);
+      if (exact) return exact;
     }
     if (activity.occurredAt === undefined) return latestAssistantId ?? null;
     return (
@@ -224,15 +232,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       )?.id ?? null
     );
   }
-  function turnActivities(group: (typeof groups)[number]): HistoryActivity[] {
-    if (group.kind !== 'assistant') return [];
-    return activities.filter((activity) => activityAnswerOwnerId(activity) === group.id);
-  }
   function activityPromptOwnerId(activity: HistoryActivity): string | null {
-    if (activityAnswerOwnerId(activity)) return null;
     if (activity.turnId) {
-      const exact = promptGroups.findLast((group) => group.turnId === activity.turnId);
-      if (exact) return exact.id;
+      const exact = promptByTurn.get(activity.turnId);
+      if (exact) return exact;
     }
     if (activity.occurredAt === undefined) return null;
     return (
@@ -241,16 +244,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       )?.id ?? null
     );
   }
-  function promptActivities(group: (typeof groups)[number]): HistoryActivity[] {
-    if (group.kind !== 'user') return [];
-    return activities.filter((activity) => activityPromptOwnerId(activity) === group.id);
-  }
-  function detachedActivities(): HistoryActivity[] {
-    return activities.filter(
-      (activity) => !activityAnswerOwnerId(activity) && !activityPromptOwnerId(activity),
-    );
-  }
-  let detached = $derived(detachedActivities());
+  // Resolve each activity once per history change. Rendering every answer must
+  // not repeat an all-activities/all-answers search on a long conversation.
+  let activitiesByOwner = $derived.by(() => {
+    const owners = new Map<string | null, HistoryActivity[]>();
+    for (const activity of activities) {
+      const owner = activityAnswerOwnerId(activity) ?? activityPromptOwnerId(activity);
+      const items = owners.get(owner);
+      if (items) items.push(activity);
+      else owners.set(owner, [activity]);
+    }
+    return owners;
+  });
+  let detached = $derived(activitiesByOwner.get(null) ?? []);
   function regularActivities(items: HistoryActivity[]): HistoryActivity[] {
     return items.filter(
       (activity) => !activity.label.toLowerCase().replaceAll(' ', '').startsWith('filechange'),
@@ -424,7 +430,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           </aside>
         {/if}
       {:else if group.kind === 'user'}
-        {@const ownedActivities = promptActivities(group)}
+        {@const ownedActivities = activitiesByOwner.get(group.id) ?? []}
         <div class="entry-heading">
           <strong>prompt</strong>
           {#if group.occurredAt}
@@ -449,7 +455,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           </section>
         {/if}
       {:else if group.answer !== null}
-        {@const ownedActivities = turnActivities(group)}
+        {@const ownedActivities = activitiesByOwner.get(group.id) ?? []}
         <section class="answer-turn">
           <div class="entry-heading">
             <strong>{isLive(group) ? 'working' : 'answer'}</strong>
@@ -498,7 +504,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           {/if}
         </section>
       {:else if group.commentary !== null}
-        {@const ownedActivities = turnActivities(group)}
+        {@const ownedActivities = activitiesByOwner.get(group.id) ?? []}
         <section class="progress-turn">
           <div class="entry-heading">
             <strong>working</strong>
