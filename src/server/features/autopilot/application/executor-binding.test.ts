@@ -15,6 +15,7 @@ import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
 import { ExecutorModelEvidenceReader } from '../../plans/application/executor-model-evidence.js';
 import { migrate } from '../../../platform/persistence/migrate.js';
 import { SqliteAutopilotStore } from '../../../platform/persistence/sqlite-autopilot-store.js';
+import { compactSupervisionSnapshot, SupervisionSnapshots } from './supervision-snapshot.js';
 
 const now = '2026-10-25T01:06:00Z';
 const policy = {
@@ -41,6 +42,7 @@ const child = (position: number, state: 'idle' | 'working' = 'working') => ({
   ownedProcesses: [],
 });
 function fixture(pending = false, enabled = true) {
+  let clock = now;
   const db = new DatabaseSync(':memory:');
   migrate(db);
   db.exec(
@@ -116,7 +118,7 @@ function fixture(pending = false, enabled = true) {
   const events: string[] = [];
   const coordinator = new AutopilotCoordinator({
     store,
-    now: () => now,
+    now: () => clock,
     policy: defaultAutopilotPolicy,
     plan: () => ({ plan, identity: 'plan' }),
     session: () => ({ state: 'ready', threadId: 'root', activeTurnId: 'root-turn' }),
@@ -178,6 +180,9 @@ function fixture(pending = false, enabled = true) {
     evidence,
     runtimeRead,
     events,
+    setClock: (value: string) => {
+      clock = value;
+    },
     getPlan: () => plan,
     setPlan: (value: SupervisedPlan) => {
       plan = value;
@@ -194,6 +199,157 @@ function fixture(pending = false, enabled = true) {
 }
 
 describe('canonical executor handoff observations', () => {
+  it.each([
+    { pending: false, enabled: true },
+    { pending: false, enabled: false },
+    { pending: true, enabled: true },
+  ])(
+    'measures stable health and process observations without durable transitions (pending=$pending enabled=$enabled)',
+    async ({ pending, enabled }) => {
+      const f = fixture(pending, enabled);
+      try {
+        const process = {
+          processId: 'measured-process',
+          itemId: 'measured-item',
+          ownerThreadId: 'child-2',
+          ownerTaskPath: '/root/l2',
+          ownership: 'executor' as const,
+          state: 'running' as const,
+          observedAt: now,
+          elapsedMs: 0,
+          cpuPercent: 1,
+          rssBytes: 1024,
+        };
+        const activity = f.getActivity();
+        f.setActivity({
+          ...activity,
+          subagents: [
+            activity.subagents[0]!,
+            { ...activity.subagents[1]!, ownedProcesses: [process] },
+          ],
+        });
+        expect(f.coordinator.reconcileExecutorBinding('s').code).toBe('BINDING_RECONCILED');
+        const retained = f.store.find('s')!;
+        const snapshots = new SupervisionSnapshots();
+        const read = async (sinceRevision?: string) => {
+          const binding = f.coordinator.reconcileExecutorBinding('s');
+          expect(binding.code).toBe('BINDING_MATCH');
+          return snapshots.read(
+            's',
+            compactSupervisionSnapshot({
+              autopilot: f.coordinator.snapshot('s'),
+              plan: f.getPlan(),
+              planIdentity: 'plan',
+              activity: f.getActivity(),
+              pendingInteractions: pending ? 1 : 0,
+              tests: { enabled: true, running: 0, unread: 0, omitted: 0, runs: [] },
+              wait: null,
+              binding,
+              modelPolicy: await f.evidence.read('s'),
+              launch: null,
+            }),
+            sinceRevision,
+          );
+        };
+        const first = await read();
+        const changes = () => f.db.prepare('SELECT total_changes() AS n').get()!.n;
+        const writesBefore = changes();
+        const eventsBefore = f.events.length;
+        const readsBefore = f.runtimeRead.mock.calls.length;
+        for (let index = 1; index <= 5; index++) {
+          const later = new Date(Date.parse(now) + index * 1000).toISOString();
+          f.setClock(later);
+          const previous = f.getActivity();
+          f.setActivity({
+            ...previous,
+            root: { ...previous.root, observedAt: later },
+            subagents: previous.subagents.map((agent) => ({
+              ...agent,
+              observedAt: later,
+              lastActivityAt: later,
+              ownedProcesses: agent.ownedProcesses?.map((owned) => ({
+                ...owned,
+                observedAt: later,
+                elapsedMs: index * 1000,
+                cpuPercent: index,
+                rssBytes: 1024 + index,
+              })),
+            })),
+          });
+          expect(await read(first.revision)).toEqual({ revision: first.revision, unchanged: true });
+        }
+        expect({
+          durableWrites: Number(changes()) - Number(writesBefore),
+          events: f.events.length - eventsBefore,
+          providerReads: f.runtimeRead.mock.calls.length - readsBefore,
+        }).toEqual({ durableWrites: 0, events: 0, providerReads: 5 });
+        expect(f.store.find('s')).toEqual(retained);
+        expect(f.store.find('s')!.executor!.ownedProcesses[0]!.observedAt).toBe(now);
+        expect(
+          f.events.filter((type) => type === 'autopilot.executor-binding-reconciled'),
+        ).toHaveLength(1);
+        const observed = await f.runtimeRead();
+        f.runtimeRead.mockResolvedValueOnce({
+          ...observed,
+          configuration: { ...observed.configuration, model: 'gpt-6-astra' },
+        });
+        const modelChanged = await read(first.revision);
+        expect(Object.keys(modelChanged.changes!)).toEqual(['modelPolicy']);
+        expect(modelChanged.changes!.modelPolicy).toMatchObject({
+          code: 'MODEL_MISMATCH',
+          configuration: 'mismatch',
+          effective: { model: 'gpt-6-astra' },
+        });
+        let previousRevision = f.coordinator.snapshot('s').supervisionDelta!.revision;
+        for (const transition of [
+          { ownership: 'supervisor' as const, state: 'detached-active' as const },
+          {
+            ownership: 'supervisor' as const,
+            state: 'exited-awaiting-result' as const,
+            exitStatus: 0,
+            resultArtifact: 'child-2:measured-item',
+          },
+          {
+            ownership: 'supervisor' as const,
+            state: 'result-consumed' as const,
+            exitStatus: 0,
+            resultArtifact: 'child-2:measured-item',
+          },
+        ]) {
+          const previous = f.getActivity();
+          f.setActivity({
+            ...previous,
+            subagents: previous.subagents.map((agent) =>
+              agent.id === 'child-2'
+                ? { ...agent, ownedProcesses: [{ ...process, ...transition }] }
+                : agent,
+            ),
+          });
+          const count = f.events.filter(
+            (type) => type === 'autopilot.executor-binding-reconciled',
+          ).length;
+          expect(f.coordinator.reconcileExecutorBinding('s').code).toBe('BINDING_RECONCILED');
+          expect(
+            f.events.filter((type) => type === 'autopilot.executor-binding-reconciled'),
+          ).toHaveLength(count + 1);
+          const current = f.coordinator.snapshot('s').supervisionDelta!.revision;
+          expect(current).not.toBe(previousRevision);
+          previousRevision = current;
+          expect(f.store.find('s')!.executor!.ownedProcesses[0]).toMatchObject({
+            ...transition,
+            observedAt: now,
+          });
+          expect(f.coordinator.reconcileExecutorBinding('s').code).toBe('BINDING_MATCH');
+        }
+        expect(f.start).not.toHaveBeenCalled();
+        expect(f.resume).not.toHaveBeenCalled();
+        expect(f.schedule).not.toHaveBeenCalled();
+      } finally {
+        f.close();
+      }
+    },
+  );
+
   it('does not journal unchanged command-bearing bindings after SQLite hydration', () => {
     const f = fixture();
     try {

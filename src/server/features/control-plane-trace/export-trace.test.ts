@@ -26,6 +26,302 @@ afterEach(async () =>
 );
 
 describe('control-plane trace export', () => {
+  async function exportEvents(events: readonly (readonly [string, Record<string, unknown>])[]) {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-handoff-trace-'));
+    directories.push(directory);
+    const path = join(directory, 'relay.sqlite');
+    const database = new DatabaseSync(path);
+    try {
+      database.exec(
+        'CREATE TABLE session_events (session_id TEXT, sequence INTEGER, occurred_at TEXT, type TEXT, payload_json TEXT)',
+      );
+      const insert = database.prepare('INSERT INTO session_events VALUES (?,?,?,?,?)');
+      events.forEach(([type, payload], index) =>
+        insert.run('s1', index + 1, '2026-11-03T11:28:24.585Z', type, JSON.stringify(payload)),
+      );
+    } finally {
+      database.close();
+    }
+    return exportControlPlaneTrace(path, 's1');
+  }
+
+  it.each([false, true])(
+    'does not require continuation after a terminal checkpoint (reported: %s)',
+    async (reported) => {
+      const events: Array<[string, Record<string, unknown>]> = [
+        ['org-plan.terminal-review-checkpointed', { traceId: 'terminal', turnId: 't1' }],
+      ];
+      if (reported)
+        events.push(['org-plan.terminal-review-reported', { traceId: 'terminal', turnId: 't1' }]);
+      const trace = await exportEvents(events);
+      expect(trace.events).toHaveLength(reported ? 2 : 1);
+      expect(trace.diagnoses).toEqual(
+        reported ? [] : ['terminal checkpoint persisted, but no report was observed'],
+      );
+    },
+  );
+
+  it.each([
+    ['another trace', { traceId: 'other', turnId: 't1' }],
+    ['another handoff despite a shared turn', { handoffId: 'other', turnId: 't1' }],
+    ['a matching trace with a conflicting handoff', { traceId: 'selected', handoffId: 'other' }],
+    ['a matching handoff with a conflicting trace', { traceId: 'other', handoffId: 'selected' }],
+    ['missing identifiers', {}],
+  ])('does not satisfy a terminal report with %s', async (_name, report) => {
+    const trace = await exportEvents([
+      [
+        'org-plan.terminal-review-checkpointed',
+        { traceId: 'selected', handoffId: 'selected', turnId: 't1' },
+      ],
+      ['org-plan.terminal-review-reported', report],
+      ['autopilot.continuation-scheduled', { traceId: 'other' }],
+      ['autopilot.control-issued', { traceId: 'other' }],
+      ['agent.activity.updated', {}],
+    ]);
+    expect(trace.diagnoses).toContain('terminal checkpoint persisted, but no report was observed');
+    expect(trace.diagnoses).not.toContain(
+      'checkpoint persisted, but no continuation was scheduled',
+    );
+    expect(trace.diagnoses).toContain(
+      'backend agent projection was recorded; browser delivery still requires the client event cursor',
+    );
+  });
+
+  it('matches a terminal report by handoff identity when no trace identifier exists', async () => {
+    expect(
+      (
+        await exportEvents([
+          ['org-plan.terminal-review-checkpointed', { handoffId: 'selected' }],
+          ['org-plan.terminal-review-reported', { handoffId: 'selected' }],
+        ])
+      ).diagnoses,
+    ).toEqual([]);
+  });
+
+  it('keeps an interleaved unrelated report from satisfying the selected terminal checkpoint', async () => {
+    expect(
+      (
+        await exportEvents([
+          ['org-plan.terminal-review-checkpointed', { traceId: 'old' }],
+          ['org-plan.terminal-review-checkpointed', { traceId: 'selected' }],
+          ['org-plan.terminal-review-reported', { traceId: 'old' }],
+        ])
+      ).diagnoses,
+    ).toContain('terminal checkpoint persisted, but no report was observed');
+  });
+
+  it('accepts a matching terminal report despite unrelated interleaved control failures', async () => {
+    expect(
+      (
+        await exportEvents([
+          ['org-plan.terminal-review-checkpointed', { traceId: 'selected' }],
+          ['autopilot.control-issued', { traceId: 'other' }],
+          ['org-plan.terminal-review-reported', { traceId: 'selected' }],
+        ])
+      ).diagnoses,
+    ).toEqual([]);
+  });
+
+  it('does not infer a matching terminal report from legacy events without identifiers', async () => {
+    const trace = await exportEvents([
+      ['org-plan.terminal-review-checkpointed', {}],
+      ['org-plan.terminal-review-reported', {}],
+    ]);
+    expect(trace.diagnoses).not.toContain(
+      'checkpoint persisted, but no continuation was scheduled',
+    );
+    expect(trace.diagnoses.join(' ')).toMatch(/correlation.*unavailable/);
+  });
+
+  it('keeps ordinary checkpoint continuation pending despite an unrelated schedule', async () => {
+    expect(
+      (
+        await exportEvents([
+          ['org-plan.step-checkpointed', { traceId: 'selected' }],
+          ['autopilot.continuation-scheduled', { traceId: 'other' }],
+          ['autopilot.control-issued', { traceId: 'other' }],
+          ['autopilot.turn-started', { traceId: 'other' }],
+        ])
+      ).diagnoses,
+    ).toContain('checkpoint persisted, but no continuation was scheduled');
+  });
+
+  it.each([
+    [
+      'autopilot.control-issued',
+      'continuation scheduled, but no control or executor dispatch was observed',
+    ],
+    [
+      'autopilot.executor-resumed',
+      'continuation scheduled, but no control or executor dispatch was observed',
+    ],
+    ['autopilot.turn-started', 'control issued, but no turn acceptance or failure was observed'],
+    ['autopilot.turn-failed', 'control issued, but no turn acceptance or failure was observed'],
+  ])('does not use unrelated %s evidence for the selected handoff', async (type, diagnosis) => {
+    const events: Array<[string, Record<string, unknown>]> = [
+      ['org-plan.step-checkpointed', { traceId: 'selected' }],
+      ['autopilot.continuation-scheduled', { traceId: 'selected' }],
+    ];
+    if (type.startsWith('autopilot.turn-'))
+      events.push(['autopilot.control-issued', { traceId: 'selected' }]);
+    events.push([type, { traceId: 'other' }]);
+    expect((await exportEvents(events)).diagnoses).toContain(diagnosis);
+  });
+
+  it('does not invent a checkpoint from a truncated report-only tail', async () => {
+    const trace = await exportEvents([
+      ['org-plan.terminal-review-reported', { traceId: 'selected' }],
+      ['agent.activity.updated', {}],
+    ]);
+    expect(trace.diagnoses).toEqual([
+      'backend agent projection was recorded; browser delivery still requires the client event cursor',
+    ]);
+    expect(formatControlPlaneTrace(trace)).toContain(
+      'coverage is retained-only, not proof of absence',
+    );
+  });
+
+  it('discloses absent control-plane evidence', async () => {
+    expect((await exportEvents([])).diagnoses).toEqual([
+      'no control-plane events found for this session',
+    ]);
+  });
+
+  it.each([false, true])(
+    'settles only a matching control cancellation (matching: %s)',
+    async (matching) => {
+      const trace = await exportEvents([
+        ['org-plan.step-checkpointed', { traceId: 'selected' }],
+        ['autopilot.continuation-scheduled', { traceId: 'selected', controlId: 'control' }],
+        ['autopilot.control-issued', { traceId: 'selected', controlId: 'control' }],
+        [
+          'autopilot.control-cancelled',
+          { controlId: matching ? 'control' : 'other', reason: 'manualDisabled' },
+        ],
+      ]);
+      if (matching)
+        expect(trace.diagnoses).not.toContain(
+          'control issued, but no turn acceptance or failure was observed',
+        );
+      else
+        expect(trace.diagnoses).toContain(
+          'control issued, but no turn acceptance or failure was observed',
+        );
+    },
+  );
+
+  it('keeps legacy recovery and final dispositions unknown when historical fields are absent', async () => {
+    const trace = await exportEvents([
+      ['autopilot.operation-failed', { kind: 'executorResume' }],
+      ['autopilot.final-rejected', { reason: 'incompletePlan' }],
+    ]);
+    expect(trace.events[0]!.payload).toEqual({ kind: 'executorResume' });
+    expect(trace.events[1]!.payload).toEqual({ reason: 'incompletePlan' });
+    expect(trace.diagnoses).toContain(
+      'executor resume failure cause is unknown in retained evidence',
+    );
+    expect(trace.diagnoses).toContain(
+      'incomplete final disposition is unknown in retained evidence',
+    );
+  });
+
+  it.each(['older control', 'conflicting trace'])(
+    'does not hide an issued boundary with cancellation of %s',
+    async (scenario) => {
+      const trace = await exportEvents([
+        ['org-plan.step-checkpointed', { traceId: 'selected' }],
+        ['autopilot.continuation-scheduled', { traceId: 'selected', controlId: 'old-control' }],
+        ['autopilot.control-issued', { traceId: 'selected', controlId: 'new-control' }],
+        [
+          'autopilot.control-cancelled',
+          {
+            traceId: scenario === 'conflicting trace' ? 'other' : 'selected',
+            controlId: scenario === 'conflicting trace' ? 'new-control' : 'old-control',
+          },
+        ],
+      ]);
+      expect(trace.diagnoses).toContain(
+        'control issued, but no turn acceptance or failure was observed',
+      );
+    },
+  );
+
+  it.each([
+    [
+      'matching',
+      { requestId: 'command', threadId: 'executor', generation: 1, traceId: 'selected' },
+      true,
+    ],
+    [
+      'unrelated request',
+      { requestId: 'other', threadId: 'executor', generation: 1, traceId: 'selected' },
+      false,
+    ],
+    [
+      'unrelated generation',
+      { requestId: 'command', threadId: 'executor', generation: 2, traceId: 'selected' },
+      false,
+    ],
+    [
+      'unrelated trace',
+      { requestId: 'command', threadId: 'executor', generation: 1, traceId: 'other' },
+      false,
+    ],
+    [
+      'unrelated control',
+      {
+        requestId: 'command',
+        threadId: 'executor',
+        generation: 1,
+        traceId: 'selected',
+        controlId: 'other-control',
+      },
+      false,
+    ],
+    ['absent correlation', {}, false],
+  ])(
+    'attributes root recovery only to the failed attempt: %s',
+    async (_name, recovery, matched) => {
+      const trace = await exportEvents([
+        [
+          'autopilot.operation-failed',
+          {
+            kind: 'executorResume',
+            reason: 'CODEX_JSON_RPC_ERROR',
+            rpcCode: -32600,
+            requestId: 'command',
+            threadId: 'executor',
+            generation: 1,
+            traceId: 'selected',
+          },
+        ],
+        [
+          'autopilot.continuation-scheduled',
+          {
+            requestId: 'command',
+            threadId: 'executor',
+            generation: 1,
+            traceId: 'selected',
+            controlId: 'root-control',
+            disposition: 'executorResumeRecovery',
+          },
+        ],
+        [
+          'autopilot.turn-started',
+          { controlId: 'root-control', ...recovery, disposition: 'executorResumeRecovery' },
+        ],
+      ]);
+      expect(trace.diagnoses).toContain(
+        matched
+          ? 'root continuation observed after executor resume failure; executor outcome remains unconfirmed'
+          : 'executor resume failed; no matching root recovery continuation was observed; executor outcome remains unconfirmed',
+      );
+      expect(trace.diagnoses).toContain(
+        'executor resume failure cause is unknown in retained evidence',
+      );
+    },
+  );
+
   it('retains a run-scoped wait identity while excluding execution output', () => {
     expect(
       redactDiagnosticPayload({
@@ -224,6 +520,7 @@ describe('control-plane trace export', () => {
       redactDiagnosticPayload({
         kind: 'executorResume',
         rpcCode: -32603,
+        disposition: 'private-provider-prose',
         message: 'private exception',
         prompt: 'private prompt',
         environment: { KEY: 'secret' },

@@ -74,6 +74,7 @@ import {
   type ObservableWake,
   type ObservableWakeCondition,
   type ProbeReport,
+  type SupervisionProtocolState,
 } from '../domain/supervision-protocol.js';
 import type {
   AutopilotAuditEvent,
@@ -557,6 +558,11 @@ export class AutopilotCoordinator {
     const protocol = state.supervision ?? startSupervisionProtocol(this.progressKey(sessionId));
     const nextProtocol = reportProbe(protocol, report);
     if (nextProtocol === protocol) return false;
+    const ownerTurnId = this.deps.session(sessionId)?.activeTurnId;
+    const ownedProtocol =
+      nextProtocol.waitLease && ownerTurnId
+        ? { ...nextProtocol, waitLease: { ...nextProtocol.waitLease, turnId: ownerTurnId } }
+        : nextProtocol;
     if (nextProtocol.outcome === 'parked' && nextProtocol.waitLease) {
       this.parkedSubscriptions.set(sessionId, nextProtocol.waitLease.id);
       this.activityEventKeys.set(sessionId, this.progressKey(sessionId, false));
@@ -564,7 +570,7 @@ export class AutopilotCoordinator {
     const now = this.deps.now();
     this.persist({
       ...state,
-      supervision: nextProtocol,
+      supervision: ownedProtocol,
       ...(nextProtocol.outcome === 'attentionRequired'
         ? {
             state: 'attentionRequired',
@@ -642,6 +648,10 @@ export class AutopilotCoordinator {
     const protocol = state.supervision ?? startSupervisionProtocol(this.progressKey(sessionId));
     const nextProtocol = registerProtocolWait(protocol, { ...report, resumeAt });
     if (nextProtocol === protocol) return false;
+    const ownerTurnId = this.deps.session(sessionId)?.activeTurnId;
+    const ownedProtocol = ownerTurnId
+      ? { ...nextProtocol, waitLease: { ...nextProtocol.waitLease!, turnId: ownerTurnId } }
+      : nextProtocol;
 
     const cancelled = this.cancelScheduledControl(state, now);
     this.timers.get(sessionId)?.();
@@ -657,7 +667,7 @@ export class AutopilotCoordinator {
         generation: state.generation + (cancelled ? 1 : 0),
         nextEvaluationAt: null,
         ...(cancelled ? { lastControlId: null } : {}),
-        supervision: nextProtocol,
+        supervision: ownedProtocol,
         updatedAt: now,
       },
       cancelled,
@@ -1107,6 +1117,17 @@ export class AutopilotCoordinator {
           state: 'backoff',
           nextEvaluationAt: decision.at,
           lastControlId: scheduledControlId,
+          ...(prior.supervision?.diagnosticRecovery
+            ? {
+                supervision: {
+                  ...prior.supervision,
+                  diagnosticRecovery: {
+                    ...prior.supervision.diagnosticRecovery,
+                    controlId: scheduledControlId,
+                  },
+                },
+              }
+            : {}),
           updatedAt: now,
         };
         const control: AutopilotControl = {
@@ -1127,6 +1148,9 @@ export class AutopilotCoordinator {
             type: 'autopilot.continuation-scheduled',
             payload: {
               controlId: scheduledControlId,
+              ...(next.supervision?.diagnosticRecovery
+                ? { ...next.supervision.diagnosticRecovery, disposition: 'executorResumeRecovery' }
+                : {}),
               ...this.wakeAttribution(next),
               reportId: prior.supervision?.lastReportId ?? null,
               nextEvaluationAt: decision.at,
@@ -1456,12 +1480,29 @@ export class AutopilotCoordinator {
     }
     if (!finalAllowed) {
       const occurredAt = this.deps.now();
+      const lease = state?.supervision?.waitLease;
+      const currentTurnId = turnId ?? this.deps.session(sessionId)?.activeTurnId;
+      const activeLease =
+        state?.supervision?.outcome === 'parked' &&
+        lease &&
+        (!lease.resumeAt || Date.parse(lease.resumeAt) > Date.parse(occurredAt));
+      const disposition =
+        activeLease && !lease.turnId
+          ? 'unknownWait'
+          : activeLease && currentTurnId && lease.turnId === currentTurnId
+            ? 'acceptedWait'
+            : 'rejectedFinal';
       this.commit({
         events: [
           {
             sessionId,
             type: 'autopilot.final-rejected',
-            payload: { reason: 'incompletePlan' },
+            payload: {
+              reason: 'incompletePlan',
+              disposition,
+              ...(currentTurnId ? { turnId: currentTurnId } : {}),
+              ...(disposition === 'acceptedWait' ? { leaseId: lease!.id } : {}),
+            },
             occurredAt,
           },
         ],
@@ -1958,6 +1999,7 @@ export class AutopilotCoordinator {
             this.progressKey(sessionId),
           ),
           wakeCause: null,
+          diagnosticRecovery: null,
         },
         updatedAt: now,
       },
@@ -2022,6 +2064,14 @@ export class AutopilotCoordinator {
           ...next.supervision,
           acknowledgedRevision:
             next.supervision.acknowledgedRevision ?? prior.supervision.acknowledgedRevision,
+          diagnosticRecovery:
+            !next.requestedEnabled ||
+            (control?.status === 'cancelled' &&
+              control.controlId === prior.supervision.diagnosticRecovery?.controlId)
+              ? null
+              : next.supervision.diagnosticRecovery === undefined
+                ? prior.supervision.diagnosticRecovery
+                : next.supervision.diagnosticRecovery,
           wakeCause:
             !next.requestedEnabled ||
             !prior.requestedEnabled ||
@@ -2044,6 +2094,7 @@ export class AutopilotCoordinator {
         payload: {
           ...this.wakeAttribution(next),
           leaseId: nextLease.id,
+          ...(nextLease.turnId ? { turnId: nextLease.turnId } : {}),
           ...(nextLease.runId ? { runId: nextLease.runId } : {}),
           reportId: next.supervision?.lastReportId,
           resumeAt: nextLease.resumeAt ?? null,
@@ -3453,6 +3504,14 @@ export class AutopilotCoordinator {
     // A command that crossed the durable issue boundary is deliberately not
     // replayed: app-server acceptance may have happened before a crash.
     if (!command || command.status !== 'scheduled') return;
+    const diagnosticAttempt = {
+      requestId: command.commandId,
+      threadId: fence.executorThreadId,
+      generation: fence.executorGeneration,
+      ...(state?.checkpoints?.activeHandoffId
+        ? { traceId: state.checkpoints.activeHandoffId }
+        : {}),
+    };
     let delivered = false;
     this.executorTimers.set(
       sessionId,
@@ -3539,7 +3598,7 @@ export class AutopilotCoordinator {
             // Only an explicit app-server rejection is safe to retry. A lost
             // response may conceal accepted work, so retain its issued fence.
             if (!explicitExecutorRejection(error)) {
-              this.containOperationFailure(sessionId, error, 'executorResume');
+              this.containOperationFailure(sessionId, error, 'executorResume', diagnosticAttempt);
               this.armExecutorRefresh(sessionId, this.deps.policy.executorContinuationMaxMs);
               return;
             }
@@ -3648,6 +3707,8 @@ export class AutopilotCoordinator {
     const occurredAt = this.deps.now();
     const state = this.deps.store.find(sessionId);
     const accepted = status === 'started' && Boolean(turnId);
+    const recovery = state?.supervision?.diagnosticRecovery;
+    const acceptedRecovery = accepted && recovery?.controlId === controlId ? recovery : undefined;
     const acceptanceState =
       accepted && state
         ? {
@@ -3659,6 +3720,7 @@ export class AutopilotCoordinator {
                 controlId,
                 turnId: turnId!,
               },
+              ...(acceptedRecovery ? { diagnosticRecovery: null } : {}),
               wakeCause: null,
             },
             updatedAt: occurredAt,
@@ -3701,6 +3763,9 @@ export class AutopilotCoordinator {
                       ...(state ? this.wakeAttribution(state) : {}),
                       trafficClass: accepted ? 'acceptedRootTurn' : 'unconfirmedStart',
                       turnId,
+                      ...(acceptedRecovery
+                        ? { ...acceptedRecovery, disposition: 'executorResumeRecovery' }
+                        : {}),
                       ...(this.deps.store.find(sessionId)?.checkpoints?.activeHandoffId
                         ? { traceId: this.deps.store.find(sessionId)!.checkpoints!.activeHandoffId }
                         : {}),
@@ -4154,6 +4219,7 @@ export class AutopilotCoordinator {
       | 'processConsume'
       | 'processTransfer'
       | 'processTerminate' = 'queuedOperation',
+    attempt?: NonNullable<SupervisionProtocolState['diagnosticRecovery']>,
   ): void {
     const code = operationFailureCode(error);
     const rpcCode = operationRpcCode(error);
@@ -4203,6 +4269,7 @@ export class AutopilotCoordinator {
               waitLease: null,
               retryKey: null,
               safetyPauseReason: null,
+              diagnosticRecovery: attempt ?? null,
             },
           }
         : {}),
@@ -4220,6 +4287,7 @@ export class AutopilotCoordinator {
               kind: operation,
               reason: operationErrorKind(error),
               ...(rpcCode !== undefined ? { rpcCode } : {}),
+              ...(attempt ?? {}),
             },
             occurredAt: now,
           },

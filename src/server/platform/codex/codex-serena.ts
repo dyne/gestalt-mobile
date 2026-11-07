@@ -13,6 +13,7 @@ import {
 } from '../retrieval/codex-xerj.js';
 import { ManagedSerena, serenaTools } from './managed-serena.js';
 import { ReadinessEvidence } from '../retrieval/readiness-evidence.js';
+import { withCapabilityInstructions } from './instruction-blocks.js';
 
 export const serenaServerName = 'gestalt-serena';
 type Input = Parameters<CodexXerj['prepare']>[0];
@@ -41,10 +42,13 @@ export class CodexSerena {
     let native: Record<string, unknown> = {};
     let compatible = false;
     try {
-      const read = (await beforeDeadline(
-        input.rpc.request('config/read', { includeLayers: false }),
-        input.deadline,
-      )) as { config?: Record<string, unknown> };
+      const read =
+        input.nativeConfig !== undefined
+          ? { config: input.nativeConfig ?? undefined }
+          : ((await beforeDeadline(
+              input.rpc.request('config/read', { cwd: input.cwd, includeLayers: false }),
+              input.deadline,
+            )) as { config?: Record<string, unknown> });
       native = read.config ?? {};
       compatible = read.config !== undefined;
     } catch {
@@ -62,7 +66,11 @@ export class CodexSerena {
         mcp[name] = { ...server, enabled: false, required: false };
     }
     const instructions =
-      typeof native.developer_instructions === 'string' ? native.developer_instructions : '';
+      typeof input.config.developer_instructions === 'string'
+        ? input.config.developer_instructions
+        : typeof native.developer_instructions === 'string'
+          ? native.developer_instructions
+          : '';
     const state: CodexRetrievalState = {
       evidence,
       get readiness() {
@@ -79,6 +87,8 @@ export class CodexSerena {
           ...entry,
           enabled: entry.path === skill?.path ? false : entry.enabled,
         }));
+        state.instructionBlock =
+          '<gestalt_serena_unavailable>\nSerena is unavailable in this runtime. Earlier Serena guidance is inactive; use native code tools.\n</gestalt_serena_unavailable>';
         state.config = {
           ...input.config,
           skills: { config: [{ name: 'gestalt:serena', enabled: false }] },
@@ -95,7 +105,11 @@ export class CodexSerena {
               required: false,
             },
           },
-          developer_instructions: `${instructions}\n<gestalt_serena_unavailable>\nSerena is unavailable in this runtime. Earlier Serena guidance is inactive; use native code tools.\n</gestalt_serena_unavailable>`,
+          developer_instructions: withCapabilityInstructions(
+            instructions,
+            'serena',
+            state.instructionBlock,
+          ),
         };
       },
     };
@@ -133,6 +147,7 @@ export class CodexSerena {
       }
       const guidance = await beforeDeadline(readFile(skill.path, 'utf8'), input.deadline);
       if (guidance.length > 16_384) return state;
+      state.instructionBlock = `<gestalt_serena_capability>\nSerena is bound to this workspace. Connection and listed tools do not prove language readiness. Verify usable symbols on a current source file before semantic editing, and usable references before impact claims. Empty results remain unverified; use native current-source tools when permissions or semantic checks are unknown. Native session and child permissions and approvals apply. Plan mode prohibits edits. Do not switch projects or modes.\n${guidance}\n</gestalt_serena_capability>`;
       state.config = {
         ...input.config,
         skills: { config: [{ name: 'gestalt:serena', enabled: true }] },
@@ -154,7 +169,11 @@ export class CodexSerena {
             startup_timeout_ms: Math.max(1, input.deadline - Date.now()),
           },
         },
-        developer_instructions: `${instructions}\n<gestalt_serena_capability>\nSerena is bound to this workspace. Connection and listed tools do not prove language readiness. Verify usable symbols on a current source file before semantic editing, and usable references before impact claims. Empty results remain unverified; use native current-source tools when permissions or semantic checks are unknown. Native session and child permissions and approvals apply. Plan mode prohibits edits. Do not switch projects or modes.\n${guidance}\n</gestalt_serena_capability>`,
+        developer_instructions: withCapabilityInstructions(
+          instructions,
+          'serena',
+          state.instructionBlock,
+        ),
       };
       state.skillsConfig = [
         ...input.skillsConfig.filter((entry) => entry.path !== skill.path),

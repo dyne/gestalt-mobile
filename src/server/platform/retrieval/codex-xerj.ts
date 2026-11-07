@@ -15,6 +15,8 @@ import type { AvailableSkill } from '../../features/skills/model/skill-profile.j
 import { ReadinessEvidence } from './readiness-evidence.js';
 import type { RetrievalReadiness } from '../../../shared/contracts/retrieval-readiness.js';
 import type { RepositoryReadiness } from './repository-readiness.js';
+import { withCapabilityInstructions } from '../codex/instruction-blocks.js';
+import type { StartupGuidance } from '../codex/startup-guidance.js';
 
 export const xerjServerName = 'gestalt-xerj';
 export const xerjTools = ['xerj_search', 'xerj_map', 'xerj_code_search'];
@@ -26,6 +28,10 @@ export type CodexRetrievalState = {
   skillsConfig: readonly { path: string; enabled: boolean }[];
   ready: boolean;
   diagnostic?: string;
+  instructionBlock?: string;
+  startup?: StartupGuidance;
+  /** Fresh replacement boundary only; no capability, provider or scratch preparation. */
+  prepareFreshStartup?(): Promise<void>;
   backendPreparation?: { status: 'starting' | 'unavailable'; reason?: XerjStartupReason };
   /** Verified optional capability guidance inserted only when starting a root turn. */
   turnInstructions?: string;
@@ -58,6 +64,10 @@ export class CodexXerj {
     config: Record<string, unknown>;
     start: boolean;
     approvalPolicy?: string;
+    /** Shared native readback for the combined adapter; null means unavailable. */
+    nativeConfig?: Record<string, unknown> | null;
+    /** Only fresh durable sessions install stable guidance; discovery probes omit it. */
+    startup?: boolean;
   }): Promise<CodexRetrievalState> {
     const skill = input.skills.find((entry) => entry.name === 'gestalt:xerj');
     const evidence = new ReadinessEvidence();
@@ -78,10 +88,13 @@ export class CodexXerj {
     let native: Record<string, unknown> = {};
     let compatible = false;
     try {
-      const read = (await beforeDeadline(
-        input.rpc.request('config/read', { includeLayers: false }),
-        input.deadline,
-      )) as { config?: Record<string, unknown> };
+      const read =
+        input.nativeConfig !== undefined
+          ? { config: input.nativeConfig ?? undefined }
+          : ((await beforeDeadline(
+              input.rpc.request('config/read', { cwd: input.cwd, includeLayers: false }),
+              input.deadline,
+            )) as { config?: Record<string, unknown> });
       native = read.config ?? {};
       compatible = read.config !== undefined;
     } catch {
@@ -98,7 +111,11 @@ export class CodexXerj {
         mcp[name] = { ...server, enabled: false, required: false };
     }
     const instructions =
-      typeof native.developer_instructions === 'string' ? native.developer_instructions : '';
+      typeof input.config.developer_instructions === 'string'
+        ? input.config.developer_instructions
+        : typeof native.developer_instructions === 'string'
+          ? native.developer_instructions
+          : '';
     state.fallback = () => {
       evidence.connection('unavailable');
       state.ready = false;
@@ -106,6 +123,8 @@ export class CodexXerj {
         ...entry,
         enabled: entry.path === skill?.path ? false : entry.enabled,
       }));
+      state.instructionBlock =
+        '<gestalt_xerj_unavailable>\nXerj retrieval is unavailable in this runtime. Earlier retrieval guidance is inactive; use rg and current source reads.\n</gestalt_xerj_unavailable>';
       state.config = {
         ...input.config,
         skills: { config: [{ name: 'gestalt:xerj', enabled: false }] },
@@ -118,7 +137,11 @@ export class CodexXerj {
             required: false,
           },
         },
-        developer_instructions: `${instructions}\n<gestalt_xerj_unavailable>\nXerj retrieval is unavailable in this runtime. Earlier retrieval guidance is inactive; use rg and current source reads.\n</gestalt_xerj_unavailable>`,
+        developer_instructions: withCapabilityInstructions(
+          instructions,
+          'xerj',
+          state.instructionBlock,
+        ),
       };
     };
     state.fallback();
@@ -150,6 +173,7 @@ export class CodexXerj {
         ...entry,
         enabled: entry.path === skill.path ? true : entry.enabled,
       }));
+      state.instructionBlock = `<gestalt_xerj_capability>\nWorkspace index counts do not establish coverage or freshness for a selected repository. Verify hit identity and current source before relying on it.\n${guidance}\n</gestalt_xerj_capability>`;
       state.config = {
         ...input.config,
         skills: { config: [{ name: 'gestalt:xerj', enabled: true }] },
@@ -174,7 +198,11 @@ export class CodexXerj {
             default_tools_approval_mode: 'approve',
           },
         },
-        developer_instructions: `${instructions}\n<gestalt_xerj_capability>\nWorkspace index counts do not establish coverage or freshness for a selected repository. Verify hit identity and current source before relying on it.\n${guidance}\n</gestalt_xerj_capability>`,
+        developer_instructions: withCapabilityInstructions(
+          instructions,
+          'xerj',
+          state.instructionBlock,
+        ),
       };
       state.ready = true;
       evidence.connection('unknown');

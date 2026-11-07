@@ -4314,8 +4314,41 @@ ${index === 10 ? '** SUSPENDED [#A] L11.1\n:PROPERTIES:\n:ID: l11-1\n:END:\n- Wh
           kind: 'executorResume',
           rpcCode: -32600,
           reason: kind === 'SECRET_ARBITRARY_KIND' ? 'UNKNOWN' : kind,
+          requestId: expect.any(String),
+          threadId: expect.any(String),
+          generation: expect.any(Number),
         });
         expect(JSON.stringify(failed)).not.toMatch(/secret|prompt|token|private|SECRET/);
+      },
+    );
+
+    it.each(['manualSend', 'disable', 'cancelledControl'] as const)(
+      'clears failed-attempt diagnostic correlation after %s without replaying the executor',
+      async (action) => {
+        const fixture = subject();
+        fixture.resume.mockRejectedValueOnce(new Error('transport lost'));
+        fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+        await fixture.runNext();
+        await fixture.runNext();
+        await vi.waitFor(() =>
+          expect(fixture.state?.supervision?.diagnosticRecovery).toMatchObject({
+            requestId: expect.any(String),
+            controlId: expect.any(String),
+          }),
+        );
+        if (action === 'manualSend') fixture.coordinator.manualSend('s');
+        else if (action === 'disable') fixture.coordinator.disable('s');
+        else
+          expect(
+            fixture.coordinator.registerProactiveWait('s', {
+              id: 'diagnostic-cancellation',
+              leaseId: 'diagnostic-wait',
+              wakeConditions: ['processExited'],
+              maxWaitMs: 60_000,
+            }),
+          ).toBe(true);
+        expect(fixture.state?.supervision?.diagnosticRecovery).toBeNull();
+        expect(fixture.resume).toHaveBeenCalledOnce();
       },
     );
 
