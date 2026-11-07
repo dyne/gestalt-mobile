@@ -6,7 +6,7 @@
 
 /* @vitest-environment jsdom */
 
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WorkspaceOption } from '../catalog/bootstrap-client.js';
 import FilesystemTree from './FilesystemTree.svelte';
@@ -102,6 +102,51 @@ describe('FilesystemTree semantics and pointer interaction', () => {
 });
 
 describe('FilesystemTree keyboard interaction', () => {
+  it('focuses on opening and scrolls a changed selection into view', async () => {
+    const scroll = vi.fn();
+    const { rerender } = renderTree({ selectedId: '.' });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('treeitem', { name: /^workspace/ })),
+    );
+    const group = screen.getByRole('treeitem', { name: /^group/ });
+    group.scrollIntoView = scroll;
+    await rerender({ selectedId: 'group' });
+    await waitFor(() => expect(document.activeElement).toBe(group));
+    expect(scroll).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
+  });
+
+  it('reveals a deep selected item on opening without expanding unrelated folders', async () => {
+    const { onexpandedchange, rerender } = renderTree({
+      selectedId: repository.id,
+      expandedIds: new Set(['.']),
+    });
+
+    await waitFor(() => expect(onexpandedchange).toHaveBeenCalledWith(new Set(['.', 'group'])));
+    await rerender({ expandedIds: new Set(['.', 'group']) });
+    const item = screen.getByRole('treeitem', { name: /repository-with-a-very-long-name/ });
+    await waitFor(() => expect(document.activeElement).toBe(item));
+
+    onexpandedchange.mockClear();
+    await rerender({ expandedIds: new Set(['.']) });
+    expect(onexpandedchange).not.toHaveBeenCalled();
+    expect(screen.queryByRole('treeitem', { name: /repository-with-a-very-long-name/ })).toBeNull();
+  });
+
+  it('waits for an asynchronously loaded selection and restores it on reopening', async () => {
+    const { rerender, unmount } = renderTree({ roots: [], selectedId: null });
+    await rerender({ roots, selectedId: repository.id });
+    const selectedItem = screen.getByRole('treeitem', { name: /repository-with-a-very-long-name/ });
+    await waitFor(() => expect(document.activeElement).toBe(selectedItem));
+    unmount();
+
+    renderTree({ selectedId: repository.id });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole('treeitem', { name: /repository-with-a-very-long-name/ }),
+      ),
+    );
+  });
+
   it('moves through visible nodes and between parent and child', async () => {
     renderTree();
     const items = screen.getAllByRole('treeitem');

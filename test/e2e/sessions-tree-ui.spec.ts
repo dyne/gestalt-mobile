@@ -312,9 +312,82 @@ async function expectUsableLayout(page: Page): Promise<void> {
   expect(startBox!.y + startBox!.height).toBeLessThanOrEqual(navigationBox!.y);
 }
 
+test('shares the remembered picker location, reveals it, and focuses it after reopening and reload', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openSessions(page, 'minimal-light', 100);
+  const sessionsTree = page.getByRole('tree', { name: 'Session base' });
+  await expect(sessionsTree.getByRole('treeitem')).toHaveCount(3);
+  await expect(page.getByRole('button', { name: 'Expand dyne' })).toBeVisible();
+  await page.getByRole('button', { name: 'Expand dyne' }).click();
+  await page.getByRole('button', { name: 'Expand mobile-applications-and-experiments' }).click();
+  const repository = page.getByRole('treeitem', { name: /^gestalt-mobile/ });
+  await repository.click();
+
+  await page.getByRole('button', { name: 'Git', exact: true }).click();
+  await expect(repository).toHaveAttribute('aria-selected', 'true');
+  await expect(repository).toBeFocused();
+  const destination = page.getByRole('treeitem', { name: /^personal-projects/ });
+  await destination.click();
+
+  await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+  await expect(destination).toHaveAttribute('aria-selected', 'true');
+  await expect(destination).toBeFocused();
+  await repository.click();
+  await expect(repository).toHaveAttribute('aria-selected', 'true');
+  await expect(repository).toBeFocused();
+  await page.getByRole('button', { name: 'Collapse dyne' }).click();
+  await expect(repository).toBeHidden();
+  await page.getByRole('button', { name: 'Git', exact: true }).click();
+  await expect(repository).toBeFocused();
+  await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+  await expect(repository).toBeFocused();
+
+  let releaseBootstrap = () => {};
+  const bootstrapGate = new Promise<void>((resolve) => (releaseBootstrap = resolve));
+  await page.route('**/api/bootstrap', async (route) => {
+    await bootstrapGate;
+    await route.fulfill({
+      json: { workspaces: workspaceTree, profiles: [], sessions: [] },
+    });
+  });
+  try {
+    await page.reload();
+    await page.getByRole('button', { name: 'Git', exact: true }).click();
+    await expect(
+      page.getByRole('tree', { name: 'Git repository and clone destination' }),
+    ).toBeVisible();
+    releaseBootstrap();
+    await expect(repository).toHaveAttribute('aria-selected', 'true');
+    await expect(repository).toBeFocused();
+  } finally {
+    releaseBootstrap();
+  }
+  await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+  await expect(repository).toHaveAttribute('aria-selected', 'true');
+  await expect(repository).toBeFocused();
+  const position = await repository.evaluate((item) => {
+    const tree = item.closest('[role="tree"]')!;
+    const itemBox = item.getBoundingClientRect();
+    const treeBox = tree.getBoundingClientRect();
+    return { top: itemBox.top >= treeBox.top, bottom: itemBox.bottom <= treeBox.bottom };
+  });
+  expect(position).toEqual({ top: true, bottom: true });
+  await page.getByRole('button', { name: 'Git', exact: true }).click();
+  await expect(repository).toHaveAttribute('aria-selected', 'true');
+  await expect(repository).toBeFocused();
+  await destination.click();
+  await page.reload();
+  await expect(destination).toHaveAttribute('aria-selected', 'true');
+  await expect(destination).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Expand dyne' })).toBeVisible();
+});
+
 test('uses the same selected highlight for pointer and keyboard interaction', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const diagnostics = await openSessions(page, 'minimal-light', 100);
+  await page.getByRole('button', { name: 'Expand dyne' }).click();
   await page.getByRole('button', { name: 'Expand mobile-applications-and-experiments' }).click();
 
   const repository = page.getByRole('treeitem', { name: /^gestalt-mobile/ });
@@ -341,7 +414,7 @@ for (const viewport of evidenceViewports) {
         await page.setViewportSize(viewport);
         const diagnostics = await openSessions(page, theme, fontScale);
 
-        await page.getByRole('button', { name: 'Collapse dyne' }).click();
+        await expect(page.getByRole('button', { name: 'Expand dyne' })).toBeVisible();
         await page.screenshot({
           path: `${evidenceDirectory}/${evidenceFilename('sessions', 'collapsed', viewport, fontScale, theme)}`,
           fullPage: false,
@@ -374,6 +447,7 @@ test('keeps failure feedback readable without covering the selected path or cont
 }) => {
   await page.setViewportSize({ width: 320, height: 568 });
   const diagnostics = await openSessions(page, 'minimal-dark', 200);
+  await page.getByRole('button', { name: 'Expand dyne' }).click();
   await page.getByRole('button', { name: 'Expand mobile-applications-and-experiments' }).click();
   const repository = page.getByRole('treeitem', { name: /^gestalt-mobile/ });
   await repository.click();

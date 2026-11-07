@@ -26,7 +26,7 @@ export function defaultExpandedIds(roots: WorkspaceOption[]): Set<string> {
   const expanded = new Set<string>();
 
   const visit = (node: WorkspaceOption, level: number): void => {
-    if (!node.isGitRepository && level <= 2) expanded.add(node.id);
+    if (!node.isGitRepository && level === 1) expanded.add(node.id);
     node.children.forEach((child) => visit(child, level + 1));
   };
 

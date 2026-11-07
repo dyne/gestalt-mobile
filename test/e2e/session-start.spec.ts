@@ -870,6 +870,7 @@ test('shows a start-session failure and permits a retry', async ({ page }) => {
   await page.getByRole('button', { name: 'Sessions' }).click();
   await expect(page.getByLabel('Workspace')).toHaveCount(0);
   await page.getByText('Advanced settings', { exact: true }).click();
+  await page.getByRole('button', { name: 'Expand group' }).click();
   const repository = page.getByRole('treeitem', { name: /^repository/ });
   await repository.click();
   await expect(repository).toHaveAttribute('aria-selected', 'true');
@@ -1215,8 +1216,9 @@ test('disables invalid clone destinations without a relay request', async ({ pag
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Git' }).click();
-  await page.getByLabel('Git address').fill('https://example.test/repository.git');
   await expect(page.getByRole('button', { name: 'Clone' })).toBeDisabled();
+  await page.getByLabel('Git address').fill('https://example.test/repository.git');
+  await expect(page.getByRole('button', { name: 'Clone' })).toBeEnabled();
   expect(cloneRequests).toBe(0);
 
   await page.getByRole('treeitem', { name: /^repository/ }).click();
@@ -1274,7 +1276,7 @@ test('prevents duplicate clone requests and preserves the address after relay fa
   expect(cloneRequests).toBe(1);
 });
 
-test('keeps Sessions and Git selections independent through a successful clone refresh', async ({
+test('shares the selected clone destination with Sessions after a successful clone refresh', async ({
   page,
 }) => {
   const repositoryId = 'opaque:group/repository%leaf';
@@ -1304,6 +1306,7 @@ test('keeps Sessions and Git selections independent through a successful clone r
   await page.getByRole('button', { name: 'Sessions' }).click();
   const repository = page.getByRole('treeitem', { name: /^repository/ });
   await page.getByText('Advanced settings', { exact: true }).click();
+  await page.getByRole('button', { name: 'Expand group' }).click();
   await repository.click();
   await expect(repository).toHaveAttribute('aria-selected', 'true');
 
@@ -1314,7 +1317,7 @@ test('keeps Sessions and Git selections independent through a successful clone r
   await expect.poll(() => bootstrapReads).toBe(2);
 
   await page.getByRole('button', { name: 'Sessions' }).click();
-  await expect(page.getByRole('treeitem', { name: /^repository/ })).toHaveAttribute(
+  await expect(page.getByRole('treeitem', { name: /^group/ })).toHaveAttribute(
     'aria-selected',
     'true',
   );
