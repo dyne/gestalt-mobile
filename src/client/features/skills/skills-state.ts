@@ -362,9 +362,13 @@ export class SkillsState {
       this.browserBaseline = this.playwrightEnabled;
       this.capabilitiesBaseline = this.explicitCapabilities;
     }
-    const optionalSkills = available.skills.filter(
-      (skill) => !skill.alwaysAdvertised && !isFixedGestaltSkill(skill.name),
-    );
+    const optionalSkills = available.skills
+      .filter((skill) => !skill.alwaysAdvertised && !isFixedGestaltSkill(skill.name))
+      .sort(
+        (left, right) =>
+          Number(right.provenance?.kind === 'gestalt-verified') -
+          Number(left.provenance?.kind === 'gestalt-verified'),
+      );
     this.skills = optionalSkills.map((skill) => ({
       ...skill,
       enabled:
