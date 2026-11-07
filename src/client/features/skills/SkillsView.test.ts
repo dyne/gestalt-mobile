@@ -109,8 +109,8 @@ describe('SkillsView', () => {
         source: 'native' as const,
         errors: [],
         skills: [
-          verified,
           ordinary,
+          verified,
           {
             ...verified,
             name: 'gestalt:org-plan',
@@ -132,6 +132,9 @@ describe('SkillsView', () => {
     render(SkillsView, props);
     const toggle = screen.getByRole('checkbox', { name: /Nuklear GUI.*Gestalt verified.*Enabled/ });
     expect((toggle as HTMLInputElement).disabled).toBe(false);
+    expect(
+      screen.getAllByRole('listitem').map((item) => within(item).getByRole('checkbox').id),
+    ).toEqual([`skill-${verified.path}`, `skill-${ordinary.path}`]);
     expect(screen.getAllByText('Gestalt verified')).toHaveLength(1);
     expect(screen.queryByText('gestalt:org-plan')).toBeNull();
     expect(

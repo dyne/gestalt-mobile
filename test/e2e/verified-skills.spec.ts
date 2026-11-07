@@ -113,8 +113,11 @@ for (const viewport of [
         await expect(page.getByText('gestalt:org-plan', { exact: true })).toHaveCount(0);
         await expect(page.getByText('2 of 2 skills enabled.')).toBeVisible();
         await expect(ordinary.locator('..').getByText('Gestalt verified')).toHaveCount(0);
-        await ordinary.focus();
-        await ordinary.press('Tab');
+        await verified.focus();
+        await verified.press('Tab');
+        await expect(ordinary).toBeFocused();
+        await expect(ordinary).toBeInViewport();
+        await ordinary.press('Shift+Tab');
         await expect(verified).toBeFocused();
         await expect(verified).toBeInViewport();
         await expect

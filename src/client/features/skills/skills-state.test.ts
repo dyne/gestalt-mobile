@@ -43,6 +43,83 @@ function client(overrides: Partial<SkillsClient> = {}): SkillsClient {
 }
 
 describe('SkillsState', () => {
+  it('lists verified skills first while preserving discovery order within each group', async () => {
+    const provenance = {
+      kind: 'gestalt-verified' as const,
+      repository: 'dyne/gestalt-skills' as const,
+      revision: 'a'.repeat(40),
+    };
+    const local = { ...available.skills[0], path: '/home/developer/.agents/skills/alpha/SKILL.md' };
+    const verified = {
+      ...available.skills[0],
+      name: 'Zulu',
+      path: '/managed/zulu/SKILL.md',
+      provenance,
+    };
+    const unverified = {
+      ...available.skills[1],
+      path: '/gestalt-skills/skills/unverified/SKILL.md',
+    };
+    const otherVerified = { ...verified, name: 'Beta', path: '/managed/beta/SKILL.md' };
+    const discovered = [local, verified, unverified, otherVerified];
+    const state = new SkillsState(
+      client({ listAvailableSkills: async () => ({ ...available, skills: discovered }) }),
+    );
+
+    await state.load('w', 'default');
+
+    expect(state.skills.map((skill) => skill.path)).toEqual([
+      verified.path,
+      otherVerified.path,
+      local.path,
+      unverified.path,
+    ]);
+    expect(discovered.map((skill) => skill.path)).toEqual([
+      local.path,
+      verified.path,
+      unverified.path,
+      otherVerified.path,
+    ]);
+    expect(state.dirty).toBe(false);
+  });
+
+  it('reorders refreshed provenance without losing path-keyed edits or reset behavior', async () => {
+    const provenance = {
+      kind: 'gestalt-verified' as const,
+      repository: 'dyne/gestalt-skills' as const,
+      revision: 'a'.repeat(40),
+    };
+    const local = available.skills[1];
+    const verified = { ...available.skills[0], provenance };
+    const state = new SkillsState(
+      client({
+        listAvailableSkills: vi
+          .fn()
+          .mockResolvedValueOnce({ ...available, skills: [local, verified] })
+          .mockResolvedValueOnce({
+            ...available,
+            skills: [
+              { ...verified, provenance: undefined },
+              { ...local, provenance },
+            ],
+          }),
+      }),
+    );
+    await state.load('w', 'default');
+    state.toggle(verified.path, false);
+
+    await state.refresh();
+
+    expect(state.skills.map((skill) => [skill.path, skill.enabled])).toEqual([
+      [local.path, false],
+      [verified.path, false],
+    ]);
+    expect(state.dirty).toBe(true);
+    state.reset();
+    expect(state.skills.find((skill) => skill.path === verified.path)?.enabled).toBe(true);
+    expect(state.dirty).toBe(false);
+  });
+
   it('preserves explicit missing-row removal across refresh and save, and reset restores the saved row', async () => {
     const missing = { name: 'nuklear-gui', path: '/managed/nuklear-gui/SKILL.md', enabled: false };
     const saved = {
