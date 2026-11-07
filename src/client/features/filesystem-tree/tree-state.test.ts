@@ -40,15 +40,13 @@ const tree = [
 ];
 
 describe('tree expansion state', () => {
-  it('opens root and first-level ordinary folders by default while keeping deeper folders folded', () => {
+  it('opens only the root by default and folds every folder beneath it', () => {
     const expanded = defaultExpandedIds(tree);
 
-    expect([...expanded]).toEqual(['.', 'group', 'empty']);
+    expect([...expanded]).toEqual(['.']);
     expect(flattenVisibleTree(tree, expanded).map(({ node }) => node.id)).toEqual([
       '.',
       'group',
-      'group/nested',
-      'group/project',
       'empty',
     ]);
   });

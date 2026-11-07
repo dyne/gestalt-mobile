@@ -261,6 +261,7 @@ for (const { viewport, fontScale, theme } of evidenceConfigurations()) {
     await capture(page, 'ordinary-selected', viewport, fontScale, theme, ordinary, testInfo);
 
     const primary = page.getByRole('treeitem', { name: /^primary-repository/ });
+    await page.getByRole('button', { name: 'Expand many-repository-siblings' }).click();
     await primary.click();
     await expect(primary).toHaveAttribute('aria-selected', 'true');
     await expect(primary).toBeFocused();
@@ -376,6 +377,7 @@ for (const width of [390, 1280]) {
       published = true;
       await route.fulfill({ status: 202, json: { accepted: true } });
     });
+    await page.getByRole('button', { name: 'Expand many-repository-siblings' }).click();
     await page.getByRole('treeitem', { name: /^primary-repository/ }).click();
     const push = page.getByRole('button', { name: 'Push', exact: true });
     await expect(push).toBeEnabled();

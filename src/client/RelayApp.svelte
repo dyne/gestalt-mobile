@@ -79,6 +79,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     refreshSelection,
     treeNodePolicies,
   } from './features/filesystem-tree/tree-state.js';
+  import {
+    readTreeSelection,
+    rememberTreeSelection,
+  } from './features/filesystem-tree/selection-storage.js';
   import GitView from './features/git/GitView.svelte';
   import { GitController, type GitState } from './features/git/git-controller.js';
   import { selectAfterClone } from './features/git/post-clone-selection.js';
@@ -283,6 +287,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let savingSessionDefaults = $state(false);
   let sessionAdvancedExpanded = $state(false);
   let sessionExpandedIds = $state<Set<string>>(new Set());
+  let treeSelectionsLoaded = $state(false);
   let sessionId = $state<string | null>(null);
   let sessions = $state<RelaySession[]>([]);
   let forgettingStates = $state.raw<ReadonlyMap<string, SessionForgetState>>(new Map());
@@ -690,6 +695,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
   }
 
+  $effect(() => {
+    if (!treeSelectionsLoaded) return;
+    rememberTreeSelection(sessionWorkspaceId || null);
+  });
+
   onMount(async () => {
     if (
       evidenceContext === 'sessions' ||
@@ -750,6 +760,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       componentVersions = bootstrap.versions ?? [];
       acceptXerjStatus(bootstrap.xerj);
       headerIconUrl = bootstrap.branding?.headerIconUrl ?? null;
+      sessionWorkspaceId = readTreeSelection(workspaceTree, sessionWorkspaceId) ?? '';
+      treeSelectionsLoaded = true;
+      if (tab === 'git') gitController.select(sessionWorkspaceId || null);
       if (!detachedSessionId) void refreshSkillProfiles();
       sessionExpandedIds = defaultExpandedIds(workspaceTree);
       gitExpandedIds = defaultExpandedIds(workspaceTree);
@@ -1291,7 +1304,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       reconcileVisibleHistory();
       if (changedTab) focusChatPrompt();
     }
-    if (next === 'git' && gitWorkspaceId) void gitController.refresh();
+    if (next === 'git') {
+      if (gitWorkspaceId !== (sessionWorkspaceId || null)) {
+        gitController.select(sessionWorkspaceId || null);
+        pushConfirmationOpen = false;
+      } else if (gitWorkspaceId) void gitController.refresh();
+    }
     if (next === 'plan') {
       if (sessionId) planController.refresh(sessionId);
       if (!changedTab) refreshPlanSurface();
@@ -1590,6 +1608,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function selectGitWorkspace(node: WorkspaceOption): void {
+    sessionWorkspaceId = node.id;
     gitController.select(node.id);
     pushConfirmationOpen = false;
   }
@@ -1691,6 +1710,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           treeNodePolicies.sessionBase,
         ) ?? '';
       workspaceTree = bootstrap.workspaces;
+      sessionWorkspaceId = postClone.selectedId ?? sessionWorkspaceId;
       gitController.select(postClone.selectedId);
       gitExpandedIds = postClone.expandedIds;
       gitCloneStatus = 'Repository cloned into the selected workspace.';

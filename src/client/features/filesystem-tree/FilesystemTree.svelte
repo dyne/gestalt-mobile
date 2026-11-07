@@ -5,8 +5,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import { untrack } from 'svelte';
   import type { WorkspaceOption } from '../catalog/bootstrap-client.js';
   import {
+    ancestorIds,
+    findTreeNode,
     flattenVisibleTree,
     toggleExpanded,
     type TreeNodePolicy,
@@ -35,11 +38,37 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   let focusedId = $state<string | null>(null);
   const itemElements = $state<Record<string, HTMLButtonElement>>({});
+  let revealedNode: WorkspaceOption | undefined;
   let visibleNodes = $derived(flattenVisibleTree(roots, expandedIds));
   let activeFocusId = $derived.by(() => {
     if (focusedId && visibleNodes.some(({ node }) => node.id === focusedId)) return focusedId;
     if (selectedId && visibleNodes.some(({ node }) => node.id === selectedId)) return selectedId;
     return visibleNodes[0]?.node.id ?? null;
+  });
+
+  $effect(() => {
+    const selected = selectedId;
+    const node = selected ? findTreeNode(roots, selected) : undefined;
+    if (!selected || !node || node === revealedNode) return;
+    revealedNode = node;
+    const ancestors = ancestorIds(roots, selected);
+
+    untrack(() => {
+      const expanded = new Set(expandedIds);
+      ancestors.forEach((id) => expanded.add(id));
+      if (expanded.size !== expandedIds.size) onexpandedchange(expanded);
+    });
+  });
+
+  $effect(() => {
+    const selected = selectedId;
+    const item = selected ? itemElements[selected] : undefined;
+    if (!item) return;
+    untrack(() => {
+      focusedId = selected;
+      item.focus({ preventScroll: true });
+      item.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    });
   });
 
   function isExpandable(node: WorkspaceOption): boolean {
