@@ -9,7 +9,18 @@ import { mockAuthenticatedStatus } from './auth-fixture.js';
 
 test('reopens archived plans and opens raw Org documents at the top from a scrolled catalog', async ({
   page,
-}) => {
+}, testInfo) => {
+  const sourceRoot = '/srv/application workspace/repository-with-a-long-name/.gestalt';
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          (window as Window & { copiedOrgPath?: string }).copiedOrgPath = text;
+        },
+      },
+    });
+  });
   await page.setViewportSize({ width: 390, height: 844 });
   await mockAuthenticatedStatus(page);
   await page.route('**/api/bootstrap', (route) =>
@@ -66,6 +77,7 @@ test('reopens archived plans and opens raw Org documents at the top from a scrol
       body: JSON.stringify({
         title: 'Long roadmap',
         currentStepId: 'task-29',
+        sourcePath: `${sourceRoot}/long.org`,
         doneSteps: 0,
         totalSteps: 30,
         allDone: false,
@@ -88,6 +100,7 @@ test('reopens archived plans and opens raw Org documents at the top from a scrol
       body: JSON.stringify({
         kind: 'org-source',
         planName: '.gestalt/raw.org',
+        sourcePath: `${sourceRoot}/raw.org`,
         title: 'Long raw document',
         source:
           '#+TITLE: Long raw document\n\n' +
@@ -110,6 +123,17 @@ test('reopens archived plans and opens raw Org documents at the top from a scrol
   await reopen.click();
   await expect(page.getByRole('heading', { name: 'Long roadmap', exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await expect(page.getByText(`${sourceRoot}/long.org`, { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('supervised-plan-path-mobile.png') });
+  const copy = page.getByRole('button', { name: 'Copy Org file path' });
+  const target = await copy.boundingBox();
+  expect(target!.width).toBeGreaterThanOrEqual(44);
+  expect(target!.height).toBeGreaterThanOrEqual(44);
+  await copy.click();
+  await expect
+    .poll(() => page.evaluate(() => (window as Window & { copiedOrgPath?: string }).copiedOrgPath))
+    .toBe(`${sourceRoot}/long.org`);
+  await expect(page.getByRole('status').filter({ hasText: 'Org file path copied.' })).toBeVisible();
   await page.getByRole('button', { name: 'Close plan and return to list' }).click();
   const raw = page.getByRole('button', { name: 'Reopen Long raw document', exact: true });
   await raw.scrollIntoViewIfNeeded();
@@ -117,6 +141,32 @@ test('reopens archived plans and opens raw Org documents at the top from a scrol
   await raw.click();
   await expect(page.getByRole('heading', { name: 'Long raw document', exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await expect(page.getByText(`${sourceRoot}/raw.org`, { exact: true })).toBeVisible();
+  await copy.click();
+  await expect
+    .poll(() => page.evaluate(() => (window as Window & { copiedOrgPath?: string }).copiedOrgPath))
+    .toBe(`${sourceRoot}/raw.org`);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ),
+  ).toBe(0);
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async () => {
+          throw new Error('Clipboard unavailable');
+        },
+      },
+    });
+    document.execCommand = () => false;
+  });
+  await copy.click();
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'Org file path could not be copied.' }),
+  ).toBeVisible();
+  await expect(page.getByText(`${sourceRoot}/raw.org`, { exact: true })).toBeVisible();
 });
 
 test('refreshes only on Plan actions, keeps layout stable, and persists archiving across reload', async ({

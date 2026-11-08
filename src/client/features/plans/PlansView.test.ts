@@ -32,6 +32,28 @@ const plan = {
 };
 
 describe('PlansView', () => {
+  it.each(['supervised', 'org-source'])('shows the full %s source path below the title', (kind) => {
+    const sourcePath = '/work/Project with spaces/.gestalt/roadmap.org';
+    render(PlansView, {
+      catalog: { kind: 'ready', workspaceId: 'one', entries: [entry] },
+      state:
+        kind === 'supervised'
+          ? { kind: 'ready', sessionId: 'one', plan: { ...plan, sourcePath } }
+          : {
+              kind: 'org-source',
+              planName: '.gestalt/roadmap.org',
+              title: 'Roadmap',
+              source: '* Notes',
+              sourcePath,
+            },
+      onopen: vi.fn(),
+      onclose: vi.fn(),
+    });
+    const heading = screen.getByRole('heading', { name: 'Roadmap' });
+    expect(heading.parentElement?.textContent).toContain(sourcePath);
+    expect(screen.getByRole('button', { name: 'Copy Org file path' })).toBeTruthy();
+  });
+
   it('shows compact paths and progress, reserves inline update status, and moves archived rows while preserving focus', async () => {
     const name = 'group/repository/.gestalt/deep/roadmap.org';
     const onarchive = vi.fn();

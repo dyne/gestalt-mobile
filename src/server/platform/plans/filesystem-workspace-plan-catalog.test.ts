@@ -132,6 +132,7 @@ describe('FilesystemWorkspacePlanCatalog', () => {
     await expect(catalog.read(root, 'plans/roadmap space.org')).resolves.toMatchObject({
       kind: 'available',
       plan: { title: 'Roadmap' },
+      sourcePath: await filesystem.realpath(join(root, 'plans', 'roadmap space.org')),
     });
     await expect(catalog.read(root, '../roadmap space.org')).resolves.toEqual({ kind: 'missing' });
     await expect(catalog.read(root, 'roadmap\\plan.org')).resolves.toEqual({ kind: 'missing' });
@@ -166,6 +167,7 @@ describe('FilesystemWorkspacePlanCatalog', () => {
       kind: 'source',
       title: 'bad',
       source: 'bad',
+      sourcePath: await filesystem.realpath(join(root, '.gestalt', 'bad.org')),
     });
     await expect(catalog.read(root, 'missing.org')).resolves.toEqual({ kind: 'missing' });
   });

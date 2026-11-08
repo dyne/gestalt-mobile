@@ -2207,6 +2207,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <PlansView
           catalog={plansCatalog}
           state={visiblePlanState}
+          sourcePath={passivePlan ? undefined : selectedSession?.lastOrgPlan?.path}
+          oncopyresult={(copied) =>
+            toastQueue.enqueue(
+              copied
+                ? { kind: 'success', message: 'Org file path copied.' }
+                : {
+                    kind: 'error',
+                    message: 'Org file path could not be copied. Select it and copy it manually.',
+                  },
+            )}
           onopen={openWorkspacePlan}
           onarchive={archiveWorkspacePlan}
           {archivingPlans}

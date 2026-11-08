@@ -51,6 +51,7 @@ export type PlanStep = Readonly<{
 /** The complete retained plan projection supplied by the relay. */
 export type SupervisedPlan = Readonly<{
   title: string;
+  sourcePath?: string;
   subtitle?: string;
   date?: string;
   keywords?: string;

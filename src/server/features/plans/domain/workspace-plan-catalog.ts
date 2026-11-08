@@ -22,7 +22,7 @@ export type WorkspacePlanEntry = Readonly<{
 }>;
 
 export type WorkspacePlanReadResult =
-  | Readonly<{ kind: 'available'; plan: SupervisedPlan }>
-  | Readonly<{ kind: 'source'; title: string; source: string }>
+  | Readonly<{ kind: 'available'; plan: SupervisedPlan; sourcePath?: string }>
+  | Readonly<{ kind: 'source'; title: string; source: string; sourcePath?: string }>
   | Readonly<{ kind: 'missing' }>
   | Readonly<{ kind: 'unavailable' }>;

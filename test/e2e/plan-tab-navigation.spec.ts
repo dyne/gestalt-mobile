@@ -167,9 +167,22 @@ async function routeSessionHistory(page: Page, id: string): Promise<void> {
   );
 }
 
-test('opens a linked local Org file in the Plan tab', async ({ page }) => {
+test('opens a linked local Org file in the Plan tab', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          (window as Window & { copiedOrgPath?: string }).copiedOrgPath = text;
+        },
+      },
+    });
+  });
   const selected = session('session-1', '/projects/one');
   let openedPlanName: string | null = null;
+  await page.route('**/api/sessions', (route) => route.fulfill({ json: [selected] }));
+  await page.route('**/api/skill-profiles', (route) => route.fulfill({ json: { profiles: [] } }));
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -202,6 +215,7 @@ test('opens a linked local Org file in the Plan tab', async ({ page }) => {
         kind: 'org-source',
         planName: openedPlanName,
         title: 'Linked roadmap',
+        sourcePath: '/projects/one/plans/roadmap.org',
         source: '#+TITLE: Linked roadmap\n\n* TODO Verify the link',
       }),
     });
@@ -228,13 +242,28 @@ test('opens a linked local Org file in the Plan tab', async ({ page }) => {
     'true',
   );
   await expect(page.getByRole('heading', { name: 'Linked roadmap' })).toBeVisible();
+  await expect(page.getByText('/projects/one/plans/roadmap.org', { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('linked-org-path-desktop.png') });
+  await page.getByRole('button', { name: 'Copy Org file path' }).click();
+  await expect
+    .poll(() => page.evaluate(() => (window as Window & { copiedOrgPath?: string }).copiedOrgPath))
+    .toBe('/projects/one/plans/roadmap.org');
   expect(openedPlanName).toBe('plans/roadmap.org');
 });
 
 test('keeps the completed Plan tab reachable and overflow-free at 320px with 200% root font', async ({
   page,
 }) => {
-  const selected = session('session-1', '/projects/one');
+  const sourcePath = '/projects/one/.gestalt/responsive plan.org';
+  const selected = {
+    ...session('session-1', '/projects/one'),
+    lastOrgPlan: {
+      filename: 'responsive plan.org',
+      title: 'Responsive plan',
+      path: sourcePath,
+      attached: true,
+    },
+  };
   let closed = false;
   await page.setViewportSize({ width: 320, height: 568 });
   await page.route('**/api/bootstrap', (route) =>
@@ -305,6 +334,12 @@ test('keeps the completed Plan tab reachable and overflow-free at 320px with 200
   await plan.press('Enter');
   await expect(plan).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('heading', { name: 'Responsive plan' })).toBeVisible();
+  await expect(page.getByText(sourcePath, { exact: true })).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ),
+  ).toBe(0);
 
   await chat.click();
   await chat.focus();
