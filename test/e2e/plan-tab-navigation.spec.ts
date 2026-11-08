@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { OrgPlanPreparation } from '../../src/shared/contracts/org-plan-execution.js';
 import { expect, test, type Page } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { chatSnapshot } from './chat-snapshot-fixture.js';
@@ -467,6 +468,23 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
         sessions: [selected],
       }),
     });
+  });
+  // This navigation fixture has previews but no available supervisor runtime.
+  await page.route('**/api/plans/prepare', (route) => {
+    const reference = route.request().postDataJSON();
+    const preparation: OrgPlanPreparation =
+      reference.planName === 'notes/free-form.org'
+        ? {
+            kind: 'blocked',
+            code: 'INVALID_PLAN',
+            reason: 'This Org document is not a valid Gestalt plan.',
+          }
+        : {
+            kind: 'blocked',
+            code: 'CODEX_UNAVAILABLE',
+            reason: 'Codex supervision is currently unavailable.',
+          };
+    return route.fulfill({ json: preparation });
   });
   await routeSessionHistory(page, selected.id);
   await page.route(`**/api/sessions/${selected.id}/plan`, (route) => {

@@ -7,6 +7,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import type { OrgPlanPreparation } from '../../src/shared/contracts/org-plan-execution.js';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { chatSnapshot } from './chat-snapshot-fixture.js';
@@ -168,6 +169,27 @@ for (const configuration of evidenceConfigurations())
     let activeFontScale: (typeof evidenceFontScales)[number] = 100;
     const artifacts: Array<Record<string, unknown>> = [];
 
+    // Plan display stays read-only; the retained fixture session owns active work.
+    await page.route('**/api/plans/prepare', (route) => {
+      const reference = route.request().postDataJSON();
+      expect(reference).toEqual({ kind: 'retained-session', sessionId: session.id });
+      const complete =
+        plan?.allDone && plan.steps.every((step) => step.reviewStatus === 'REVIEWED');
+      const preparation: OrgPlanPreparation = complete
+        ? {
+            kind: 'blocked',
+            code: 'NO_REMAINING_WORK',
+            reason: 'Every plan step is complete and reviewed.',
+          }
+        : {
+            kind: 'blocked',
+            code: 'ACTIVE_SUPERVISION',
+            reason:
+              'This plan already has a supervisor. Open its session to continue or recover it.',
+            existingSessionId: session.id,
+          };
+      return route.fulfill({ json: preparation });
+    });
     await page.route('**/api/bootstrap', (route) =>
       route.fulfill({
         contentType: 'application/json',

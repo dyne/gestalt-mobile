@@ -9,6 +9,30 @@ import { describe, expect, it } from 'vitest';
 import { createRelayClient, type RelayAvailableSkill } from './relay-client.js';
 
 describe('relay client', () => {
+  it('prepares a read-only plan reference with the confirmed revision and profile and preserves conflicts', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const blocked = { kind: 'blocked', code: 'CONTEXT_CHANGED', reason: 'Refresh and confirm.' };
+    const client = createRelayClient(async (url, init) => {
+      requests.push({ url: String(url), init });
+      return new Response(JSON.stringify(blocked), { status: 409 });
+    });
+    const signal = new AbortController().signal;
+    const reference = {
+      kind: 'workspace' as const,
+      workspaceId: 'opaque/id',
+      planName: '.gestalt/空 白.org',
+    };
+    expect(await client.prepareOrgPlanSupervision(reference, 'seen', '', signal)).toEqual(blocked);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.url).toBe('/api/plans/prepare');
+    expect(requests[0]!.init?.method).toBe('POST');
+    expect(requests[0]!.init?.signal).toBe(signal);
+    expect(JSON.parse(String(requests[0]!.init?.body))).toEqual({
+      ...reference,
+      expectedRevision: 'seen',
+      skillProfile: '',
+    });
+  });
   it('requests global Clean TMP with an empty typed request and preserves partial counts', async () => {
     const result = {
       status: 'partial',

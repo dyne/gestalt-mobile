@@ -122,6 +122,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { workspacePlanNameFromHref } from './features/plans/org-plan-link.js';
   import PlansView, { type PlansCatalogState } from './features/plans/PlansView.svelte';
   import PlanView from './features/plans/PlanView.svelte';
+  import { handoffSession, SessionPresentation } from './features/sessions/session-handoff.js';
+  import type { OrgPlanLaunchResult } from '../shared/contracts/org-plan-execution.js';
   import {
     createSessionCache,
     type PendingDraftOperation,
@@ -324,7 +326,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let sessionStartState = $state<SessionStartState>({ starting: false, error: null });
   let startingSession = $derived(sessionStartState.starting);
   let openingSessionId = $state<string | null>(null);
-  let openGeneration = 0;
+  const sessionPresentation = new SessionPresentation((id) => {
+    openingSessionId = id;
+  });
   let writerFeedback = $state<string | null>(null);
   let retryOperationId = $state<string | null>(null);
   let message = $state('');
@@ -345,7 +349,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let plansCatalogGeneration = 0;
   let plansCatalogCache: Extract<PlansCatalogState, { kind: 'ready' }> | null = null;
   let plansCatalogRequestWorkspace: string | null = null;
-  let passivePlanSessionRelative = false;
+  let passivePlanSessionRelative = $state(false);
   let archivingPlans = $state<readonly string[]>([]);
   let passivePlanGeneration = 0;
   let navigationFocus = $state<Tab | null>(null);
@@ -465,6 +469,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       sessionRosterRevision += 1;
       recentSessions = retainForgottenSession(recentSessions, forgottenSession);
       if (sessionId === id) {
+        sessionPresentation.invalidate();
         chatController.select(null);
         activityController.select(null);
         sessionId = null;
@@ -854,6 +859,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   onDestroy(() => {
+    sessionPresentation.dispose();
     upgradeController.abort();
     plansCatalogRequest?.abort();
     passivePlanRequest?.abort();
@@ -900,6 +906,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       shellStatus = errors.profile;
       return;
     }
+    const isCurrent = sessionHandoffLease();
     shellStatus = 'Starting session…';
     const session = await sessionStartController.start(sessionWorkspaceId, {
       provider,
@@ -921,26 +928,87 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       return;
     }
     try {
-      sessionId = session.id;
-      for (const warning of session.effectiveSkillSelection?.warnings ?? [])
-        toastQueue.enqueue({
-          kind: 'warning',
-          code: 'SKILL_PROFILE_MISSING_SKILL',
-          message: warning,
-        });
-      planController.select(session.id);
-      void sessionCache.saveSelectedSession(session.id);
-      await refreshSessions();
-      const envelope = await sessionCache.readDraftEnvelope(session.id);
-      message = envelope.text;
-      draftRevision = envelope.revision;
-      restorePendingDrafts(session.id, envelope.pending);
-      chatController.select(session.id, { history: 'empty' });
-      activityController.select(session.id);
-      enterChatContext();
-      shellStatus = 'Session started.';
+      await presentStartedSession(session, 'empty', isCurrent);
     } catch (error) {
-      shellStatus = reportRelayError(error, 'SESSION_START_FAILED');
+      reportRelayError(error, 'SESSION_START_FAILED');
+    }
+  }
+
+  function sessionHandoffLease(): () => boolean {
+    const isCurrent = sessionPresentation.begin();
+    const origin = tab;
+    return () => isCurrent() && tab === origin;
+  }
+
+  async function presentStartedSession(
+    session: RelaySession,
+    history: 'empty' | 'load',
+    isCurrent: () => boolean,
+  ): Promise<void> {
+    await handoffSession(
+      session,
+      {
+        publish: (created) => {
+          const existing = sessions.find((item) => item.id === created.id);
+          sessions = existing
+            ? sessions.map((item) => (item.id === created.id ? { ...item, ...created } : item))
+            : [...sessions, created];
+          sessionRosterRevision += 1;
+        },
+        warn: (message) =>
+          toastQueue.enqueue({ kind: 'warning', code: 'SKILL_PROFILE_MISSING_SKILL', message }),
+        select: (created, mode) => {
+          sessionId = created.id;
+          writerFeedback = null;
+          retryOperationId = null;
+          message = '';
+          draftRevision = 0;
+          planController.select(created.id);
+          chatController.select(created.id, mode === 'empty' ? { history: 'empty' } : {});
+          activityController.select(created.id);
+        },
+        saveSelectedSession: (id) => sessionCache.saveSelectedSession(id),
+        refreshRoster: async () => {
+          try {
+            await refreshSessions();
+          } catch (error) {
+            reportRelayError(error, 'SESSION_REFRESH_FAILED');
+          }
+        },
+        readDraft: (id) => sessionCache.readDraftEnvelope(id),
+        restoreDraft: (id, envelope) => {
+          message = envelope.text;
+          draftRevision = envelope.revision;
+          restorePendingDrafts(id, envelope.pending);
+        },
+      },
+      {
+        history,
+        isCurrent,
+        present: () => {
+          enterChatContext();
+          shellStatus = 'Session started.';
+        },
+      },
+    );
+  }
+
+  async function acceptPlanLaunch(result: OrgPlanLaunchResult): Promise<void> {
+    if (result.kind !== 'started' && result.kind !== 'partial') return;
+    const isCurrent = sessionHandoffLease();
+    try {
+      let session: RelaySession;
+      try {
+        session = await relay.getSession(result.session.id);
+      } catch (error) {
+        // The receipt is a real persisted identity. Normal controllers can recover it.
+        reportRelayError(error, 'SESSION_REFRESH_FAILED');
+        session = result.session;
+      }
+      await presentStartedSession(session, 'load', isCurrent);
+    } catch (error) {
+      reportRelayError(error, 'SESSION_START_FAILED');
+      void refreshSessionLists();
     }
   }
 
@@ -1066,8 +1134,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   async function openSession(id: string) {
     if (sessionForgetting.isBusy(id)) return;
     shellStatus = 'Opening session…';
-    openingSessionId = id;
-    const generation = ++openGeneration;
+    const opening = sessionPresentation.beginOpen(id);
     try {
       sessionId = id;
       writerFeedback = null;
@@ -1078,7 +1145,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       activityController.select(id);
       enterChatContext();
       const envelope = await sessionCache.readDraftEnvelope(id);
-      if (generation === openGeneration && sessionId === id) {
+      if (opening.isCurrent() && sessionId === id) {
         message = envelope.text;
         draftRevision = envelope.revision;
         restorePendingDrafts(id, envelope.pending);
@@ -1086,7 +1153,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     } catch (error) {
       shellStatus = reportRelayError(error, 'SESSION_HISTORY_READ_FAILED');
     } finally {
-      if (generation === openGeneration) openingSessionId = null;
+      opening.finish();
     }
   }
 
@@ -1115,6 +1182,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     try {
       await relay.releaseSession(id);
       if (sessionId === id) {
+        sessionPresentation.invalidate();
         sessionId = null;
         tab = 'sessions';
         void sessionCache.saveSelectedSession(null);
@@ -1320,6 +1388,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (detachedSessionId) return;
     if (next === 'chat' && !chatEnabled) return;
     const changedTab = tab !== next;
+    if (changedTab) sessionPresentation.invalidate();
     tab = next;
     scrollTabIntoInitialPosition(next);
     if (next === 'chat') {
@@ -1448,6 +1517,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function openWorkspacePlan(planName: string, sessionRelative = false, startAtTop = true): void {
+    sessionPresentation.invalidate();
     const workspaceId = sessionRelative ? selectedSession?.workspaceId : plansWorkspaceId;
     if (!workspaceId) return;
     passivePlanRequest?.abort();
@@ -1508,6 +1578,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function closePlanViewer(): void {
+    sessionPresentation.invalidate();
     passivePlan = null;
     passivePlanName = null;
     hideLivePlan = true;
@@ -2229,6 +2300,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <PlansView
           catalog={plansCatalog}
           state={visiblePlanState}
+          executeReference={passivePlanName
+            ? passivePlanSessionRelative && sessionId
+              ? { kind: 'session', sessionId, planName: passivePlanName }
+              : plansWorkspaceId
+                ? { kind: 'workspace', workspaceId: plansWorkspaceId, planName: passivePlanName }
+                : undefined
+            : sessionId
+              ? { kind: 'retained-session', sessionId }
+              : undefined}
+          executeTransport={relay}
+          onexecuteerror={(message) => toastQueue.enqueue({ kind: 'error', message })}
+          onexecuteresult={(result) => void acceptPlanLaunch(result)}
           sourcePath={passivePlan ? undefined : selectedSession?.lastOrgPlan?.path}
           oncopyresult={(copied) =>
             toastQueue.enqueue(

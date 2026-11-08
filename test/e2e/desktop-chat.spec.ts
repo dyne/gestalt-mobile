@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { OrgPlanPreparation } from '../../src/shared/contracts/org-plan-execution.js';
 import { expect, test, type Page } from '@playwright/test';
 import type { SupervisedPlan } from '../../src/client/features/plans/contracts.js';
 import { THEME_STORAGE_KEY } from '../../src/client/features/theme/theme-registry.js';
@@ -91,6 +92,19 @@ async function install(page: Page) {
     ['alpha', plan('Alpha plan')],
     ['beta', plan('Beta plan')],
   ]);
+  // These retained plans already belong to the fixture's ordinary live sessions.
+  await page.route('**/api/plans/prepare', (route) => {
+    const reference = route.request().postDataJSON();
+    expect(reference.kind).toBe('retained-session');
+    expect(plans.has(reference.sessionId)).toBe(true);
+    const preparation: OrgPlanPreparation = {
+      kind: 'blocked',
+      code: 'ACTIVE_SUPERVISION',
+      reason: 'This plan already has a supervisor. Open its session to continue or recover it.',
+      existingSessionId: reference.sessionId,
+    };
+    return route.fulfill({ json: preparation });
+  });
   await page.route('**/api/sessions/*', (route) => {
     const id = route.request().url().split('/').at(-1);
     return route.fulfill({ json: fixture.sessions.find((session) => session.id === id) });

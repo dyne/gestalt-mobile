@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import type { Snippet } from 'svelte';
   import OrgNotes from './OrgNotes.svelte';
   import PlanFilePath from './PlanFilePath.svelte';
   import type { WorkspaceOrgPreview } from '../sessions/relay-client.js';
@@ -17,6 +18,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onreference?: (path: string) => void;
     sourcePath?: string;
     oncopyresult?: (copied: boolean) => void;
+    executeAction?: Snippet;
   };
 
   let {
@@ -26,6 +28,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     verifiedReferences = new Set<string>(),
     sourcePath,
     oncopyresult,
+    executeAction,
   }: Props = $props();
   let document = $derived(parseOrgDocument(preview.source));
   let metadata = $derived(document.metadata.filter(([key]) => key !== 'TITLE'));
@@ -37,6 +40,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <h2 id="org-document-title">{preview.title}</h2>
       <PlanFilePath path={preview.sourcePath || sourcePath || preview.planName} {oncopyresult} />
     </div>
+    {#if executeAction}<div class="execute-slot">{@render executeAction()}</div>{/if}
     <button class="close" type="button" aria-label="Close plan and return to list" onclick={onclose}
       >×</button
     >
@@ -115,11 +119,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     gap: 0.85rem;
     overflow-wrap: anywhere;
   }
-  header,
+  header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
   .section-heading {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
+    gap: 0.65rem;
+  }
+  header {
+    align-items: start;
     gap: 0.65rem;
   }
   header h2,
@@ -130,11 +141,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin: 0;
   }
   .document-heading {
+    flex: 1 1 15rem;
     min-inline-size: 0;
   }
   .close {
+    grid-column: 3;
+    grid-row: 1;
     flex: 0 0 auto;
-    min-inline-size: 2.5rem;
+    min-inline-size: 44px;
+    min-block-size: 44px;
     font-size: 1.35rem;
     line-height: 1;
   }
@@ -213,6 +228,28 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
     .org-section {
       margin-inline-start: min(calc(var(--org-depth) * 0.35rem), 1rem);
+    }
+  }
+  .execute-slot {
+    min-inline-size: 0;
+  }
+  @media (max-width: 40rem) {
+    header {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .document-heading {
+      display: contents;
+    }
+    .document-heading :global(.plan-file-path) {
+      grid-column: 1 / -1;
+      grid-row: 2;
+    }
+    .execute-slot {
+      grid-column: 1 / -1;
+      grid-row: 3;
+    }
+    .close {
+      grid-column: 2;
     }
   }
 </style>

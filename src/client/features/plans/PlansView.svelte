@@ -8,6 +8,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { planFileReferences } from './plan-file-references.js';
   import AppControl from '../../components/AppControl.svelte';
   import PlanView from './PlanView.svelte';
+  import ExecutePlanAction from './ExecutePlanAction.svelte';
+  import type {
+    OrgPlanReference,
+    OrgPlanLaunchResult,
+  } from '../../../shared/contracts/org-plan-execution.js';
+  import type { createRelayClient } from '../sessions/relay-client.js';
   import OrgDocumentView from './OrgDocumentView.svelte';
   import type { PlanState } from './plan-controller.js';
   import type { WorkspaceOrgPreview, WorkspacePlanEntry } from '../sessions/relay-client.js';
@@ -24,6 +30,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     | Readonly<{ kind: 'error'; workspaceId: string; error: string }>;
 
   type Props = {
+    executeReference?: OrgPlanReference;
+    executeTransport?: Pick<
+      ReturnType<typeof createRelayClient>,
+      'prepareOrgPlanSupervision' | 'startOrgPlanSupervision'
+    >;
+    onexecuteerror?: (message: string) => void;
+    onexecuteresult?: (result: OrgPlanLaunchResult) => void;
     catalog: PlansCatalogState;
     state: PlanState | WorkspaceOrgPreview | null;
     onopen: (planName: string) => void;
@@ -37,6 +50,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   };
 
   let {
+    executeReference,
+    executeTransport,
+    onexecuteerror,
+    onexecuteresult,
     catalog,
     state: planState,
     onopen,
@@ -184,6 +201,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   </li>
 {/snippet}
 
+{#snippet executeAction()}
+  <ExecutePlanAction
+    reference={executeReference}
+    sourceVersion={planState}
+    transport={executeTransport}
+    onerror={onexecuteerror}
+    onresult={onexecuteresult}
+  />
+{/snippet}
+
 {#if planState?.kind === 'org-source'}
   <OrgDocumentView
     preview={planState}
@@ -192,6 +219,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {verifiedReferences}
     {sourcePath}
     {oncopyresult}
+    {executeAction}
   />
 {:else if planState}
   <PlanView
@@ -201,6 +229,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {verifiedReferences}
     {sourcePath}
     {oncopyresult}
+    {executeAction}
   />
 {:else}
   <section class="plans" aria-labelledby="plans-title">
