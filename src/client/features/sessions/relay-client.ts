@@ -8,6 +8,8 @@ import type { HistoryObservation } from '../../../shared/contracts/chat-transpor
 import {
   orgPlanLaunchConflictSchema,
   orgPlanLaunchInvalidRequestSchema,
+  type OrgPlanPreparation,
+  type OrgPlanReference,
   type OrgPlanLaunchRequest,
   type OrgPlanLaunchResult,
 } from '../../../shared/contracts/org-plan-execution.js';
@@ -461,6 +463,22 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
         { workspaceId, profile: 'default', provider: 'codex', ...settings },
         key ? { 'idempotency-key': key } : {},
       ),
+    prepareOrgPlanSupervision: async (
+      reference: OrgPlanReference,
+      expectedRevision?: string,
+      skillProfile?: string,
+      signal?: AbortSignal,
+    ): Promise<OrgPlanPreparation> => {
+      const response = await fetcher('/api/plans/prepare', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...reference, expectedRevision, skillProfile }),
+        signal,
+      });
+      if (response.ok || response.status === 409)
+        return response.json() as Promise<OrgPlanPreparation>;
+      throw await failure(response);
+    },
     startOrgPlanSupervision: async (input: OrgPlanLaunchRequest): Promise<OrgPlanLaunchResult> => {
       const response = await fetcher('/api/plans/execute', {
         method: 'POST',

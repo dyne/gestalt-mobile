@@ -89,3 +89,20 @@ plan loading and real helper publication before stopping. It records accepted
 bootstrap and observed owning-root helper/status evidence separately. Missing
 prerequisites or unobserved publication produce a nonpassing bounded receipt;
 neither mocked tests nor source smoke prove an installed Mobile update.
+
+The client `handoffSession` operation in `features/sessions/session-handoff.ts`
+shares normal roster publication, selected-session caching, draft restoration and
+controller selection between manual creation and Execute. The shell supplies
+those ordinary adapters and chooses the destination independently. Manual new
+sessions use the known-empty history hint; Execute loads normal history because
+the bootstrap may already be recorded. Started and partial receipts both select
+the returned persisted ID through this operation, without another launch or
+client-side recovery stage.
+
+A caller supplies an immutable presentation lease. Navigation, another session
+selection or disposal invalidates it across roster and draft reads, preventing a
+late response from changing the user's draft or destination. The persisted
+session remains discoverable in the ordinary roster. Dismissing the modal after
+submission leaves the server operation intact; leaving the viewer suppresses its
+late presentation. Neither handoff nor launch turns on Autopilot or attaches the
+plan through the activating open-plan endpoint.

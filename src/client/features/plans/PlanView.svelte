@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import type { Snippet } from 'svelte';
   import OrgNotes from './OrgNotes.svelte';
   import { tick } from 'svelte';
 
@@ -24,6 +25,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onreference?: (path: string) => void;
     sourcePath?: string;
     oncopyresult?: (copied: boolean) => void;
+    executeAction?: Snippet;
   };
   type DescriptionKey = keyof PlanStep['description'];
 
@@ -46,6 +48,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     verifiedReferences = new Set<string>(),
     sourcePath,
     oncopyresult,
+    executeAction,
   }: Props = $props();
   let detailsById = $state<Partial<Record<string, HTMLDetailsElement>>>({});
   let lastCurrentStepId: string | null = null;
@@ -193,6 +196,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           <PlanFilePath path={plan.sourcePath || sourcePath!} {oncopyresult} />
         {/if}
       </div>
+      {#if !compact && executeAction}<div class="execute-slot">{@render executeAction()}</div>{/if}
       {#if compact}
         {#if onopenfull}<button type="button" onclick={onopenfull}>Full plan</button>{/if}
       {:else}
@@ -302,6 +306,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     font-size: 0.875rem;
   }
   .compact header {
+    display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
     margin-block-end: 0.75rem;
@@ -317,12 +322,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     overflow-wrap: anywhere;
   }
   header {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     gap: 1rem;
     justify-content: space-between;
     align-items: start;
   }
   .plan-heading {
+    flex: 1 1 15rem;
     min-inline-size: 0;
   }
   h2,
@@ -360,6 +367,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin: 0;
   }
   .close {
+    grid-column: 3;
+    grid-row: 1;
     inline-size: 2.75rem;
     block-size: 2.75rem;
     flex: 0 0 auto;
@@ -373,6 +382,28 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   @media (prefers-reduced-motion: reduce) {
     * {
       scroll-behavior: auto;
+    }
+  }
+  .execute-slot {
+    min-inline-size: 0;
+  }
+  @media (max-width: 40rem) {
+    header {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .plan:not(.compact) .plan-heading {
+      display: contents;
+    }
+    .plan-heading :global(.plan-file-path) {
+      grid-column: 1 / -1;
+      grid-row: 2;
+    }
+    .execute-slot {
+      grid-column: 1 / -1;
+      grid-row: 3;
+    }
+    .close {
+      grid-column: 2;
     }
   }
 </style>
