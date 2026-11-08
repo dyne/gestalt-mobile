@@ -37,6 +37,8 @@ export type OrgPlanPublicationSessions = {
   save(session: RelaySessionSnapshot): void;
 };
 
+export type OrgPlanInitialActivation = Readonly<{ sessionId: string; revision: number }>;
+
 /** Feature-owned durable reservation; independent of plan attachment and Autopilot. */
 export interface OrgPlanLaunchStore {
   find(launchId: string): OrgPlanLaunchRecord | null;

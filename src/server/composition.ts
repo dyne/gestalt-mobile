@@ -1997,12 +1997,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         checkpointPlanMeasurement(planMeasurementHelperPath, planPath, stepId, snapshot),
     );
   }
-  const saveSession = (
+  const notifySessionSaved = (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot,
+    prior: RelaySessionSnapshot | null,
   ) => {
-    if (forgetOperations.find(session.id)) return;
-    const prior = sessions.find(session.id);
-    sessions.save(session);
     reconcileOrgPlanReceipt(session.id);
     events.publish(journal.append(session.id, 'session.updated', session, session.updatedAt));
     const becameRuntimeReady =
@@ -2017,6 +2015,18 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     )
       void activity.refresh(session.id);
     if (becameRuntimeReady) autopilot.restore(session.id);
+  };
+  const saveSession = (session: RelaySessionSnapshot) => {
+    if (forgetOperations.find(session.id)) return;
+    const prior = sessions.find(session.id);
+    sessions.save(session);
+    notifySessionSaved(session, prior);
+  };
+  const notifyCommittedSession = (id: string, prior: RelaySessionSnapshot | null) => {
+    if (forgetOperations.find(id)) return null;
+    const current = sessions.find(id);
+    if (current) notifySessionSaved(current, prior);
+    return current;
   };
   const publishSession = (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot,
@@ -2260,13 +2270,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     onAccepted: (session, key) => {
       const record = orgPlanLaunches.forSession(session.id);
       if (
-        record?.phase === 'submitting' &&
+        record &&
+        ['session', 'submitting'].includes(record.phase) &&
         key !== `org-plan-bootstrap:${record.launchId}` &&
         session.activeTurnId
       )
         orgPlanLaunches.save(
-          { ...record, manualRecoveryTurnId: session.activeTurnId },
-          'submitting',
+          { ...record, phase: 'submitting', manualRecoveryTurnId: session.activeTurnId },
+          record.phase,
         );
     },
     start: async (session, text, clientUserMessageId) => {
@@ -2274,6 +2285,21 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       autopilot.manualSend(session.id);
       const owner = ownerRuntime(session);
       if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
+      if (session.provider === 'codex' && runtime)
+        return runtime.startTurn(
+          session,
+          text,
+          clientUserMessageId,
+          new Date().toISOString(),
+          () => {
+            const current = sessions.find(session.id);
+            return Boolean(
+              current?.desiredState === 'active' &&
+              current.threadId === session.threadId &&
+              !forgetOperations.find(session.id),
+            );
+          },
+        );
       return owner.startTurn(session, text, clientUserMessageId, new Date().toISOString());
     },
     ensureWriter:
@@ -2284,6 +2310,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             dismissPendingInteractions(session.id, new Date().toISOString());
             const owner = ownerRuntime(session);
             if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
+            if (!session.threadId && orgPlanLaunches.forSession(session.id))
+              return {
+                session: await activateInitialPlanSession(session),
+                replacementCreated: false,
+                persisted: true,
+              };
             return owner.ensureWriter(
               await recoverExecutionPolicy(session),
               new Date().toISOString(),
@@ -2310,6 +2342,42 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       });
       planMeasurementRefresh?.refreshNow(session.id);
     },
+  };
+  const initialActivationSessions = {
+    find: (id: string) => (forgetOperations.find(id) ? null : sessions.find(id)),
+    save: (session: RelaySessionSnapshot) => sessions.save(session),
+  };
+  const activateInitialPlanSession = async (session: RelaySessionSnapshot) => {
+    if (!runtime || session.provider !== 'codex') throw new Error('LLM_RUNTIME_UNAVAILABLE');
+    const attempt = orgPlanLaunches.claimInitialActivation(session.id, initialActivationSessions);
+    if (!attempt) throw new Error('ORG_PLAN_INITIAL_ACTIVATION_UNSETTLED');
+    const assertCurrent = () => {
+      if (!orgPlanLaunches.initialActivationCurrent(attempt, initialActivationSessions))
+        throw new Error('ORG_PLAN_INITIAL_ACTIVATION_FENCED');
+    };
+    try {
+      dismissPendingInteractions(session.id, new Date().toISOString());
+      const active = await runtime.start(session, new Date().toISOString(), {
+        assertCurrent,
+        beforeThreadStart: () => {
+          if (!orgPlanLaunches.requestInitialThread(attempt, initialActivationSessions))
+            throw new Error('ORG_PLAN_INITIAL_ACTIVATION_FENCED');
+        },
+      });
+      if (!orgPlanLaunches.completeInitialActivation(attempt, active, initialActivationSessions)) {
+        await runtime.release(session.id);
+        throw new Error('ORG_PLAN_INITIAL_ACTIVATION_FENCED');
+      }
+      const current = notifyCommittedSession(session.id, session);
+      if (!current || current.desiredState !== 'active') {
+        await runtime.release(session.id);
+        throw new Error('ORG_PLAN_INITIAL_ACTIVATION_FENCED');
+      }
+      return current;
+    } catch (error) {
+      orgPlanLaunches.failInitialActivation(attempt);
+      throw error;
+    }
   };
   const submitSessionTurn = createStartTurn(ordinaryTurnDependencies);
   ordinaryTurnPending = (id) => submitSessionTurn.pending?.(id) ?? false;
@@ -2416,16 +2484,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 ...ordinarySessionLifecycle,
                 createId: () => id,
                 inheritedSkillSelection: selection,
-                save: (snapshot) => {
-                  const current = sessions.find(id);
-                  const phase = orgPlanLaunches.find(publication.launchId)?.phase;
-                  if (
-                    ownsPublication &&
-                    current?.desiredState === 'active' &&
-                    ['session', 'creating'].includes(phase ?? '')
-                  )
-                    saveSession(snapshot);
-                },
+                // Both lifecycle stages already commit through the guarded launch store.
+                save: () => {},
                 publish: (session) =>
                   publishSession(
                     session,
@@ -2440,13 +2500,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                       );
                       ownsPublication = receipt.created;
                       publishedSession = receipt.session;
-                      if (receipt.created) saveSession(receipt.session);
+                      if (receipt.created) notifyCommittedSession(id, null);
                     },
                   ),
-                activate: async (session, settings) => {
+                activate: async (session) => {
                   if (!ownsPublication) return sessions.find(id) ?? publishedSession ?? session;
-                  const active =
-                    (await ordinarySessionLifecycle.activate?.(session, settings)) ?? session;
+                  const active = await activateInitialPlanSession(session);
                   const current = sessions.find(id);
                   if (!current || current.desiredState === 'stopped') {
                     await ownerRuntime(active)?.release(id);
@@ -2468,6 +2527,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         },
         recover: async (session) => {
           if (orgPlanStarting.has(session.id)) return null;
+          if (!session.threadId) return activateInitialPlanSession(session);
           const acquisition = await ordinaryTurnDependencies.ensureWriter?.(session);
           if (!acquisition) return null;
           const current = sessions.find(session.id);

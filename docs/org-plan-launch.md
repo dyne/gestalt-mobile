@@ -65,11 +65,27 @@ read; it cannot exclude another supervisor. A stale confirmation revokes the
 publication revision before releasing ownership, fencing any delayed old publisher.
 
 Session publication and launch progress commit atomically. A retry after an unknown
-publication result uses the same allocated ID and publication gate; only the first
-publisher may activate it. Losing publishers return the existing snapshot without
+publication result uses the same allocated ID and publication gate; only the current
+initial-activation claim may activate it. Losing publishers return the existing snapshot without
 overwriting ready, stopped or forgotten state. Rollback produces no roster event.
-Already-persisted sessions recover through ordinary writer acquisition. No recovery
+Already-bound sessions recover through ordinary writer acquisition. No recovery
 infers owner death from a missing in-memory row, PID or elapsed time.
+
+Publication also atomically records an initial-activation fence. If the saved
+session has no provider thread, a tracked pre-request attempt can start that
+same session through the normal runtime startup path. A revision check immediately
+before `thread/start` prevents a delayed original preparation from starting after
+a newer attempt supersedes it. Definite failures before that request boundary can
+retry with the captured session settings; existing threads retain ordinary writer
+recovery. Stop and Forget fence both provider startup and final publication.
+Ordinary Chat uses this same guarded recovery for a tracked null-thread session.
+An accepted explicit Chat turn suppresses any later automatic bootstrap; Execute
+continues to report the original bootstrap as pending rather than inventing a receipt.
+
+Once a provider thread request may have crossed, a missing receipt remains
+uncertain. Execute does not start another thread or bootstrap from that state,
+including after restart. Older null-thread rows without activation tracking are
+also uncertain; absence of a thread ID alone never authorizes another start.
 
 The production-composition regression also checks saved Codex defaults, a named
 supervisor profile, ordinary history, authenticated event replay and roster

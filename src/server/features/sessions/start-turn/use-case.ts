@@ -144,8 +144,16 @@ async function startWithWriter(
 ): Promise<RelaySessionSnapshot> {
   const writable = await ensureWriter(deps, session);
   if ('body' in writable) throw new StartTurnProblem(writable);
+  if (writable.persisted) {
+    const current = deps.find(session.id);
+    if (current?.desiredState !== 'active' || current.threadId !== writable.session.threadId)
+      throw new StartTurnProblem({
+        statusCode: 409,
+        body: JSON.stringify({ code: 'SESSION_NOT_READY' }),
+      });
+  }
   try {
-    if (writable.session !== session) deps.save(writable.session);
+    if (writable.session !== session && !writable.persisted) deps.save(writable.session);
   } catch (error) {
     await cleanupAcquiredWriter(deps, writable.session, session);
     throw error;
@@ -172,7 +180,7 @@ async function startWithWriter(
     }
     return started;
   } catch (error) {
-    if (!accepted && writable.session !== session)
+    if (!accepted && writable.session !== session && !writable.persisted)
       await cleanupAcquiredWriter(deps, writable.session, session);
     throw error;
   }

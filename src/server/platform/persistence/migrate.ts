@@ -42,6 +42,11 @@ export function migrate(database: DatabaseSync): void {
     phase TEXT NOT NULL CHECK(phase IN ('reserved','creating','session','submitting','accepted')),
     record_json TEXT NOT NULL
   );`);
+  database.exec(`CREATE TABLE IF NOT EXISTS org_plan_initial_activations (
+    session_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL,
+    phase TEXT NOT NULL CHECK(phase IN ('idle','preparing','requested','retryable','completed'))
+  );`);
   database.exec(`CREATE TABLE IF NOT EXISTS session_forget_operations (
     session_id TEXT PRIMARY KEY CHECK(length(session_id) BETWEEN 1 AND 256),
     operation_id TEXT NOT NULL UNIQUE CHECK(length(operation_id) = 36),

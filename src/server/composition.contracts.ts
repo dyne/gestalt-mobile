@@ -25,6 +25,9 @@ import { CodexSessionRuntime } from './platform/codex/session-runtime.js';
 import { SqliteAuthorizationStore } from './platform/auth/sqlite-authorization-store.js';
 import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
 import { SqliteIdempotencyStore } from './platform/persistence/sqlite-idempotency-store.js';
+import { SqliteOrgPlanLaunchStore } from './platform/persistence/sqlite-org-plan-launch-store.js';
+import { SqliteSessionRepository } from './platform/persistence/sqlite-session-repository.js';
+import { RelaySession } from './features/sessions/model/relay-session.js';
 import { SqliteAutopilotStore } from './platform/persistence/sqlite-autopilot-store.js';
 import { startSupervisionProtocol } from './features/autopilot/domain/supervision-protocol.js';
 import { exportControlPlaneTrace } from './features/control-plane-trace/export-trace.js';
@@ -555,6 +558,140 @@ async function createUnauthorizedProductionApp(root: string, dataDir: string) {
     },
     installedCodexVersion: null,
   });
+}
+
+async function orgPlanActivationFixture() {
+  const root = await mkdtemp(join(tmpdir(), 'gestalt-plan-activation-root-'));
+  const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-plan-activation-state-'));
+  ownTemporaryPaths(root, dataDir);
+  const workspacePath = join(root, 'workspace');
+  const codexHome = join(dataDir, 'codex-home');
+  await mkdir(join(workspacePath, '.gestalt'), { recursive: true });
+  await mkdir(join(codexHome, 'agents'), { recursive: true });
+  await writeFile(join(workspacePath, '.gestalt', 'activation.org'), autopilotPlanText());
+  await writeFile(
+    join(codexHome, 'agents', 'org-plan-executor.toml'),
+    'name = "org-plan-executor"\nmodel = "gpt-5.6-terra"\nmodel_reasoning_effort = "high"\ndeveloper_instructions = "Keep milestone ownership."\n',
+  );
+  vi.stubEnv('CODEX_HOME', codexHome);
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
+  const handles: LiveServerHandle[] = [];
+  const launch = liveAppServer(handles);
+  const controls = {
+    failInitialize: false,
+    failThread: false,
+    initializationGate: null as Promise<void> | null,
+    threadGate: null as Promise<void> | null,
+    held: null as 'initialization' | 'thread' | null,
+  };
+  const open = () =>
+    composeAuthorizedApp({
+      root,
+      dataDir,
+      relyingParty,
+      installedCodexVersion: 'codex-cli 0.144.3',
+      startAppServers: true,
+      sessionModelCatalog: { list: async () => ['gpt-6.1-sol', 'gpt-5.6-terra'] },
+      profiles: {
+        list: async () => [{ name: 'default', state: 'ok', status: 'ready' }],
+        require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
+      },
+      launchAppServer: () => {
+        const server = launch();
+        let runtime = false;
+        handles.at(-1)!.respond = async (method, params) => {
+          if (method === 'initialize') {
+            runtime =
+              (params as { capabilities?: { experimentalApi?: boolean } | null }).capabilities
+                ?.experimentalApi === true;
+            if (runtime) {
+              const gate = controls.initializationGate;
+              controls.initializationGate = null;
+              if (gate) {
+                controls.held = 'initialization';
+                try {
+                  await gate;
+                } finally {
+                  controls.held = null;
+                }
+              }
+              if (controls.failInitialize) {
+                controls.failInitialize = false;
+                throw new Error('INJECTED_INITIAL_RUNTIME_FAILURE');
+              }
+            }
+          }
+          if (runtime && method === 'thread/start') {
+            const gate = controls.threadGate;
+            controls.threadGate = null;
+            if (gate) {
+              controls.held = 'thread';
+              try {
+                await gate;
+              } finally {
+                controls.held = null;
+              }
+            }
+            if (controls.failThread) {
+              controls.failThread = false;
+              throw new Error('INJECTED_THREAD_RECEIPT_LOSS');
+            }
+          }
+          if (method === 'skills/list')
+            return {
+              data: [
+                {
+                  cwd: (params as { cwds: string[] }).cwds[0],
+                  skills: [
+                    {
+                      name: 'gestalt:org-plan',
+                      description: 'Supervise an Org plan.',
+                      path: join(root, 'skills', 'org-plan', 'SKILL.md'),
+                      enabled: true,
+                    },
+                  ],
+                  errors: [],
+                },
+              ],
+            };
+          return undefined;
+        };
+        return server;
+      },
+    });
+  const requests = (method: string) =>
+    handles.flatMap((handle) => handle.requests.filter((request) => request.method === method));
+  const prepare = async (app: Awaited<ReturnType<typeof open>>) => {
+    const workspace = (await app.inject('/api/bootstrap'))
+      .json()
+      .workspaces[0].children.find((item: { name: string }) => item.name === 'workspace');
+    const reference = {
+      kind: 'workspace',
+      workspaceId: workspace.id,
+      planName: '.gestalt/activation.org',
+    };
+    const prepared = (
+      await app.inject({ method: 'POST', url: '/api/plans/prepare', payload: reference })
+    ).json();
+    expect(prepared).toMatchObject({ kind: 'eligible' });
+    return {
+      reference,
+      expectedRevision: prepared.revision,
+      skillProfile: prepared.settings.skillProfile,
+      launchId: 'initial-activation-recovery',
+    };
+  };
+  const database = <T>(read: (db: DatabaseSync) => T): T => {
+    const db = new DatabaseSync(join(dataDir, 'relay.sqlite'));
+    try {
+      return read(db);
+    } finally {
+      db.close();
+    }
+  };
+  return { open, prepare, controls, requests, database, workspacePath, handles };
 }
 
 describe('production composition', () => {
@@ -6987,6 +7124,400 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('lifecycle', () => {
+    it('recovers a published Org-plan supervisor after initial runtime failure without replacing its session', async () => {
+      const f = await orgPlanActivationFixture();
+      const app = await f.open();
+      try {
+        const payload = await f.prepare(app);
+        f.controls.failInitialize = true;
+        const first = (
+          await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+        ).json();
+        expect(f.controls.failInitialize).toBe(false);
+        expect(first).toMatchObject({ kind: 'partial', stage: 'activation' });
+        const id = first.session.id;
+        expect((await app.inject(`/api/sessions/${id}`)).json()).toMatchObject({
+          threadId: null,
+        });
+        expect(
+          (
+            await app.inject({
+              method: 'PUT',
+              url: '/api/session-defaults',
+              payload: {
+                workspaceId: payload.reference.workspaceId,
+                skillProfile: '',
+                provider: 'codex',
+                model: 'gpt-5.6-terra',
+                reasoningEffort: 'high',
+                executorModel: 'gpt-6.1-sol',
+                executorReasoningEffort: 'medium',
+                sandbox: 'read-only',
+                approvalPolicy: 'on-request',
+              },
+            })
+          ).statusCode,
+        ).toBe(200);
+        const replay = (
+          await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+        ).json();
+        expect(replay).toMatchObject({
+          kind: 'started',
+          session: {
+            id,
+            workspacePath: f.workspacePath,
+            model: 'gpt-6.1-sol',
+            modelSettings: { executorModel: 'gpt-5.6-terra', reasoningEffort: 'medium' },
+            executionPolicy: { sandbox: 'workspace-git', approvalPolicy: 'never' },
+          },
+          bootstrap: { kind: 'accepted' },
+        });
+        expect((await app.inject('/api/sessions')).json()).toHaveLength(1);
+        expect(f.requests('turn/start')).toHaveLength(1);
+        expect(f.requests('thread/start')).toHaveLength(1);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('recovers the same Org-plan session across restart after publication before activation', async () => {
+      const f = await orgPlanActivationFixture();
+      let app = await f.open();
+      const original = SqliteOrgPlanLaunchStore.prototype.publishSession;
+      const publication = vi.spyOn(SqliteOrgPlanLaunchStore.prototype, 'publishSession');
+      try {
+        const payload = await f.prepare(app);
+        publication.mockImplementationOnce(function (this: SqliteOrgPlanLaunchStore, ...args) {
+          original.apply(this, args);
+          throw new Error('INJECTED_POST_PUBLICATION_CRASH');
+        });
+        const first = (
+          await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+        ).json();
+        expect(first).toMatchObject({ kind: 'partial', stage: 'activation' });
+        const id = first.session.id;
+        expect((await app.inject(`/api/sessions/${id}`)).json()).toMatchObject({ threadId: null });
+        expect(
+          f.database((db) =>
+            db.prepare('SELECT phase FROM org_plan_initial_activations WHERE session_id=?').get(id),
+          ),
+        ).toEqual({ phase: 'idle' });
+        expect(f.requests('thread/start')).toHaveLength(0);
+        await app.close();
+        app = await f.open();
+        const replay = (
+          await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+        ).json();
+        expect(replay).toMatchObject({
+          kind: 'started',
+          session: { id },
+          bootstrap: { kind: 'accepted' },
+        });
+        expect((await app.inject('/api/sessions')).json()).toHaveLength(1);
+        expect(f.requests('thread/start')).toHaveLength(1);
+        expect(f.requests('turn/start')).toHaveLength(1);
+      } finally {
+        publication.mockRestore();
+        await app.close();
+      }
+    });
+
+    it('recovers a tracked initial Org-plan activation through ordinary Chat without later bootstrap replay', async () => {
+      const f = await orgPlanActivationFixture();
+      const app = await f.open();
+      try {
+        const payload = await f.prepare(app);
+        f.controls.failInitialize = true;
+        const first = (
+          await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+        ).json();
+        expect(first).toMatchObject({ kind: 'partial', stage: 'activation' });
+        const id = first.session.id;
+        const guidance = 'Continue this saved supervisor session using the confirmed plan.';
+        const chat = await app.inject({
+          method: 'POST',
+          url: `/api/sessions/${id}/turns`,
+          headers: { 'idempotency-key': 'explicit-activation-recovery' },
+          payload: { text: guidance },
+        });
+        expect(chat.statusCode).toBe(202);
+        const session = chat.json();
+        expect(session).toMatchObject({ id, state: 'turnActive' });
+        expect(f.requests('turn/start')).toHaveLength(1);
+        expect(f.requests('turn/start')[0].params).toMatchObject({
+          input: [{ type: 'text', text: guidance }],
+        });
+        const owner = f.handles.find((handle) =>
+          handle.requests.some((request) => request.method === 'turn/start'),
+        )!;
+        owner.notify?.({
+          method: 'turn/completed',
+          params: {
+            threadId: session.threadId,
+            turn: { id: session.activeTurnId, status: 'completed', items: [] },
+          },
+        });
+        await vi.waitFor(async () =>
+          expect((await app.inject(`/api/sessions/${id}`)).json().state).toBe('ready'),
+        );
+        const replay = (
+          await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+        ).json();
+        expect(replay).toMatchObject({
+          kind: 'partial',
+          session: { id },
+          bootstrap: { kind: 'pending' },
+        });
+        expect(replay.reason).toContain('ordinary Chat');
+        expect(f.requests('thread/start')).toHaveLength(1);
+        expect(f.requests('turn/start')).toHaveLength(1);
+        expect((await app.inject('/api/sessions')).json()).toHaveLength(1);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it.each(['execute-completion', 'chat-completion', 'chat-turn'] as const)(
+      'preserves independent Stop at the committed initial activation boundary: %s',
+      async (boundary) => {
+        const f = await orgPlanActivationFixture();
+        const app = await f.open();
+        const completion = SqliteOrgPlanLaunchStore.prototype.completeInitialActivation;
+        const turn = CodexSessionRuntime.prototype.startTurn;
+        const completionSpy = vi.spyOn(
+          SqliteOrgPlanLaunchStore.prototype,
+          'completeInitialActivation',
+        );
+        const turnSpy = vi.spyOn(CodexSessionRuntime.prototype, 'startTurn');
+        let injected = false;
+        const stopIndependently = (id: string) => {
+          f.database((db) => {
+            const repository = new SqliteSessionRepository(db);
+            const current = repository.find(id)!;
+            repository.save(
+              RelaySession.rehydrate(current).stop(new Date().toISOString()).snapshot,
+            );
+          });
+          injected = true;
+        };
+        try {
+          const payload = await f.prepare(app);
+          let id: string;
+          if (boundary !== 'execute-completion') {
+            f.controls.failInitialize = true;
+            const first = (
+              await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+            ).json();
+            expect(first).toMatchObject({ kind: 'partial', stage: 'activation' });
+            id = first.session.id;
+          } else id = '';
+          if (boundary === 'chat-turn')
+            turnSpy.mockImplementationOnce(function (this: CodexSessionRuntime, ...args) {
+              stopIndependently(args[0].id);
+              return turn.apply(this, args);
+            });
+          else
+            completionSpy.mockImplementationOnce(function (
+              this: SqliteOrgPlanLaunchStore,
+              ...args
+            ) {
+              const accepted = completion.apply(this, args);
+              expect(accepted).toBe(true);
+              stopIndependently(args[1].id);
+              return accepted;
+            });
+          const response = await app.inject(
+            boundary === 'execute-completion'
+              ? { method: 'POST', url: '/api/plans/execute', payload }
+              : {
+                  method: 'POST',
+                  url: `/api/sessions/${id}/turns`,
+                  payload: { text: 'Recover this initial activation.' },
+                },
+          );
+          expect(injected).toBe(true);
+          if (boundary === 'execute-completion') {
+            const result = response.json();
+            expect(result).toMatchObject({ kind: 'partial', stage: 'activation' });
+            id = result.session.id;
+          } else expect(response.statusCode).toBe(boundary === 'chat-turn' ? 500 : 503);
+          expect((await app.inject(`/api/sessions/${id}`)).json()).toMatchObject({
+            state: 'stopped',
+            desiredState: 'stopped',
+            autopilot: { enabled: false },
+          });
+          expect((await app.inject('/api/sessions')).json()).toHaveLength(1);
+          expect(f.requests('turn/start')).toHaveLength(0);
+          const replay = (
+            await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+          ).json();
+          expect(replay).toMatchObject({ kind: 'partial', session: { id } });
+          expect(f.requests('thread/start')).toHaveLength(1);
+          expect(f.requests('turn/start')).toHaveLength(0);
+        } finally {
+          completionSpy.mockRestore();
+          turnSpy.mockRestore();
+          await app.close();
+        }
+      },
+    );
+
+    it.each(['initialization', 'thread'] as const)(
+      'fences held %s against concurrent same-intent Org-plan retries',
+      async (boundary) => {
+        const f = await orgPlanActivationFixture();
+        const app = await f.open();
+        let second: Awaited<ReturnType<typeof f.open>> | undefined;
+        const gate = Promise.withResolvers<void>();
+        const pending: Promise<LightMyRequestResponse>[] = [];
+        try {
+          const payload = await f.prepare(app);
+          if (boundary === 'initialization') f.controls.initializationGate = gate.promise;
+          else f.controls.threadGate = gate.promise;
+          pending.push(app.inject({ method: 'POST', url: '/api/plans/execute', payload }));
+          await vi.waitFor(() => expect(f.controls.held).toBe(boundary));
+          const id = (await app.inject('/api/sessions')).json()[0].id;
+          pending.push(app.inject({ method: 'POST', url: '/api/plans/execute', payload }));
+          second = await f.open();
+          const winner = (
+            await second.inject({ method: 'POST', url: '/api/plans/execute', payload })
+          ).json();
+          expect(winner).toMatchObject({
+            kind: boundary === 'initialization' ? 'started' : 'partial',
+            session: { id },
+            bootstrap: { kind: boundary === 'initialization' ? 'accepted' : 'pending' },
+          });
+          gate.resolve();
+          const settled = (await Promise.all(pending)).map((response) => response.json());
+          expect(settled.every((result) => result.session?.id === id)).toBe(true);
+          expect(settled[1]).toMatchObject({ kind: 'started', bootstrap: { kind: 'accepted' } });
+          const replay = (
+            await second.inject({ method: 'POST', url: '/api/plans/execute', payload })
+          ).json();
+          expect(replay).toMatchObject({ kind: 'started', bootstrap: settled[1].bootstrap });
+          expect(f.requests('thread/start')).toHaveLength(1);
+          expect(f.requests('turn/start')).toHaveLength(1);
+          expect((await app.inject('/api/sessions')).json()).toHaveLength(1);
+        } finally {
+          gate.resolve();
+          await Promise.allSettled(pending);
+          expect(f.controls.held).toBeNull();
+          await second?.close();
+          await app.close();
+        }
+      },
+    );
+
+    it.each([
+      ['stop', 'initialization'],
+      ['stop', 'thread'],
+      ['forget', 'initialization'],
+      ['forget', 'thread'],
+    ] as const)(
+      'does not revive an Org-plan session after %s while initial %s is held',
+      async (action, boundary) => {
+        const f = await orgPlanActivationFixture();
+        const app = await f.open();
+        const gate = Promise.withResolvers<void>();
+        let pending: Promise<LightMyRequestResponse> | undefined;
+        try {
+          const payload = await f.prepare(app);
+          if (boundary === 'initialization') f.controls.initializationGate = gate.promise;
+          else f.controls.threadGate = gate.promise;
+          pending = app.inject({ method: 'POST', url: '/api/plans/execute', payload });
+          await vi.waitFor(() => expect(f.controls.held).toBe(boundary));
+          const id = (await app.inject('/api/sessions')).json()[0].id;
+          const stopped = await app.inject({
+            method: action === 'forget' ? 'DELETE' : 'POST',
+            url: action === 'forget' ? `/api/sessions/${id}` : `/api/sessions/${id}/stop`,
+          });
+          expect(stopped.statusCode).toBe(action === 'forget' ? 204 : 202);
+          gate.resolve();
+          await pending;
+          const replay = (
+            await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+          ).json();
+          if (action === 'forget') {
+            expect((await app.inject(`/api/sessions/${id}`)).statusCode).toBe(404);
+            expect(replay).toMatchObject({ kind: 'blocked', code: 'REFERENCE_UNAVAILABLE' });
+            expect((await app.inject('/api/sessions')).json()).toHaveLength(0);
+          } else {
+            expect((await app.inject(`/api/sessions/${id}`)).json()).toMatchObject({
+              state: 'stopped',
+              desiredState: 'stopped',
+              autopilot: { enabled: false },
+            });
+            expect(replay).toMatchObject({ kind: 'partial', session: { id } });
+          }
+          expect(f.requests('thread/start')).toHaveLength(boundary === 'thread' ? 1 : 0);
+          expect(f.requests('turn/start')).toHaveLength(0);
+        } finally {
+          gate.resolve();
+          await pending;
+          expect(f.controls.held).toBeNull();
+          await app.close();
+        }
+      },
+    );
+
+    it.each(['unknown-request', 'untracked'] as const)(
+      'keeps %s Org-plan activation fenced across retry and restart',
+      async (boundary) => {
+        const f = await orgPlanActivationFixture();
+        let app = await f.open();
+        try {
+          const payload = await f.prepare(app);
+          if (boundary === 'unknown-request') f.controls.failThread = true;
+          else f.controls.failInitialize = true;
+          const first = (
+            await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+          ).json();
+          expect(first).toMatchObject({ kind: 'partial', stage: 'activation' });
+          const id = first.session.id;
+          expect((await app.inject(`/api/sessions/${id}`)).json()).toMatchObject({
+            threadId: null,
+          });
+          if (boundary === 'untracked')
+            f.database((db) =>
+              db.prepare('DELETE FROM org_plan_initial_activations WHERE session_id=?').run(id),
+            );
+          else
+            expect(
+              f.database((db) =>
+                db
+                  .prepare('SELECT phase FROM org_plan_initial_activations WHERE session_id=?')
+                  .get(id),
+              ),
+            ).toEqual({ phase: 'requested' });
+          for (const restart of [false, true]) {
+            if (restart) {
+              await app.close();
+              app = await f.open();
+            }
+            const replay = (
+              await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+            ).json();
+            expect(replay).toMatchObject({
+              kind: 'partial',
+              session: { id },
+              bootstrap: { kind: 'pending' },
+            });
+            expect((await app.inject('/api/sessions')).json()).toHaveLength(1);
+            const chat = await app.inject({
+              method: 'POST',
+              url: `/api/sessions/${id}/turns`,
+              payload: { text: 'Inspect this unresolved activation.' },
+            });
+            expect(chat.statusCode).toBe(503);
+          }
+          expect(f.requests('thread/start')).toHaveLength(boundary === 'unknown-request' ? 1 : 0);
+          expect(f.requests('turn/start')).toHaveLength(0);
+        } finally {
+          await app.close();
+        }
+      },
+    );
+
     it.each(['stop-late-signal', 'uncertain-manual'] as const)(
       'launches an ordinary plan supervisor and activates only on its real supervision publication: %s',
       async (recoveryScenario) => {

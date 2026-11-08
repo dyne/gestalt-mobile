@@ -125,3 +125,86 @@ it('rolls back session publication and its launch stage together before any publ
     db.close();
   }
 });
+
+it('atomically tracks initial activation and fences superseded preparation before provider thread requests', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    migrate(db);
+    const first = new SqliteOrgPlanLaunchStore(db);
+    const second = new SqliteOrgPlanLaunchStore(db);
+    const sessions = new SqliteSessionRepository(db);
+    const initial = { ...record(), phase: 'creating' as const };
+    const snapshot = RelaySession.create({
+      id: initial.sessionId,
+      workspaceId: 'project',
+      workspacePath: '/project',
+      provider: 'codex',
+      profile: 'default',
+      effectiveSkillSelection: initial.skillSelection,
+      now: '2026-11-08T12:00:00Z',
+    }).snapshot;
+    first.reserve(initial);
+    first.publishSession(initial, snapshot, sessions);
+    const older = first.claimInitialActivation(snapshot.id, sessions)!;
+    const newer = second.claimInitialActivation(snapshot.id, sessions)!;
+    expect(newer.revision).toBeGreaterThan(older.revision);
+    expect(first.requestInitialThread(older, sessions)).toBe(false);
+    first.failInitialActivation(older);
+    expect(second.initialActivationCurrent(newer, sessions)).toBe(true);
+    expect(second.requestInitialThread(newer, sessions)).toBe(true);
+    expect(first.claimInitialActivation(snapshot.id, sessions)).toBeNull();
+    second.failInitialActivation(newer);
+    expect(first.claimInitialActivation(snapshot.id, sessions)).toBeNull();
+    const active = RelaySession.rehydrate(snapshot).bindThread(
+      'provider-thread',
+      snapshot.updatedAt,
+    ).snapshot;
+    expect(first.completeInitialActivation(older, active, sessions)).toBe(false);
+    expect(second.completeInitialActivation(newer, active, sessions)).toBe(true);
+    expect(sessions.find(snapshot.id)?.threadId).toBe('provider-thread');
+    expect(first.claimInitialActivation(snapshot.id, sessions)).toBeNull();
+  } finally {
+    db.close();
+  }
+});
+
+it('retries only tracked pre-request failure and never publishes over Stop or recreates a removed row', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    migrate(db);
+    const store = new SqliteOrgPlanLaunchStore(db);
+    const sessions = new SqliteSessionRepository(db);
+    const initial = { ...record(), phase: 'creating' as const };
+    const snapshot = RelaySession.create({
+      id: initial.sessionId,
+      workspaceId: 'project',
+      workspacePath: '/project',
+      provider: 'codex',
+      profile: 'default',
+      effectiveSkillSelection: initial.skillSelection,
+      now: '2026-11-08T12:00:00Z',
+    }).snapshot;
+    store.reserve(initial);
+    store.publishSession(initial, snapshot, sessions);
+    const failed = store.claimInitialActivation(snapshot.id, sessions)!;
+    store.failInitialActivation(failed);
+    const retry = store.claimInitialActivation(snapshot.id, sessions)!;
+    expect(retry.revision).toBeGreaterThan(failed.revision);
+    expect(store.requestInitialThread(retry, sessions)).toBe(true);
+    const active = RelaySession.rehydrate(snapshot).bindThread(
+      'provider-thread',
+      snapshot.updatedAt,
+    ).snapshot;
+    sessions.save(RelaySession.rehydrate(snapshot).stop(snapshot.updatedAt).snapshot);
+    expect(store.completeInitialActivation(retry, active, sessions)).toBe(false);
+    expect(sessions.find(snapshot.id)?.desiredState).toBe('stopped');
+    sessions.remove(snapshot.id);
+    expect(store.completeInitialActivation(retry, active, sessions)).toBe(false);
+    expect(sessions.find(snapshot.id)).toBeNull();
+    sessions.save(snapshot);
+    db.prepare('DELETE FROM org_plan_initial_activations WHERE session_id=?').run(snapshot.id);
+    expect(store.claimInitialActivation(snapshot.id, sessions)).toBeNull();
+  } finally {
+    db.close();
+  }
+});
