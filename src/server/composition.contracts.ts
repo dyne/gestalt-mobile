@@ -696,6 +696,154 @@ async function orgPlanActivationFixture() {
 
 describe('production composition', () => {
   describeCompositionConcern('autopilot', () => {
+    it('starts one root recovery after an executor wake encounters a superseded issued command', async () => {
+      const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+      let coordinator!: AutopilotCoordinator;
+      let childWorking = true;
+      let rootThreadId = 'thread-1';
+      const fixture = await createProductionAutopilotFixture({
+        activitySchedule: () => () => {},
+        autopilotActivity: (sessionId) => {
+          const observedAt = new Date().toISOString();
+          return {
+            sessionId,
+            rootThreadId,
+            root: {
+              state: 'idle',
+              reason: 'turnCompleted',
+              observedAt,
+              lastActivityAt: observedAt,
+            },
+            subagents: [
+              {
+                id: 'child-1',
+                threadId: 'child-1',
+                taskPath: '/root/l1',
+                canonicalTaskName: 'l1',
+                canonicalPosition: 'L1',
+                continuationGeneration: 1,
+                outcome: 'partial',
+                ownedProcesses: [],
+                state: childWorking ? 'working' : 'idle',
+                reason: childWorking ? 'turnActive' : 'turnCompleted',
+                observedAt,
+                lastActivityAt: observedAt,
+              },
+            ],
+            aggregateSubagents: childWorking ? 'working' : 'idle',
+            confidence: 'fresh',
+          };
+        },
+        onAutopilotCoordinator: (value) => {
+          coordinator = value;
+        },
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false, fired: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
+      onTestFinished(() => fixture.app.close());
+      rootThreadId = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()
+        .threadId;
+      expect(coordinator.reconcileExecutorBinding(fixture.sessionId).status).toBe('ready');
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      onTestFinished(() => database.close());
+      const store = new SqliteAutopilotStore(database);
+      const state = store.find(fixture.sessionId)!;
+      const executor = state.executor!;
+      const commandId = createHash('sha256')
+        .update(
+          JSON.stringify([
+            state.planIdentity,
+            state.planFingerprint,
+            executor.canonicalPosition,
+            executor.canonicalTaskName,
+            executor.taskPath,
+            executor.threadId,
+            2,
+            'partial',
+          ]),
+        )
+        .digest('hex');
+      store.save({
+        ...state,
+        executor: {
+          ...executor,
+          commands: [
+            {
+              commandId,
+              status: 'superseded',
+              planIdentity: state.planIdentity!,
+              planFingerprint: state.planFingerprint!,
+              canonicalPosition: executor.canonicalPosition,
+              canonicalTaskName: executor.canonicalTaskName,
+              taskPath: executor.taskPath,
+              threadId: executor.threadId,
+              generation: 2,
+              trigger: 'partial',
+              createdAt: state.updatedAt,
+              updatedAt: state.updatedAt,
+            },
+          ],
+        },
+      });
+      expect(
+        coordinator.registerProactiveWait(fixture.sessionId, {
+          id: 'executor-report',
+          leaseId: 'executor-lease',
+          maxWaitMs: 60_000,
+          wakeConditions: ['executorChanged'],
+        }),
+      ).toBe(true);
+      childWorking = false;
+      coordinator.activityChanged(fixture.sessionId);
+      const starts = () =>
+        fixture.handles
+          .flatMap((handle) => handle.requests)
+          .filter((request) => request.method === 'turn/start');
+      for (let attempt = 0; attempt < 8 && starts().length === 0; attempt++) {
+        const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
+        expect(timer).toBeDefined();
+        timer!.fired = true;
+        timer!.callback();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      await vi.waitFor(() => expect(starts()).toHaveLength(1));
+      expect((starts()[0]!.params as { threadId: string }).threadId).toBe(rootThreadId);
+      expect(store.find(fixture.sessionId)!.executor!.commands![0]).toMatchObject({
+        commandId,
+        status: 'superseded',
+      });
+      for (const timer of timers.filter((candidate) => candidate.fired)) timer.callback();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(starts()).toHaveLength(1);
+      const trace = exportControlPlaneTrace(
+        join(fixture.dataDir, 'relay.sqlite'),
+        fixture.sessionId,
+      );
+      const wake = trace.events.find((event) => event.type === 'autopilot.wait-woken')!;
+      expect(wake.payload.leaseId).toBe('executor-lease');
+      const transitions = trace.events
+        .filter(
+          (event) =>
+            event.sequence > wake.sequence &&
+            [
+              'autopilot.continuation-scheduled',
+              'autopilot.control-issued',
+              'autopilot.turn-started',
+            ].includes(event.type),
+        )
+        .map((event) => event.type);
+      expect(transitions).toEqual([
+        'autopilot.continuation-scheduled',
+        'autopilot.control-issued',
+        'autopilot.turn-started',
+      ]);
+    });
+
     it('persists a bounded executor after 64 exited results and new active work, including a plan watcher update', async () => {
       const handles: LiveServerHandle[] = [];
       const launch = liveAppServer(handles);

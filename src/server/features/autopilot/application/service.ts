@@ -3839,14 +3839,17 @@ export class AutopilotCoordinator {
     if (this.authoritativeExecutorActive(state, retained.plan, this.deps.activity(state.sessionId)))
       return false;
     const planFingerprint = fingerprint(retained.plan);
-    // Issued is not accepted. A later wait can replace the transient probe
-    // state, but cannot erase this durable ambiguity. Resume protection must
-    // hand diagnosis back to root rather than silently selecting a command
-    // which replay protection will refuse to issue again.
+    // Issued is not accepted. A plan change can supersede that command, then
+    // return to the same fingerprint after dependency repair. Neither that
+    // transition nor a later wait resolves the original dispatch ambiguity.
+    // Hand diagnosis back to root instead of selecting a command that replay
+    // protection will refuse to issue again. Proven unissued commands remain
+    // eligible for a new fenced attempt.
     return Boolean(
       executor.commands?.some(
         (command) =>
-          command.status === 'issued' &&
+          (command.status === 'issued' ||
+            (command.status === 'superseded' && !command.supersededBeforeIssue)) &&
           !command.processAction &&
           command.planIdentity === retained.identity &&
           command.planFingerprint === planFingerprint &&
