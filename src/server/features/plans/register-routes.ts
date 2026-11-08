@@ -14,11 +14,16 @@ import { registerGetWorkspacePlan } from './get-workspace-plan/endpoint.js';
 import { registerListWorkspacePlans } from './list-workspace-plans/endpoint.js';
 import { registerOpenPlan } from './open-plan/endpoint.js';
 import { registerArchiveWorkspacePlan } from './archive-workspace-plan/endpoint.js';
+import { registerPrepareOrgPlanSupervision } from './prepare-supervision/endpoint.js';
 
 export function registerPlanRoutes(
   app: FastifyInstance,
-  deps: Pick<AppDependencies, 'planRoutes' | 'workspacePlanRoutes' | 'planMeasurementRoutes'>,
+  deps: Pick<
+    AppDependencies,
+    'planRoutes' | 'workspacePlanRoutes' | 'planMeasurementRoutes' | 'prepareOrgPlanRoutes'
+  >,
 ): void {
+  if (deps.prepareOrgPlanRoutes) registerPrepareOrgPlanSupervision(app, deps.prepareOrgPlanRoutes);
   if (deps.planRoutes) {
     registerGetPlan(app, deps.planRoutes);
     registerClosePlan(app, deps.planRoutes);

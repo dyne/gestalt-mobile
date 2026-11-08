@@ -137,9 +137,12 @@ import { isManagedPlaywrightCall } from '../shared/contracts/managed-playwright.
 import type { RetrievalCapabilityPort } from './features/skills/application/ports.js';
 import { compileSkillOverride, type SkillProfile } from './features/skills/model/skill-profile.js';
 import { SupervisedPlanRegistry } from './features/plans/application/supervised-plan-registry.js';
+import { prepareOrgPlanSupervision } from './features/plans/application/prepare-org-plan-supervision.js';
+import { prepareOrgPlanSettings } from './features/plans/application/prepare-org-plan-settings.js';
 import type { PlanStatusUpdate } from './features/plans/application/ports.js';
 import { FilesystemPlanStatusSource } from './platform/plans/filesystem-plan-status-source.js';
 import { FilesystemWorkspacePlanCatalog } from './platform/plans/filesystem-workspace-plan-catalog.js';
+import { FilesystemOrgPlanContext } from './platform/plans/filesystem-org-plan-context.js';
 import { FilesystemPlanArchiver } from './platform/plans/filesystem-plan-archiver.js';
 import { checkpointPlanMeasurement } from './platform/plans/plan-measurement-command.js';
 import { PlanMeasurementRefresh } from './platform/plans/plan-measurement-refresh.js';
@@ -174,7 +177,10 @@ import {
 } from './features/autopilot/application/supervision-snapshot.js';
 import { ExecutorModelEvidenceReader } from './features/plans/application/executor-model-evidence.js';
 import { ExecutorLaunchValidationReader } from './features/plans/application/executor-launch-validation.js';
-import { requireModelPolicyAdmission } from './features/plans/domain/model-policy-admission.js';
+import {
+  assessModelPolicyAdmission,
+  requireModelPolicyAdmission,
+} from './features/plans/domain/model-policy-admission.js';
 import { currentExecutableL1Index } from './features/plans/domain/supervised-plan.js';
 import { AttentionResolution } from './features/org-plan-attention/application/resolve.js';
 import { AttentionAcknowledgement } from './features/org-plan-attention/application/acknowledgement.js';
@@ -807,6 +813,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     skillProvenance,
   );
   const workspacePlanCatalog = new FilesystemWorkspacePlanCatalog();
+  const orgPlanContext = new FilesystemOrgPlanContext(workspaces, (id) => sessions.find(id));
   const planArchiver = new FilesystemPlanArchiver();
   const resolveSkills = async (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot,
@@ -2655,6 +2662,44 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         },
       },
       workspacePlanRoutes: { workspaces, plans: workspacePlanCatalog, archiver: planArchiver },
+      prepareOrgPlanRoutes: {
+        prepare: (reference, expectedRevision, skillProfile) =>
+          prepareOrgPlanSupervision(
+            reference,
+            {
+              resolveReference: (ref) => orgPlanContext.resolveReference(ref),
+              workspace: (path, revision) => orgPlanContext.workspace(path, revision),
+              read: (workspacePath, planName) =>
+                workspacePlanCatalog.readExecution(workspacePath, planName),
+              runtimeAvailable: async () => providerAvailability.codex.available,
+              policy: assessModelPolicyAdmission,
+              settings: (workspacePath, selectedProfile) =>
+                prepareOrgPlanSettings(
+                  workspacePath,
+                  {
+                    defaults: sessionDefaults,
+                    models: sessionModels,
+                    profiles: options.profiles,
+                    skillProfiles,
+                    skillCatalog,
+                    defaultSkillProfile: options.explicitSkillProfile,
+                  },
+                  selectedProfile,
+                ),
+              owner: async (canonicalPath) => {
+                const owner = sessions
+                  .list()
+                  .find(
+                    (session) =>
+                      session.lastOrgPlan?.attached && session.lastOrgPlan.path === canonicalPath,
+                  );
+                return owner ? { sessionId: owner.id } : null;
+              },
+            },
+            expectedRevision,
+            skillProfile,
+          ),
+      },
       workspaceFileRoutes: {
         workspaces,
         files: workspaceFiles,

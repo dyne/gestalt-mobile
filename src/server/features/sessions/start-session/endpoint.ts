@@ -40,6 +40,18 @@ export function registerStartSession(
       started = await startSession(body, deps);
     } catch (error) {
       deps.reportFailure?.('start-session', error);
+      if (error instanceof Error && error.message === 'CODEX_EXECUTOR_MODEL_UNAVAILABLE')
+        return reply
+          .code(400)
+          .type('application/problem+json')
+          .send(
+            problem(
+              error.message,
+              400,
+              'The executor model is unavailable in Codex. Choose an available model in New session settings and retry.',
+              true,
+            ),
+          );
       if (
         error instanceof Error &&
         (error.message.startsWith('SESSION_SCRATCH_') ||

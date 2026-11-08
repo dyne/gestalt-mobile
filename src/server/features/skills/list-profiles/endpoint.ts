@@ -7,6 +7,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { SkillProfileStore } from '../application/ports.js';
 import { problem } from '../../../platform/http/problem.js';
+import { readGlobalSkillProfiles } from '../application/read-global-profiles.js';
 
 export type ListSkillProfilesDependencies = Pick<
   SkillProfileStore,
@@ -21,40 +22,16 @@ export function registerListSkillProfiles(
 ): void {
   app.get('/api/skill-profiles', async (_request, reply) => {
     try {
-      const names = await deps.listGlobalProfileNames();
-      const profiles = await Promise.all(
-        names
-          .sort((a, b) => a.localeCompare(b))
-          .map(async (name) => {
-            try {
-              const profile = await deps.readGlobalProfile(name);
-              return profile
-                ? {
-                    name: profile.name,
-                    version: profile.version,
-                    path: deps.profilePath(name),
-                    skills: profile.skills,
-                    ...(profile.capabilities ? { capabilities: profile.capabilities } : {}),
-                  }
-                : {
-                    name,
-                    path: deps.profilePath(name),
-                    error: {
-                      code: 'INVALID_SKILL_PROFILE',
-                      message: 'Profile disappeared while reading.',
-                    },
-                  };
-            } catch (error) {
-              return {
-                name,
-                path: deps.profilePath(name),
-                error: {
-                  code: 'INVALID_SKILL_PROFILE',
-                  message: error instanceof Error ? error.message : 'Invalid profile.',
-                },
-              };
+      const profiles = (await readGlobalSkillProfiles(deps)).map((entry) =>
+        'profile' in entry
+          ? {
+              name: entry.profile.name,
+              version: entry.profile.version,
+              path: deps.profilePath(entry.name),
+              skills: entry.profile.skills,
+              ...(entry.profile.capabilities ? { capabilities: entry.profile.capabilities } : {}),
             }
-          }),
+          : { name: entry.name, path: deps.profilePath(entry.name), error: entry.error },
       );
       return { profiles };
     } catch {

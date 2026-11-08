@@ -24,6 +24,16 @@ export class FilesystemWorkspaceCatalog implements WorkspaceCatalog, GitWorkspac
   async list(): Promise<WorkspaceOption[]> {
     return [(await this.tree()).option];
   }
+  /** One authorized traversal with canonical identity/path pairs for internal consumers. */
+  async snapshot(): Promise<readonly { id: string; name: string; realPath: string }[]> {
+    const entries: { id: string; name: string; realPath: string }[] = [];
+    const collect = (entry: CatalogEntry) => {
+      entries.push({ id: entry.option.id, name: entry.option.name, realPath: entry.realPath });
+      for (const child of entry.children) collect(child);
+    };
+    collect(await this.tree());
+    return entries;
+  }
   /** Keep canonical catalog identities without treating owned scratch as workspaces. */
   async knownWorkspacePaths(): Promise<string[]> {
     const paths: string[] = [];

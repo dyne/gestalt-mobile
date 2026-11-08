@@ -6,9 +6,10 @@
 
 import type { LlmProvider } from '../../../../shared/contracts/llm-provider.js';
 import type { SessionModelSettings } from '../../../../shared/contracts/session-model-settings.js';
+import { newSessionFallback } from '../../../../shared/contracts/session-defaults.js';
 
 /** The relay's configured default, kept explicit so deployments can change it centrally later. */
-export const DEFAULT_SESSION_MODEL = 'gpt-5.6-terra';
+export const DEFAULT_SESSION_MODEL = newSessionFallback.model;
 
 /** Settings accepted by Codex's generated thread/start contract. */
 export type StartSessionSettings = SessionModelSettings & {

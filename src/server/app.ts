@@ -194,6 +194,13 @@ export type AppDependencies = {
     plans: WorkspacePlanCatalogSource;
     archiver?: WorkspacePlanArchiveSource;
   };
+  prepareOrgPlanRoutes?: {
+    prepare(
+      reference: import('../shared/contracts/org-plan-execution.js').OrgPlanReference,
+      expectedRevision?: string,
+      skillProfile?: string,
+    ): Promise<import('../shared/contracts/org-plan-execution.js').OrgPlanPreparation>;
+  };
   workspaceFileRoutes?: {
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
     files: WorkspaceFileSource;

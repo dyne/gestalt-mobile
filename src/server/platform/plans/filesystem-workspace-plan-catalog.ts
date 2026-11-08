@@ -5,9 +5,11 @@
  */
 
 import { lstat, readFile, realpath, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 import type { WorkspacePlanCatalogSource } from '../../features/plans/application/ports.js';
+import type { ExecutionPlanRead } from '../../features/plans/application/prepare-org-plan-supervision.js';
 import { parseSupervisedPlan } from '../../features/plans/application/parse-supervised-plan.js';
 import type { SupervisedPlan } from '../../features/plans/domain/supervised-plan.js';
 import type {
@@ -25,7 +27,7 @@ type Filesystem = Pick<typeof import('node:fs/promises'), 'lstat' | 'realpath' |
 };
 
 type ReadCandidateResult =
-  | Readonly<{ kind: 'readable'; source: string; canonicalPath: string }>
+  | Readonly<{ kind: 'readable'; source: string; canonicalPath: string; revision: string }>
   | Readonly<{ kind: 'missing' }>
   | Readonly<{ kind: 'unavailable' }>;
 
@@ -145,6 +147,23 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
     return this.readFromWorkspace(workspace, planName);
   }
 
+  /** Reuses the exact viewer reader without trusting its cached preview or sourcePath. */
+  async readExecution(workspacePath: string, planName: string): Promise<ExecutionPlanRead> {
+    if (!isPlanPath(planName)) return { kind: 'missing' };
+    const workspace = await this.workspace(workspacePath);
+    if (!workspace) return { kind: 'missing' };
+    const candidate = await this.readCandidate(workspace, planName);
+    if (candidate.kind !== 'readable') return candidate;
+    const parsed = parseSupervisedPlan({
+      source: candidate.source,
+      planPath: candidate.canonicalPath,
+      workspacePath: workspace,
+    });
+    return parsed.kind === 'available'
+      ? { ...parsed, canonicalPath: candidate.canonicalPath, revision: candidate.revision }
+      : { kind: 'invalid', reason: parsed.reason };
+  }
+
   private async workspace(workspacePath: string): Promise<string | null> {
     if (!isAbsolute(workspacePath)) return null;
     try {
@@ -198,10 +217,24 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
         after.size !== before.size ||
         after.ino !== before.ino ||
         after.dev !== before.dev ||
-        after.mtimeMs !== before.mtimeMs
+        after.mtimeMs !== before.mtimeMs ||
+        after.ctimeMs !== before.ctimeMs
       )
         return { kind: 'unavailable' };
-      return { kind: 'readable', source, canonicalPath: canonical };
+      const revision = createHash('sha256')
+        .update(
+          JSON.stringify([
+            canonical,
+            after.dev,
+            after.ino,
+            after.size,
+            after.mtimeMs,
+            after.ctimeMs,
+            source,
+          ]),
+        )
+        .digest('hex');
+      return { kind: 'readable', source, canonicalPath: canonical, revision };
     } catch (error) {
       return (error as NodeJS.ErrnoException).code === 'ENOENT'
         ? { kind: 'missing' }
