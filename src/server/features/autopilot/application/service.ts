@@ -101,11 +101,16 @@ export type AutopilotDependencies = Readonly<{
   now(): string;
   policy: AutopilotPolicy;
   plan(sessionId: string): Readonly<{ plan: SupervisedPlan; identity: string }> | null;
-  session(
-    sessionId: string,
-  ): Readonly<{ state: string; threadId: string | null; activeTurnId: string | null }> | null;
+  session(sessionId: string): Readonly<{
+    state: string;
+    threadId: string | null;
+    activeTurnId: string | null;
+    desiredState?: string;
+  }> | null;
   activity(sessionId: string): AgentActivitySnapshot | null;
   pendingInteraction(sessionId: string): boolean;
+  /** Ordinary turn submission or an unresolved durable acceptance fence is still in flight. */
+  pendingTurn?(sessionId: string): boolean;
   pendingProcessResult?(sessionId: string): boolean;
   processResultState?(sessionId: string, runId: string): 'running' | 'completed' | 'missing';
   attention?(sessionId: string): StructuredBlock | null;
@@ -1050,6 +1055,7 @@ export class AutopilotCoordinator {
     this.parkedSubscriptions.delete(sessionId);
   }
   evaluate(sessionId: string): AutopilotSnapshot {
+    if (this.deps.pendingTurn?.(sessionId)) return this.snapshot(sessionId);
     const binding = this.reconcileExecutorBinding(sessionId);
     const prior = this.deps.store.find(sessionId);
     if (!prior) return this.snapshot(sessionId);
@@ -1795,6 +1801,13 @@ export class AutopilotCoordinator {
    * while a new identity can receive its own explicit supervision request.
    */
   supervisionStarted(sessionId: string): AutopilotSnapshot | { code: string } {
+    const sessionIntent = this.deps.session(sessionId);
+    if (
+      sessionIntent?.desiredState === 'stopped' ||
+      sessionIntent?.state === 'stopped' ||
+      sessionIntent?.state === 'released'
+    )
+      return this.snapshot(sessionId);
     if (
       this.deps.supervisorOwnership?.(sessionId) &&
       this.deps.supervisorOwnership(sessionId) !== 'owned'
@@ -1859,6 +1872,7 @@ export class AutopilotCoordinator {
   }
   /** Reacts only to fresh actor status; plan mutations are not scheduling signals. */
   activityChanged(sessionId: string): void {
+    if (this.deps.pendingTurn?.(sessionId)) return;
     this.reconcileExecutorBinding(sessionId);
     let prior = this.deps.store.find(sessionId);
     if (!prior?.requestedEnabled) return;
@@ -2157,6 +2171,7 @@ export class AutopilotCoordinator {
   }
   private async fire(sessionId: string, generation: number): Promise<void> {
     this.timers.delete(sessionId);
+    if (this.deps.pendingTurn?.(sessionId)) return;
     const binding = this.reconcileExecutorBinding(sessionId);
     const current = this.deps.store.find(sessionId);
     if (!current || current.generation !== generation || !current.requestedEnabled) return;
@@ -2466,6 +2481,7 @@ export class AutopilotCoordinator {
     sessionId: string,
     event: SupervisedLifecycleEvent,
   ): Promise<boolean> {
+    if (this.deps.pendingTurn?.(sessionId)) return true;
     if (this.rejectModelPolicyExecution(sessionId)) return true;
     const binding = this.reconcileExecutorBinding(sessionId);
     if (
@@ -3498,7 +3514,13 @@ export class AutopilotCoordinator {
             boundaryState: state.state,
           }
         : null;
-    if (!commandExecutor || !fence || this.deps.session(sessionId)?.activeTurnId) return;
+    if (
+      !commandExecutor ||
+      !fence ||
+      this.deps.session(sessionId)?.activeTurnId ||
+      this.deps.pendingTurn?.(sessionId)
+    )
+      return;
     const requested = this.executorCommand(fence, commandExecutor, generation, trigger);
     const command = this.scheduleExecutorCommand(sessionId, requested);
     // A command that crossed the durable issue boundary is deliberately not
@@ -3545,6 +3567,7 @@ export class AutopilotCoordinator {
                 ['working', 'awaitingAgent', 'awaitingHuman'].includes(child.state),
             ) &&
             current?.requestedEnabled &&
+            !this.deps.pendingTurn?.(sessionId) &&
             !this.deps.pendingInteraction(sessionId) &&
             current.generation === fence.sessionGeneration &&
             current.state === fence.boundaryState &&

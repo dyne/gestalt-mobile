@@ -5,6 +5,12 @@
  */
 
 import type { HistoryObservation } from '../../../shared/contracts/chat-transport-diagnostics.js';
+import {
+  orgPlanLaunchConflictSchema,
+  orgPlanLaunchInvalidRequestSchema,
+  type OrgPlanLaunchRequest,
+  type OrgPlanLaunchResult,
+} from '../../../shared/contracts/org-plan-execution.js';
 import type { SupervisedPlan } from '../plans/contracts.js';
 import type { UpgradeStatus } from '../../../shared/contracts/upgrade.js';
 import type { CleanTmpResult } from '../../../shared/contracts/tmp-cleanup.js';
@@ -455,6 +461,25 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
         { workspaceId, profile: 'default', provider: 'codex', ...settings },
         key ? { 'idempotency-key': key } : {},
       ),
+    startOrgPlanSupervision: async (input: OrgPlanLaunchRequest): Promise<OrgPlanLaunchResult> => {
+      const response = await fetcher('/api/plans/execute', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+      if (response.ok) return response.json() as Promise<OrgPlanLaunchResult>;
+      if (response.status === 409 || response.status === 400) {
+        const body: unknown = await response
+          .clone()
+          .json()
+          .catch(() => null);
+        const parsed = (
+          response.status === 409 ? orgPlanLaunchConflictSchema : orgPlanLaunchInvalidRequestSchema
+        ).safeParse(body);
+        if (parsed.success) return parsed.data;
+      }
+      throw await failure(response);
+    },
     startTurn: (sessionId: string, text: string, key?: string) =>
       request<{ activeTurnId?: string }>(
         `/api/sessions/${encodeURIComponent(sessionId)}/turns`,

@@ -103,6 +103,7 @@ export type AppDependencies = {
       text: string,
       clientUserMessageId?: string,
     ): Promise<RelaySessionSnapshot>;
+    submitTurn?: import('./features/sessions/start-turn/use-case.js').SubmitSessionTurn;
     ensureWriter?(session: RelaySessionSnapshot): Promise<WriterAcquisition>;
     releaseWriter?(id: string): void | Promise<void>;
     onTurnStarted?(session: RelaySessionSnapshot): void;
@@ -201,6 +202,7 @@ export type AppDependencies = {
       skillProfile?: string,
     ): Promise<import('../shared/contracts/org-plan-execution.js').OrgPlanPreparation>;
   };
+  executeOrgPlanRoutes?: import('./features/plans/execute-plan/endpoint.js').ExecuteOrgPlanRoutes;
   workspaceFileRoutes?: {
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
     files: WorkspaceFileSource;

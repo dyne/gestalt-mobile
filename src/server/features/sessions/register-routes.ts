@@ -142,6 +142,7 @@ export function registerSessionRoutes(
         save: sessions.save,
         onStarted: sessions.onTurnStarted,
         idempotency: sessions.idempotency,
+        submit: sessions.submitTurn,
       });
     if (sessions.models)
       registerSelectModel(app, {
