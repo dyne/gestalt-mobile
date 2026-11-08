@@ -187,9 +187,15 @@ describe('continuation deadline across reconciliation', () => {
     },
   );
 
-  it.each(['continue', 'manual-off', 'pending-interaction', 'executor-active'] as const)(
-    'retains an unconfirmed issued command and diagnoses at root after wait expiry (%s)',
-    async (gate) => {
+  it.each(
+    (['issued', 'superseded'] as const).flatMap((status) =>
+      (['continue', 'manual-off', 'pending-interaction', 'executor-active'] as const).map(
+        (gate) => ({ status, gate }),
+      ),
+    ),
+  )(
+    'retains an unconfirmed $status command and diagnoses at root after wait expiry ($gate)',
+    async ({ status, gate }) => {
       const f = fixture(undefined, 'working', undefined, true);
       try {
         const clock = new Date().toISOString();
@@ -240,7 +246,7 @@ describe('continuation deadline across reconciliation', () => {
             commands: [
               {
                 commandId,
-                status: 'issued',
+                status,
                 planIdentity: state.planIdentity!,
                 planFingerprint: state.planFingerprint!,
                 canonicalPosition: 'L1',
@@ -270,12 +276,109 @@ describe('continuation deadline across reconciliation', () => {
           f.activity.subagents = [{ ...f.activity.subagents[0]!, state: 'working' }];
         await vi.advanceTimersByTimeAsync(66_000);
         expect(f.resume).not.toHaveBeenCalled();
-        expect(f.store.find('s')?.executor?.commands?.[0]?.status).toBe('issued');
+        expect(f.store.find('s')?.executor?.commands?.[0]?.status).toBe(status);
         if (gate === 'continue') {
           expect(f.start).toHaveBeenCalledOnce();
           expect(f.events.filter((type) => type === 'autopilot.wait-expired')).toHaveLength(1);
           expect(f.events).toContain('autopilot.probe-required');
         } else expect(f.start).not.toHaveBeenCalled();
+      } finally {
+        f.close();
+      }
+    },
+  );
+
+  it.each(['wake', 'restore', 'manual-off', 'pending-interaction', 'unissued'] as const)(
+    'recovers a superseded command when an executor wait wakes (%s)',
+    async (scenario) => {
+      const f = fixture(undefined, 'working', undefined, true);
+      try {
+        const clock = new Date().toISOString();
+        f.activity.rootThreadId = 'root';
+        f.activity.subagents = [
+          {
+            id: 'child',
+            threadId: 'child',
+            canonicalPosition: 'L1',
+            canonicalTaskName: 'l1',
+            taskPath: '/root/l1',
+            continuationGeneration: 1,
+            state: 'working',
+            reason: 'turnActive',
+            observedAt: clock,
+            lastActivityAt: clock,
+            ownedProcesses: [],
+          },
+        ];
+        expect(f.coordinator.reconcileExecutorBinding('s').status).toBe('ready');
+        const state = f.store.find('s')!;
+        const commandId = createHash('sha256')
+          .update(
+            JSON.stringify([
+              state.planIdentity,
+              state.planFingerprint,
+              'L1',
+              'l1',
+              '/root/l1',
+              'child',
+              2,
+              'partial',
+            ]),
+          )
+          .digest('hex');
+        f.store.save({
+          ...state,
+          executor: {
+            ...state.executor!,
+            commands: [
+              {
+                commandId,
+                status: 'superseded',
+                ...(scenario === 'unissued' ? { supersededBeforeIssue: true } : {}),
+                planIdentity: state.planIdentity!,
+                planFingerprint: state.planFingerprint!,
+                canonicalPosition: 'L1',
+                canonicalTaskName: 'l1',
+                taskPath: '/root/l1',
+                threadId: 'child',
+                generation: 2,
+                trigger: 'partial',
+                createdAt: clock,
+                updatedAt: clock,
+              },
+            ],
+          },
+        });
+        expect(
+          f.coordinator.registerProactiveWait('s', {
+            id: 'executor-result',
+            leaseId: 'executor-wait',
+            maxWaitMs: 60_000,
+            wakeConditions: ['executorChanged'],
+          }),
+        ).toBe(true);
+        if (scenario === 'restore') {
+          f.restart();
+          f.coordinator.restore('s');
+        }
+        if (scenario === 'manual-off') f.coordinator.disable('s');
+        if (scenario === 'pending-interaction') f.block();
+        f.activity.root.state = 'idle';
+        f.activity.subagents = [{ ...f.activity.subagents[0]!, state: 'idle', outcome: 'partial' }];
+        f.coordinator.activityChanged('s');
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(f.store.find('s')!.executor!.commands![0]!.status).toBe('superseded');
+        expect(f.resume).toHaveBeenCalledTimes(scenario === 'unissued' ? 1 : 0);
+        expect(f.start).toHaveBeenCalledTimes(
+          scenario === 'wake' || scenario === 'restore' ? 1 : 0,
+        );
+        if (scenario === 'wake' || scenario === 'restore') {
+          expect(f.events.filter((type) => type === 'autopilot.wait-woken')).toHaveLength(1);
+          expect(
+            f.events.filter((type) => type === 'autopilot.continuation-scheduled'),
+          ).toHaveLength(1);
+          expect(f.events.filter((type) => type === 'autopilot.turn-started')).toHaveLength(1);
+        }
       } finally {
         f.close();
       }
