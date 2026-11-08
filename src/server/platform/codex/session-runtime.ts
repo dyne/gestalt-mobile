@@ -344,9 +344,23 @@ export class CodexSessionRuntime {
     };
   }
 
-  async start(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
+  async start(
+    session: RelaySessionSnapshot,
+    now: string,
+    fence?: { assertCurrent(): void; beforeThreadStart(): void },
+  ): Promise<RelaySessionSnapshot> {
+    fence?.assertCurrent();
     const resource = await this.createResource(session);
+    const assertCurrent = () => {
+      fence?.assertCurrent();
+      if (fence && !resource.active) throw new Error('CODEX_SESSION_START_FENCED');
+    };
+    const beforeThreadStart = () => {
+      assertCurrent();
+      fence?.beforeThreadStart();
+    };
     try {
+      assertCurrent();
       await resource.process.rpc.request('initialize', {
         clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
         capabilities: { experimentalApi: true },
@@ -357,13 +371,16 @@ export class CodexSessionRuntime {
         session,
         resource.skillsConfig,
         resource.modelConfig,
+        beforeThreadStart,
       );
       resource.threadId = startedThreadId;
       if (resource.retrieval) this.retrieval?.bound?.(resource.retrieval, startedThreadId);
-      await this.verifyRetrieval(resource, session, true);
+      await this.verifyRetrieval(resource, session, true, beforeThreadStart);
       await this.scratch?.associateProviderThread(session, 'codex', resource.threadId!);
+      assertCurrent();
       this.sessions.set(session.id, resource);
       await this.writePendingThreadName(session.id);
+      assertCurrent();
       return this.withEffectiveRetrieval(
         RelaySession.rehydrate(session)
           .bindThread(resource.threadId!, now)
@@ -1713,7 +1730,9 @@ export class CodexSessionRuntime {
     session: RelaySessionSnapshot,
     skillsConfig?: readonly { path: string; enabled: boolean }[],
     modelConfig: Record<string, unknown> = {},
+    beforeRequest?: () => void,
   ): Promise<string> {
+    beforeRequest?.();
     return decodeThreadStart(
       await process.rpc.request(
         'thread/start',
@@ -2096,6 +2115,7 @@ export class CodexSessionRuntime {
     resource: SessionResource,
     session: RelaySessionSnapshot,
     fresh = false,
+    beforeThreadStart?: () => void,
   ): Promise<void> {
     const state = resource.retrieval;
     if (!state?.ready || !resource.threadId || !this.retrieval) return;
@@ -2152,6 +2172,7 @@ export class CodexSessionRuntime {
         session,
         resource.skillsConfig,
         resource.modelConfig,
+        beforeThreadStart,
       );
       this.retrieval.bound?.(state, resource.threadId);
       return;

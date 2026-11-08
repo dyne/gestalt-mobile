@@ -10,6 +10,7 @@ import type {
   OrgPlanLaunchRecord,
   OrgPlanLaunchStore,
   OrgPlanPublicationSessions,
+  OrgPlanInitialActivation,
 } from '../../features/plans/application/org-plan-launch-store.js';
 import type { RelaySessionSnapshot } from '../../features/sessions/model/relay-session.js';
 
@@ -107,6 +108,11 @@ export class SqliteOrgPlanLaunchStore implements OrgPlanLaunchStore {
       )
         throw new Error('ORG_PLAN_PUBLICATION_FENCED');
       sessions.save(candidate);
+      this.db
+        .prepare(
+          "INSERT INTO org_plan_initial_activations (session_id,revision,phase) VALUES (?,0,'idle')",
+        )
+        .run(candidate.id);
       if (
         !sessions.find(candidate.id) ||
         !this.save({ ...current, phase: 'session', notPersisted: false }, 'creating')
@@ -114,6 +120,107 @@ export class SqliteOrgPlanLaunchStore implements OrgPlanLaunchStore {
         throw new Error('ORG_PLAN_PUBLICATION_FENCED');
       this.db.exec('COMMIT');
       return { created: true, session: candidate };
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+  /** Only a tracked pre-request attempt can be superseded; null thread alone proves nothing. */
+  claimInitialActivation(
+    sessionId: string,
+    sessions: Pick<OrgPlanPublicationSessions, 'find'>,
+  ): OrgPlanInitialActivation | null {
+    return this.activationTransaction(() => {
+      if (!this.initialSession(sessionId, sessions)) return null;
+      const prior = this.activation(sessionId);
+      if (!prior || !['idle', 'preparing', 'retryable'].includes(prior.phase)) return null;
+      const revision = prior.revision + 1;
+      this.db
+        .prepare('UPDATE org_plan_initial_activations SET revision=?,phase=? WHERE session_id=?')
+        .run(revision, 'preparing', sessionId);
+      return { sessionId, revision };
+    });
+  }
+  initialActivationCurrent(
+    attempt: OrgPlanInitialActivation,
+    sessions: Pick<OrgPlanPublicationSessions, 'find'>,
+  ): boolean {
+    const current = this.activation(attempt.sessionId);
+    return Boolean(
+      current &&
+      current.revision === attempt.revision &&
+      ['preparing', 'requested'].includes(current.phase) &&
+      this.initialSession(attempt.sessionId, sessions),
+    );
+  }
+  requestInitialThread(
+    attempt: OrgPlanInitialActivation,
+    sessions: Pick<OrgPlanPublicationSessions, 'find'>,
+  ): boolean {
+    return this.activationTransaction(() => {
+      if (!this.initialActivationCurrent(attempt, sessions)) return false;
+      this.db
+        .prepare("UPDATE org_plan_initial_activations SET phase='requested' WHERE session_id=?")
+        .run(attempt.sessionId);
+      return true;
+    });
+  }
+  completeInitialActivation(
+    attempt: OrgPlanInitialActivation,
+    session: RelaySessionSnapshot,
+    sessions: OrgPlanPublicationSessions,
+  ): boolean {
+    return this.activationTransaction(() => {
+      if (
+        session.id !== attempt.sessionId ||
+        !session.threadId ||
+        this.activation(attempt.sessionId)?.phase !== 'requested' ||
+        !this.initialActivationCurrent(attempt, sessions)
+      )
+        return false;
+      sessions.save(session);
+      this.db
+        .prepare("UPDATE org_plan_initial_activations SET phase='completed' WHERE session_id=?")
+        .run(attempt.sessionId);
+      return true;
+    });
+  }
+  failInitialActivation(attempt: OrgPlanInitialActivation): void {
+    // A failed prepare has not requested any provider thread. Requested/unknown work stays fenced.
+    this.db
+      .prepare(
+        "UPDATE org_plan_initial_activations SET phase='retryable' WHERE session_id=? AND revision=? AND phase='preparing'",
+      )
+      .run(attempt.sessionId, attempt.revision);
+  }
+  private activation(sessionId: string): { revision: number; phase: string } | null {
+    return (
+      (this.db
+        .prepare('SELECT revision,phase FROM org_plan_initial_activations WHERE session_id=?')
+        .get(sessionId) as { revision: number; phase: string } | undefined) ?? null
+    );
+  }
+  private initialSession(
+    sessionId: string,
+    sessions: Pick<OrgPlanPublicationSessions, 'find'>,
+  ): boolean {
+    const session = sessions.find(sessionId);
+    const launch = this.forSession(sessionId);
+    return Boolean(
+      session &&
+      session.threadId === null &&
+      session.desiredState === 'active' &&
+      !['stopped', 'released'].includes(session.state) &&
+      launch?.phase === 'session' &&
+      this.owner(launch.canonicalPath)?.launchId === launch.launchId,
+    );
+  }
+  private activationTransaction<T>(operation: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = operation();
+      this.db.exec('COMMIT');
+      return result;
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;

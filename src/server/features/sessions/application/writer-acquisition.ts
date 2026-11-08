@@ -26,6 +26,8 @@ export class WriterAcquisitionError extends Error {
 export type WriterAcquisition = {
   session: RelaySessionSnapshot;
   replacementCreated: boolean;
+  /** Acquisition atomically committed this snapshot; callers must not write it a second time. */
+  persisted?: true;
 };
 
 export function writerAcquisitionProblem(kind: WriterAcquisitionFailureKind): {
