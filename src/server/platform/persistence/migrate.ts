@@ -35,6 +35,13 @@ function migrateWorkspaceGitDefaults(database: DatabaseSync): void {
 
 export function migrate(database: DatabaseSync): void {
   database.exec(schema);
+  database.exec(`CREATE TABLE IF NOT EXISTS org_plan_launches (
+    launch_id TEXT PRIMARY KEY,
+    canonical_path TEXT UNIQUE,
+    session_id TEXT NOT NULL UNIQUE,
+    phase TEXT NOT NULL CHECK(phase IN ('reserved','creating','session','submitting','accepted')),
+    record_json TEXT NOT NULL
+  );`);
   database.exec(`CREATE TABLE IF NOT EXISTS session_forget_operations (
     session_id TEXT PRIMARY KEY CHECK(length(session_id) BETWEEN 1 AND 256),
     operation_id TEXT NOT NULL UNIQUE CHECK(length(operation_id) = 36),

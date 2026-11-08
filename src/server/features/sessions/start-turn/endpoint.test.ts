@@ -5,13 +5,79 @@
  */
 
 import fastify from 'fastify';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { RelaySession, type RelaySessionSnapshot } from '../model/relay-session.js';
 
 import { registerStartTurn } from './endpoint.js';
 import { WriterAcquisitionError } from '../application/writer-acquisition.js';
 import { writerAcquisitionProblem } from '../application/writer-acquisition.js';
 
 describe('POST /api/sessions/:id/turns', () => {
+  it.each(['stopped', 'forgotten'] as const)(
+    'does not resurrect a %s session when provider acceptance arrives late',
+    async (disposition) => {
+      const app = fastify();
+      const gate = Promise.withResolvers<void>();
+      let entered = false;
+      let row: RelaySessionSnapshot | null = RelaySession.create({
+        id: 'late',
+        workspaceId: 'project',
+        workspacePath: '/project',
+        provider: 'codex',
+        profile: 'default',
+        effectiveSkillSelection: { skills: [] },
+        now: '2026-11-08T12:00:00Z',
+      }).bindThread('thread', '2026-11-08T12:00:00Z').snapshot;
+      const receipts = new Map<string, { statusCode: number; body: string }>();
+      const onStarted = vi.fn();
+      registerStartTurn(app, {
+        find: () => row,
+        save: (session) => {
+          row = session;
+        },
+        onStarted,
+        start: async (session) => {
+          entered = true;
+          await gate.promise;
+          return RelaySession.rehydrate(session).startTurn('accepted-turn', '2026-11-08T12:01:00Z')
+            .snapshot;
+        },
+        idempotency: {
+          get: (scope, key) => receipts.get(`${scope}:${key}`) ?? null,
+          put: (scope, key, statusCode, body) => {
+            receipts.set(`${scope}:${key}`, { statusCode, body });
+          },
+        },
+      });
+      const pending = app.inject({
+        method: 'POST',
+        url: '/api/sessions/late/turns',
+        headers: { 'idempotency-key': 'late-acceptance' },
+        payload: { text: 'Proceed.' },
+      });
+      try {
+        await vi.waitFor(() => expect(entered).toBe(true));
+        if (disposition === 'stopped')
+          row = RelaySession.rehydrate(row!).stop('2026-11-08T12:00:30Z').snapshot;
+        else row = null;
+        gate.resolve();
+        expect((await pending).statusCode).toBe(202);
+        if (disposition === 'stopped')
+          expect(row).toMatchObject({
+            state: 'stopped',
+            desiredState: 'stopped',
+            activeTurnId: null,
+          });
+        else expect(row).toBeNull();
+        expect(receipts.size).toBe(disposition === 'stopped' ? 1 : 0);
+        expect(onStarted).not.toHaveBeenCalled();
+      } finally {
+        gate.resolve();
+        await Promise.allSettled([pending]);
+        await app.close();
+      }
+    },
+  );
   it('starts a text turn for a ready session', async () => {
     const app = fastify();
     const started: string[] = [];
@@ -397,7 +463,7 @@ describe('POST /api/sessions/:id/turns', () => {
     await app.close();
   });
 
-  it('releases an acquired writer when post-start persistence fails without masking the failure', async () => {
+  it('retains an accepted writer and durable receipt when post-start persistence fails', async () => {
     const app = fastify();
     const original = {
       id: 's',
@@ -408,10 +474,21 @@ describe('POST /api/sessions/:id/turns', () => {
     const acquired = { ...original, state: 'ready' };
     let releases = 0;
     let saves = 0;
+    let starts = 0;
+    const receipts = new Map<string, { statusCode: number; body: string }>();
     registerStartTurn(app, {
       find: () => original as never,
       ensureWriter: async () => ({ session: acquired as never, replacementCreated: false }),
-      start: async () => ({ ...acquired, state: 'turnActive', activeTurnId: 'turn-1' }) as never,
+      start: async () => {
+        starts++;
+        return { ...acquired, state: 'turnActive', activeTurnId: 'turn-1' } as never;
+      },
+      idempotency: {
+        get: (scope, key) => receipts.get(`${scope}:${key}`) ?? null,
+        put: (scope, key, statusCode, body) => {
+          receipts.set(`${scope}:${key}`, { statusCode, body });
+        },
+      },
       save: () => {
         if (++saves > 1) throw new Error('persistence failure');
       },
@@ -423,9 +500,19 @@ describe('POST /api/sessions/:id/turns', () => {
       method: 'POST',
       url: '/api/sessions/s/turns',
       payload: { text: 'hello' },
+      headers: { 'idempotency-key': 'accepted-before-snapshot' },
     });
     expect(response.statusCode).toBe(500);
-    expect(releases).toBe(1);
+    expect(releases).toBe(0);
+    const replay = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s/turns',
+      payload: { text: 'hello' },
+      headers: { 'idempotency-key': 'accepted-before-snapshot' },
+    });
+    expect(replay.statusCode).toBe(202);
+    expect(replay.json()).toMatchObject({ activeTurnId: 'turn-1' });
+    expect(starts).toBe(1);
     await app.close();
   });
 });

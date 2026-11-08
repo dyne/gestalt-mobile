@@ -35,6 +35,11 @@ import {
   debugExecutionSettings,
 } from './features/self-debug/create-session.js';
 import { startSession } from './features/sessions/start-session/use-case.js';
+import {
+  createStartTurn,
+  readAcceptedTurn,
+  type StartTurnDependencies,
+} from './features/sessions/start-turn/use-case.js';
 import type { ModelCatalog, ProfileCatalog } from './features/catalog/application/ports.js';
 import { FilesystemWorkspaceCatalog } from './platform/catalog/filesystem-workspace-catalog.js';
 import { FilesystemWorkspaceFiles } from './platform/filesystem/filesystem-workspace-files.js';
@@ -138,6 +143,12 @@ import type { RetrievalCapabilityPort } from './features/skills/application/port
 import { compileSkillOverride, type SkillProfile } from './features/skills/model/skill-profile.js';
 import { SupervisedPlanRegistry } from './features/plans/application/supervised-plan-registry.js';
 import { prepareOrgPlanSupervision } from './features/plans/application/prepare-org-plan-supervision.js';
+import {
+  startOrgPlanSupervision,
+  OrgPlanSessionNotPublished,
+} from './features/plans/application/start-org-plan-supervision.js';
+import { SqliteOrgPlanLaunchStore } from './platform/persistence/sqlite-org-plan-launch-store.js';
+import { resolveSessionSkillSelection } from './features/sessions/application/resolve-session-skills.js';
 import { prepareOrgPlanSettings } from './features/plans/application/prepare-org-plan-settings.js';
 import type { PlanStatusUpdate } from './features/plans/application/ports.js';
 import { FilesystemPlanStatusSource } from './platform/plans/filesystem-plan-status-source.js';
@@ -301,6 +312,30 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const toolEfficiency = new ToolEfficiencyProjection(new SqliteToolEfficiencyStore(database));
   const interactions = new SqlitePendingInteractionStore(database);
   const idempotency = new SqliteIdempotencyStore(database);
+  const orgPlanLaunches = new SqliteOrgPlanLaunchStore(database);
+  const reconcileOrgPlanReceipt = (sessionId: string) => {
+    const record = orgPlanLaunches.forSession(sessionId);
+    if (record?.phase !== 'submitting' || !record.bootstrapFingerprint) return;
+    const receipt = readAcceptedTurn(
+      idempotency,
+      sessionId,
+      `org-plan-bootstrap:${record.launchId}`,
+      record.bootstrapFingerprint,
+    );
+    if (receipt?.activeTurnId)
+      orgPlanLaunches.save(
+        {
+          ...record,
+          phase: 'accepted',
+          bootstrap: {
+            kind: 'accepted',
+            requestId: `org-plan-bootstrap:${record.launchId}`,
+            turnId: receipt.activeTurnId,
+          },
+        },
+        'submitting',
+      );
+  };
   const autopilotStore = new SqliteAutopilotStore(database);
   const takeoverStore = new SqliteSupervisionTakeoverStore(database, autopilotStore);
   const supervisedPlans = new SupervisedPlanRegistry();
@@ -473,6 +508,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
     },
   );
+  let ordinaryTurnPending: (sessionId: string) => boolean = () => false;
+  const pendingRootTurn = (sessionId: string) =>
+    ordinaryTurnPending(sessionId) ||
+    (orgPlanLaunches.forSession(sessionId)?.phase === 'submitting' &&
+      !orgPlanLaunches.forSession(sessionId)?.manualRecoveryTurnId);
   const autopilot = new AutopilotCoordinator({
     supervisorOwnership,
     pendingProcessResult: (sessionId) => hostTests?.hasUnreadResult(sessionId) ?? false,
@@ -492,6 +532,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         ? options.autopilotActivity(sessionId)
         : activity.snapshot(sessionId, new Date().toISOString()),
     pendingInteraction: (sessionId) => blockingInteractions(sessionId).length > 0,
+    pendingTurn: pendingRootTurn,
     attention: (sessionId) => {
       const interaction = interactions
         .list(sessionId)
@@ -524,6 +565,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           const state = autopilotStore.find(sessionId);
           return Boolean(
             state &&
+            !pendingRootTurn(sessionId) &&
             state.requestedEnabled &&
             state.generation === generation &&
             state.lastControlId === controlId,
@@ -1961,6 +2003,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     if (forgetOperations.find(session.id)) return;
     const prior = sessions.find(session.id);
     sessions.save(session);
+    reconcileOrgPlanReceipt(session.id);
     events.publish(journal.append(session.id, 'session.updated', session, session.updatedAt));
     const becameRuntimeReady =
       prior &&
@@ -1977,7 +2020,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   };
   const publishSession = (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot,
-  ) => withScratchContainment(session.workspacePath, () => saveSession(session));
+    beforeCommit?: () => void,
+    commit?: () => void,
+  ) =>
+    withScratchContainment(session.workspacePath, () => {
+      beforeCommit?.();
+      if (commit) commit();
+      else saveSession(session);
+    });
   if (kimiRuntime) {
     // A gestalt-owned kimi web process exited or its websocket dropped: stop
     // the durable session like the codex supervisor does, without a resume
@@ -2178,6 +2228,271 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       throw error;
     }
   }
+  const orgPlanStarting = new Map<string, number>();
+  const ordinarySessionLifecycle: Parameters<typeof startSession>[1] = {
+    createId: randomUUID,
+    now: () => new Date().toISOString(),
+    save: saveSession,
+    publish: publishSession,
+    workspaces,
+    profiles: options.profiles,
+    models,
+    sessionModels,
+    skillProfiles,
+    skillCatalog,
+    defaultSkillProfile: options.explicitSkillProfile,
+    activate:
+      runtime || kimiRuntime
+        ? async (session) => {
+            const now = new Date().toISOString();
+            dismissPendingInteractions(session.id, now);
+            const owner = ownerRuntime(session);
+            if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
+            return owner.start(session, now);
+          }
+        : undefined,
+  };
+  const ordinaryTurnDependencies: StartTurnDependencies = {
+    find: (id) => withPendingInteractions(sessions.find(id)),
+    save: saveSession,
+    idempotency,
+    onSettled: (id) => autopilot.activityChanged(id),
+    onAccepted: (session, key) => {
+      const record = orgPlanLaunches.forSession(session.id);
+      if (
+        record?.phase === 'submitting' &&
+        key !== `org-plan-bootstrap:${record.launchId}` &&
+        session.activeTurnId
+      )
+        orgPlanLaunches.save(
+          { ...record, manualRecoveryTurnId: session.activeTurnId },
+          'submitting',
+        );
+    },
+    start: async (session, text, clientUserMessageId) => {
+      providerRecovery.cancel(session.id);
+      autopilot.manualSend(session.id);
+      const owner = ownerRuntime(session);
+      if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
+      return owner.startTurn(session, text, clientUserMessageId, new Date().toISOString());
+    },
+    ensureWriter:
+      runtime || kimiRuntime
+        ? async (session) => {
+            if (supervisorOwnership(session.id) === 'replaced')
+              throw new WriterAcquisitionError('supervisorReplaced');
+            dismissPendingInteractions(session.id, new Date().toISOString());
+            const owner = ownerRuntime(session);
+            if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
+            return owner.ensureWriter(
+              await recoverExecutionPolicy(session),
+              new Date().toISOString(),
+            );
+          }
+        : undefined,
+    releaseWriter:
+      runtime || kimiRuntime
+        ? (id) => {
+            providerRecovery.cancel(id);
+            dismissPendingInteractions(id, new Date().toISOString());
+            const session = sessions.find(id);
+            const owner = session ? ownerRuntime(session) : null;
+            return owner ? owner.release(id) : Promise.resolve();
+          }
+        : undefined,
+    onStarted: (session) => {
+      activity.observe({
+        sessionId: session.id,
+        occurredAt: session.updatedAt,
+        kind: 'turnStarted',
+        ...(session.threadId ? { threadId: session.threadId } : {}),
+        ...(session.activeTurnId ? { turnId: session.activeTurnId } : {}),
+      });
+      planMeasurementRefresh?.refreshNow(session.id);
+    },
+  };
+  const submitSessionTurn = createStartTurn(ordinaryTurnDependencies);
+  ordinaryTurnPending = (id) => submitSessionTurn.pending?.(id) ?? false;
+  const reclaimableLaunchOwner = (
+    record: import('./features/plans/application/org-plan-launch-store.js').OrgPlanLaunchRecord,
+  ) =>
+    forgetOperations.find(record.sessionId)?.phase === 'completed' &&
+    !sessions.find(record.sessionId) &&
+    !runtime?.ownsWriter(record.sessionId);
+  const prepareOrgPlan = (
+    reference: import('../shared/contracts/org-plan-execution.js').OrgPlanReference,
+    expectedRevision?: string,
+    skillProfile?: string,
+    ownUnpublishedLaunchId?: string,
+  ) =>
+    prepareOrgPlanSupervision(
+      reference,
+      {
+        resolveReference: (ref) => orgPlanContext.resolveReference(ref),
+        workspace: (path, revision) => orgPlanContext.workspace(path, revision),
+        read: (workspacePath, planName) =>
+          workspacePlanCatalog.readExecution(workspacePath, planName),
+        runtimeAvailable: async () => providerAvailability.codex.available,
+        policy: assessModelPolicyAdmission,
+        settings: (workspacePath, selectedProfile) =>
+          prepareOrgPlanSettings(
+            workspacePath,
+            {
+              defaults: sessionDefaults,
+              models: sessionModels,
+              profiles: options.profiles,
+              skillProfiles,
+              skillCatalog,
+              defaultSkillProfile: options.explicitSkillProfile,
+            },
+            selectedProfile,
+          ),
+        owner: async (canonicalPath) => {
+          const pending = orgPlanLaunches.owner(canonicalPath);
+          const ownUnpublished =
+            pending &&
+            ownUnpublishedLaunchId &&
+            pending.launchId === ownUnpublishedLaunchId &&
+            !sessions.find(pending.sessionId) &&
+            !runtime?.ownsWriter(pending.sessionId) &&
+            ['reserved', 'creating'].includes(pending.phase);
+          if (pending && !reclaimableLaunchOwner(pending) && !ownUnpublished)
+            return sessions.find(pending.sessionId) ? { sessionId: pending.sessionId } : {};
+          const owner = sessions
+            .list()
+            .find(
+              (session) =>
+                session.lastOrgPlan?.attached && session.lastOrgPlan.path === canonicalPath,
+            );
+          return owner ? { sessionId: owner.id } : null;
+        },
+      },
+      expectedRevision,
+      skillProfile,
+    );
+  // Both transports and future internal consumers retain the same scoped admission boundary.
+  const startPlanSupervision = (
+    request: import('../shared/contracts/org-plan-execution.js').OrgPlanLaunchRequest,
+  ) =>
+    startOrgPlanSupervision(request, {
+      prepare: prepareOrgPlan,
+      createId: randomUUID,
+      launches: orgPlanLaunches,
+      reclaimForgottenOwner: (path) => {
+        const record = orgPlanLaunches.owner(path);
+        if (record && reclaimableLaunchOwner(record)) orgPlanLaunches.releaseOwner(record);
+      },
+      authorizeReplay: async (record) => {
+        try {
+          const workspace = await workspaces.resolve(record.context.workspace.id);
+          return workspace.realPath === record.context.workspace.path;
+        } catch {
+          return false;
+        }
+      },
+      captureSkills: (context) =>
+        resolveSessionSkillSelection(
+          {
+            workspacePath: context.workspace.path,
+            provider: 'codex',
+            profile: 'default',
+            ...(context.settings.skillProfile
+              ? { skillProfile: context.settings.skillProfile }
+              : {}),
+          },
+          { skillProfiles, skillCatalog, defaultSkillProfile: options.explicitSkillProfile },
+        ),
+      sessions: {
+        create: async (id, context, selection, publication) => {
+          orgPlanStarting.set(id, (orgPlanStarting.get(id) ?? 0) + 1);
+          let publicationEntered = false;
+          let ownsPublication = false;
+          let publishedSession:
+            import('./features/sessions/model/relay-session.js').RelaySessionSnapshot | null = null;
+          try {
+            return await startSession(
+              { ...context.settings, workspaceId: context.workspace.id },
+              {
+                ...ordinarySessionLifecycle,
+                createId: () => id,
+                inheritedSkillSelection: selection,
+                save: (snapshot) => {
+                  const current = sessions.find(id);
+                  const phase = orgPlanLaunches.find(publication.launchId)?.phase;
+                  if (
+                    ownsPublication &&
+                    current?.desiredState === 'active' &&
+                    ['session', 'creating'].includes(phase ?? '')
+                  )
+                    saveSession(snapshot);
+                },
+                publish: (session) =>
+                  publishSession(
+                    session,
+                    () => {
+                      publicationEntered = true;
+                    },
+                    () => {
+                      const receipt = orgPlanLaunches.publishSession(
+                        publication,
+                        session,
+                        sessions,
+                      );
+                      ownsPublication = receipt.created;
+                      publishedSession = receipt.session;
+                      if (receipt.created) saveSession(receipt.session);
+                    },
+                  ),
+                activate: async (session, settings) => {
+                  if (!ownsPublication) return sessions.find(id) ?? publishedSession ?? session;
+                  const active =
+                    (await ordinarySessionLifecycle.activate?.(session, settings)) ?? session;
+                  const current = sessions.find(id);
+                  if (!current || current.desiredState === 'stopped') {
+                    await ownerRuntime(active)?.release(id);
+                    if (!current) throw new Error('SESSION_UNAVAILABLE');
+                    return current;
+                  }
+                  return active;
+                },
+              },
+            );
+          } catch (error) {
+            if (!publicationEntered) throw new OrgPlanSessionNotPublished();
+            throw error;
+          } finally {
+            const count = (orgPlanStarting.get(id) ?? 1) - 1;
+            if (count) orgPlanStarting.set(id, count);
+            else orgPlanStarting.delete(id);
+          }
+        },
+        recover: async (session) => {
+          if (orgPlanStarting.has(session.id)) return null;
+          const acquisition = await ordinaryTurnDependencies.ensureWriter?.(session);
+          if (!acquisition) return null;
+          const current = sessions.find(session.id);
+          if (!current || current.desiredState !== 'active') {
+            await ownerRuntime(acquisition.session)?.release(session.id);
+            return current;
+          }
+          saveSession(acquisition.session);
+          return acquisition.session;
+        },
+        find: (id) => sessions.find(id),
+        unavailable: (id) => Boolean(forgetOperations.find(id)),
+      },
+      submitTurn: submitSessionTurn,
+      acceptedTurn: (record) =>
+        record.bootstrapFingerprint
+          ? readAcceptedTurn(
+              idempotency,
+              record.sessionId,
+              `org-plan-bootstrap:${record.launchId}`,
+              record.bootstrapFingerprint,
+            )
+          : null,
+      onSettled: ordinaryTurnDependencies.onSettled,
+    });
   let app;
   try {
     if (options.testRunnerEnabled !== false) {
@@ -2391,6 +2706,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           }
         : undefined,
       sessionRoutes: {
+        ...ordinarySessionLifecycle,
         forget: (id) => forgetSessions.execute(id),
         forgetOperation: (id) => forgetOperations.find(id),
         createId: randomUUID,
@@ -2405,65 +2721,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         skillProfiles,
         skillCatalog,
         defaultSkillProfile: options.explicitSkillProfile,
-        activate:
-          runtime || kimiRuntime
-            ? async (session) => {
-                const now = new Date().toISOString();
-                dismissPendingInteractions(session.id, now);
-                const owner = ownerRuntime(session);
-                if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
-                return owner.start(session, now);
-              }
-            : undefined,
-        startTurn:
-          runtime || kimiRuntime
-            ? async (session, text, clientUserMessageId) => {
-                providerRecovery.cancel(session.id);
-                autopilot.manualSend(session.id);
-                const owner = ownerRuntime(session);
-                if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
-                return owner.startTurn(
-                  session,
-                  text,
-                  clientUserMessageId,
-                  new Date().toISOString(),
-                );
-              }
-            : undefined,
-        ensureWriter:
-          runtime || kimiRuntime
-            ? async (session) => {
-                if (supervisorOwnership(session.id) === 'replaced')
-                  throw new WriterAcquisitionError('supervisorReplaced');
-                dismissPendingInteractions(session.id, new Date().toISOString());
-                const owner = ownerRuntime(session);
-                if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
-                return owner.ensureWriter(
-                  await recoverExecutionPolicy(session),
-                  new Date().toISOString(),
-                );
-              }
-            : undefined,
-        releaseWriter:
-          runtime || kimiRuntime
-            ? (id) => {
-                providerRecovery.cancel(id);
-                dismissPendingInteractions(id, new Date().toISOString());
-                const session = sessions.find(id);
-                const owner = session ? ownerRuntime(session) : null;
-                return owner ? owner.release(id) : Promise.resolve();
-              }
-            : undefined,
-        onTurnStarted: (session) => {
-          activity.observe({
-            sessionId: session.id,
-            occurredAt: session.updatedAt,
-            kind: 'turnStarted',
-            ...(session.threadId ? { threadId: session.threadId } : {}),
-            ...(session.activeTurnId ? { turnId: session.activeTurnId } : {}),
-          });
-          planMeasurementRefresh?.refreshNow(session.id);
-        },
+        activate: ordinarySessionLifecycle.activate,
+        startTurn: runtime || kimiRuntime ? ordinaryTurnDependencies.start : undefined,
+        ensureWriter: ordinaryTurnDependencies.ensureWriter,
+        releaseWriter: ordinaryTurnDependencies.releaseWriter,
+        onTurnStarted: ordinaryTurnDependencies.onStarted,
+        submitTurn: submitSessionTurn,
         agentActivity: (id) => activity.snapshot(id, new Date().toISOString()),
         toolEfficiency: (id) => toolEfficiency.snapshot(id),
         retrievalReadiness: (id) => runtime?.readRetrievalReadiness(id) ?? Promise.resolve(null),
@@ -2662,44 +2925,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         },
       },
       workspacePlanRoutes: { workspaces, plans: workspacePlanCatalog, archiver: planArchiver },
-      prepareOrgPlanRoutes: {
-        prepare: (reference, expectedRevision, skillProfile) =>
-          prepareOrgPlanSupervision(
-            reference,
-            {
-              resolveReference: (ref) => orgPlanContext.resolveReference(ref),
-              workspace: (path, revision) => orgPlanContext.workspace(path, revision),
-              read: (workspacePath, planName) =>
-                workspacePlanCatalog.readExecution(workspacePath, planName),
-              runtimeAvailable: async () => providerAvailability.codex.available,
-              policy: assessModelPolicyAdmission,
-              settings: (workspacePath, selectedProfile) =>
-                prepareOrgPlanSettings(
-                  workspacePath,
-                  {
-                    defaults: sessionDefaults,
-                    models: sessionModels,
-                    profiles: options.profiles,
-                    skillProfiles,
-                    skillCatalog,
-                    defaultSkillProfile: options.explicitSkillProfile,
-                  },
-                  selectedProfile,
-                ),
-              owner: async (canonicalPath) => {
-                const owner = sessions
-                  .list()
-                  .find(
-                    (session) =>
-                      session.lastOrgPlan?.attached && session.lastOrgPlan.path === canonicalPath,
-                  );
-                return owner ? { sessionId: owner.id } : null;
-              },
-            },
-            expectedRevision,
-            skillProfile,
-          ),
-      },
+      prepareOrgPlanRoutes: { prepare: prepareOrgPlan },
+      executeOrgPlanRoutes: { startOrgPlanSupervision: startPlanSupervision },
       workspaceFileRoutes: {
         workspaces,
         files: workspaceFiles,

@@ -15,13 +15,16 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import WebSocket from 'ws';
+import type { LightMyRequestResponse } from 'fastify';
 
 import { composeRelayApp, type ComposeRelayAppOptions } from './composition.js';
 import { autopilotExecutorLaunchPrompt } from './features/autopilot/application/policy.js';
+import { AutopilotCoordinator } from './features/autopilot/application/service.js';
 import { CodexJsonRpcError } from './platform/codex/json-rpc-client.js';
 import { CodexSessionRuntime } from './platform/codex/session-runtime.js';
 import { SqliteAuthorizationStore } from './platform/auth/sqlite-authorization-store.js';
 import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
+import { SqliteIdempotencyStore } from './platform/persistence/sqlite-idempotency-store.js';
 import { SqliteAutopilotStore } from './platform/persistence/sqlite-autopilot-store.js';
 import { startSupervisionProtocol } from './features/autopilot/domain/supervision-protocol.js';
 import { exportControlPlaneTrace } from './features/control-plane-trace/export-trace.js';
@@ -6984,6 +6987,633 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('lifecycle', () => {
+    it.each(['stop-late-signal', 'uncertain-manual'] as const)(
+      'launches an ordinary plan supervisor and activates only on its real supervision publication: %s',
+      async (recoveryScenario) => {
+        const root = await mkdtemp(join(tmpdir(), 'gestalt-plan-launch-root-'));
+        const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-plan-launch-state-'));
+        ownTemporaryPaths(root, dataDir);
+        const codexHome = join(dataDir, 'codex-home');
+        await mkdir(join(codexHome, 'agents'), { recursive: true });
+        await writeFile(
+          join(codexHome, 'agents', 'org-plan-executor.toml'),
+          'name = "org-plan-executor"\nmodel = "gpt-5.6-terra"\nmodel_reasoning_effort = "high"\ndeveloper_instructions = "Keep the assigned milestone ownership and review gates."\n',
+        );
+        vi.stubEnv('CODEX_HOME', codexHome);
+        onTestFinished(() => {
+          vi.unstubAllEnvs();
+        });
+        const workspacePath = join(root, 'workspace');
+        await mkdir(join(workspacePath, '.gestalt'), { recursive: true });
+        const planPath = join(workspacePath, '.gestalt', 'Plan ü space.org');
+        await writeFile(planPath, autopilotPlanText());
+        const handles: LiveServerHandle[] = [];
+        const launch = liveAppServer(handles);
+        const providerHistory = new Map<
+          string,
+          Array<{ id: string; status: string; items: unknown[] }>
+        >();
+        let turnIndex = 0;
+        const bootstrapGate = Promise.withResolvers<void>();
+        const scheduled: Array<{ callback: () => void; cancelled: boolean }> = [];
+        let coordinator: AutopilotCoordinator | undefined;
+        let pendingExecution: Promise<LightMyRequestResponse> | undefined;
+        let firstTurn = true;
+        const drainTimers = async () => {
+          for (const task of scheduled.splice(0)) if (!task.cancelled) task.callback();
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        };
+        const attach = vi.spyOn(FilesystemPlanStatusSource.prototype, 'attach');
+        const supervisionStarted = vi.spyOn(AutopilotCoordinator.prototype, 'supervisionStarted');
+        const runtimeStart = vi.spyOn(CodexSessionRuntime.prototype, 'start');
+        const options: ComposeRelayAppOptions = {
+          root,
+          dataDir,
+          relyingParty,
+          installedCodexVersion: 'codex-cli 0.144.3',
+          startAppServers: true,
+          sessionModelCatalog: { list: async () => ['gpt-6.1-sol', 'gpt-5.6-terra'] },
+          profiles: {
+            list: async () => [{ name: 'default', state: 'ok', status: 'ready' }],
+            require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
+          },
+          onAutopilotCoordinator: (value) => {
+            coordinator = value;
+          },
+          autopilotSchedule: (callback) => {
+            const task = { callback, cancelled: false };
+            scheduled.push(task);
+            return () => {
+              task.cancelled = true;
+            };
+          },
+          autopilotActivity: (sessionId) => {
+            const observedAt = new Date().toISOString();
+            return {
+              sessionId,
+              root: {
+                state: 'idle',
+                reason: 'turnCompleted',
+                observedAt,
+                lastActivityAt: observedAt,
+              },
+              subagents: [],
+              aggregateSubagents: 'idle',
+              confidence: 'fresh',
+            };
+          },
+          launchAppServer: () => {
+            const server = launch();
+            handles.at(-1)!.respond = async (method, params) => {
+              if (method === 'turn/start') {
+                const input = params as {
+                  threadId: string;
+                  input: unknown[];
+                  clientUserMessageId?: string;
+                };
+                const turnId = firstTurn ? 'bootstrap-turn' : `smoke-turn-${++turnIndex}`;
+                if (firstTurn) {
+                  firstTurn = false;
+                  await bootstrapGate.promise;
+                }
+                const turns = providerHistory.get(input.threadId) ?? [];
+                turns.push({
+                  id: turnId,
+                  status: 'inProgress',
+                  items: [
+                    {
+                      id: `user-${turnId}`,
+                      type: 'userMessage',
+                      clientId: input.clientUserMessageId,
+                      content: input.input,
+                    },
+                  ],
+                });
+                providerHistory.set(input.threadId, turns);
+                return { turn: { id: turnId } };
+              }
+              if (method === 'thread/read') {
+                const id = (params as { threadId: string }).threadId;
+                return {
+                  thread: { id, status: { type: 'idle' }, turns: providerHistory.get(id) ?? [] },
+                };
+              }
+              return method === 'skills/list'
+                ? {
+                    data: [
+                      {
+                        cwd: (params as { cwds: string[] }).cwds[0],
+                        skills: [
+                          {
+                            name: 'gestalt:org-plan',
+                            description: 'Supervise an Org plan.',
+                            path: join(root, 'skills', 'org-plan', 'SKILL.md'),
+                            enabled: true,
+                          },
+                        ],
+                        errors: [],
+                      },
+                    ],
+                  }
+                : undefined;
+            };
+            return server;
+          },
+        };
+        const app = await composeAuthorizedApp(options);
+        try {
+          await app.listen({ host: '127.0.0.1', port: 0 });
+          const skillProfile = 'launch-supervisor';
+          expect(
+            (
+              await app.inject({
+                method: 'PUT',
+                url: `/api/skill-profiles/${skillProfile}`,
+                payload: {
+                  version: 1,
+                  name: skillProfile,
+                  skills: [
+                    {
+                      name: 'gestalt:org-plan',
+                      path: join(root, 'skills', 'org-plan', 'SKILL.md'),
+                      enabled: true,
+                    },
+                  ],
+                },
+              })
+            ).statusCode,
+          ).toBe(201);
+          expect(
+            (
+              await app.inject({
+                method: 'PUT',
+                url: '/api/session-defaults',
+                payload: {
+                  workspaceId: 'unrelated-selected-workspace',
+                  skillProfile,
+                  provider: 'codex',
+                  model: 'gpt-5.6-terra',
+                  reasoningEffort: 'high',
+                  executorModel: 'gpt-6.1-sol',
+                  executorReasoningEffort: 'medium',
+                  sandbox: 'workspace-git',
+                  approvalPolicy: 'never',
+                },
+              })
+            ).statusCode,
+          ).toBe(200);
+          const workspace = (await app.inject('/api/bootstrap'))
+            .json()
+            .workspaces[0].children.find((item: { name: string }) => item.name === 'workspace');
+          const reference = {
+            kind: 'workspace',
+            workspaceId: workspace.id,
+            planName: '.gestalt/Plan ü space.org',
+          };
+          const prepared = (
+            await app.inject({ method: 'POST', url: '/api/plans/prepare', payload: reference })
+          ).json();
+          expect(
+            prepared,
+            JSON.stringify({ kind: prepared.kind, code: prepared.code, reason: prepared.reason }),
+          ).toMatchObject({ kind: 'eligible', workspace: { path: workspacePath } });
+          pendingExecution = app.inject({
+            method: 'POST',
+            url: '/api/plans/execute',
+            payload: {
+              reference,
+              expectedRevision: prepared.revision,
+              skillProfile,
+              launchId: 'ordinary-launch',
+            },
+          });
+
+          await vi.waitFor(() =>
+            expect(
+              handles.flatMap((handle) =>
+                handle.requests.filter((request) => request.method === 'turn/start'),
+              ),
+            ).toHaveLength(1),
+          );
+          const id = (await app.inject('/api/sessions')).json()[0].id;
+          const readOnlyDatabase = new DatabaseSync(join(dataDir, 'relay.sqlite'));
+          try {
+            const reservationBefore = readOnlyDatabase
+              .prepare('SELECT canonical_path,record_json FROM org_plan_launches WHERE launch_id=?')
+              .get('ordinary-launch');
+            const pendingPreparation = (
+              await app.inject({ method: 'POST', url: '/api/plans/prepare', payload: reference })
+            ).json();
+            expect(pendingPreparation).toMatchObject({
+              kind: 'blocked',
+              code: 'ACTIVE_SUPERVISION',
+              existingSessionId: id,
+            });
+            expect(
+              readOnlyDatabase
+                .prepare(
+                  'SELECT canonical_path,record_json FROM org_plan_launches WHERE launch_id=?',
+                )
+                .get('ordinary-launch'),
+            ).toEqual(reservationBefore);
+          } finally {
+            readOnlyDatabase.close();
+          }
+          expect((await app.inject(`/api/sessions/${id}`)).json()).toMatchObject({
+            autopilot: { enabled: false, state: 'disabled' },
+          });
+          expect((await app.inject(`/api/sessions/${id}/plan`)).statusCode).toBe(204);
+          expect(attach).not.toHaveBeenCalled();
+          expect(supervisionStarted).not.toHaveBeenCalled();
+          const signal = {
+            schemaVersion: 1,
+            planPath,
+            reason: 'supervision-start',
+            updatedAt: new Date().toISOString(),
+          };
+          await writeFile(
+            planStatusFilePath(planStatusDirectoryPath(workspacePath, id), planPath),
+            JSON.stringify(signal),
+          );
+          await expect
+            .poll(async () => (await app.inject(`/api/sessions/${id}`)).json().lastOrgPlan)
+            .toMatchObject({ attached: true, path: planPath });
+          await expect
+            .poll(async () => (await app.inject(`/api/sessions/${id}`)).json().autopilot.enabled)
+            .toBe(true);
+          coordinator!.activityChanged(id);
+          coordinator!.evaluate(id);
+          await drainTimers();
+          const safetyDatabase = new DatabaseSync(join(dataDir, 'relay.sqlite'));
+          try {
+            expect(
+              safetyDatabase.prepare('SELECT count(*) AS count FROM autopilot_controls').get(),
+            ).toEqual({ count: 0 });
+          } finally {
+            safetyDatabase.close();
+          }
+          expect(
+            handles.flatMap((handle) =>
+              handle.requests.filter((request) => request.method === 'turn/start'),
+            ),
+          ).toHaveLength(1);
+          expect(supervisionStarted).toHaveBeenCalledExactlyOnceWith(id);
+          bootstrapGate.resolve();
+          const response = await pendingExecution!;
+          expect(response.statusCode).toBe(200);
+          const result = response.json();
+          const startErrors = await Promise.all(
+            runtimeStart.mock.results.map(async (call) => {
+              try {
+                await call.value;
+                return null;
+              } catch (error) {
+                return error instanceof Error && /^[A-Z0-9_]{1,100}$/.test(error.message)
+                  ? error.message
+                  : 'UNCLASSIFIED_START_FAILURE';
+              }
+            }),
+          );
+          expect(
+            result,
+            JSON.stringify({
+              kind: result.kind,
+              stage: result.stage,
+              reason: result.reason,
+              state: result.session?.state,
+              threadPresent: Boolean(result.session?.threadId),
+              startErrors,
+            }),
+          ).toMatchObject({
+            kind: 'started',
+            session: {
+              workspacePath,
+              provider: 'codex',
+              profile: 'default',
+              state: 'turnActive',
+              model: 'gpt-5.6-terra',
+              modelSettings: {
+                reasoningEffort: 'high',
+                executorModel: 'gpt-6.1-sol',
+                executorReasoningEffort: 'medium',
+              },
+              executionPolicy: { sandbox: 'workspace-git', approvalPolicy: 'never' },
+              effectiveSkillSelection: {
+                selectedProfileName: skillProfile,
+              },
+            },
+            bootstrap: { kind: 'accepted' },
+          });
+
+          expect(result.session.id).toBe(id);
+          expect(result.session.effectiveSkillSelection.skills).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ name: 'gestalt:org-plan', enabled: true }),
+            ]),
+          );
+          const history = await app.inject(`/api/sessions/${id}/history`);
+          expect(history.statusCode).toBe(200);
+          expect(
+            history
+              .json()
+              .items.filter(
+                (item: { kind: string; operationId?: string }) =>
+                  item.kind === 'user' && item.operationId === result.bootstrap.requestId,
+              ),
+          ).toHaveLength(1);
+          const address = app.server.address();
+          if (!address || typeof address === 'string')
+            throw new Error('EXPECTED_TEST_SERVER_ADDRESS');
+          const socket = new WebSocket(
+            `ws://127.0.0.1:${address.port}/api/sessions/${id}/events?after=0`,
+            {
+              headers: {
+                origin: relyingParty.publicOrigin,
+                cookie: 'gestalt_mobile_session=test-session',
+              },
+            },
+          );
+          const events: Array<{ type: string; sequence: number; sessionId: string }> = [];
+          socket.on('message', (data) => {
+            const message = JSON.parse(String(data));
+            if (message.event)
+              events.push({
+                type: message.event.type,
+                sequence: message.event.sequence,
+                sessionId: message.event.sessionId,
+              });
+          });
+          try {
+            await vi.waitFor(() => expect(socket.readyState).toBe(WebSocket.OPEN));
+            await vi.waitFor(() =>
+              expect(events.map((event) => event.type)).toEqual(
+                expect.arrayContaining(['session.updated', 'plan.updated']),
+              ),
+            );
+            expect(events.every((event) => event.sessionId === id && event.sequence > 0)).toBe(
+              true,
+            );
+            expect(new Set(events.map((event) => event.sequence)).size).toBe(events.length);
+          } finally {
+            socket.terminate();
+          }
+
+          expect((await app.inject('/api/sessions')).json()).toEqual(
+            expect.arrayContaining([expect.objectContaining({ id })]),
+          );
+          const replay = await app.inject({
+            method: 'POST',
+            url: '/api/plans/execute',
+            payload: {
+              reference,
+              expectedRevision: prepared.revision,
+              skillProfile,
+              launchId: 'ordinary-launch',
+            },
+          });
+          expect(replay.json()).toMatchObject({
+            kind: 'started',
+            session: { id },
+            bootstrap: result.bootstrap,
+          });
+          coordinator!.evaluate(id);
+          await drainTimers();
+          expect(
+            handles.flatMap((handle) =>
+              handle.requests.filter((request) => request.method === 'turn/start'),
+            ),
+          ).toHaveLength(1);
+          expect(supervisionStarted).toHaveBeenCalledExactlyOnceWith(id);
+          expect(await readFile(planPath, 'utf8')).toBe(autopilotPlanText());
+          // Forget must finish ordinary writer/scratch release before another intent can own this file.
+          expect(
+            (await app.inject({ method: 'DELETE', url: `/api/sessions/${id}` })).statusCode,
+          ).toBe(204);
+          const forgottenDatabase = new DatabaseSync(join(dataDir, 'relay.sqlite'));
+          try {
+            const ownerBefore = forgottenDatabase
+              .prepare('SELECT canonical_path FROM org_plan_launches WHERE launch_id=?')
+              .get('ordinary-launch');
+            expect(ownerBefore).toEqual({ canonical_path: planPath });
+            const preparedAgain = (
+              await app.inject({ method: 'POST', url: '/api/plans/prepare', payload: reference })
+            ).json();
+            expect(preparedAgain).toMatchObject({ kind: 'eligible' });
+            expect(
+              forgottenDatabase
+                .prepare('SELECT canonical_path FROM org_plan_launches WHERE launch_id=?')
+                .get('ordinary-launch'),
+            ).toEqual(ownerBefore);
+            const originalPut = SqliteIdempotencyStore.prototype.put;
+            let failReceipt = recoveryScenario === 'uncertain-manual';
+            const receiptFault = vi
+              .spyOn(SqliteIdempotencyStore.prototype, 'put')
+              .mockImplementation(function (
+                this: SqliteIdempotencyStore,
+                scope,
+                key,
+                status,
+                body,
+              ) {
+                if (failReceipt && key === 'org-plan-bootstrap:after-forget') {
+                  failReceipt = false;
+                  throw new Error('INJECTED_ACCEPTANCE_RECEIPT_FAILURE');
+                }
+                return originalPut.call(this, scope, key, status, body);
+              });
+            onTestFinished(() => {
+              receiptFault.mockRestore();
+            });
+            const nextLaunch = (
+              await app.inject({
+                method: 'POST',
+                url: '/api/plans/execute',
+                payload: {
+                  reference,
+                  expectedRevision: preparedAgain.revision,
+                  skillProfile,
+                  launchId: 'after-forget',
+                },
+              })
+            ).json();
+            expect(nextLaunch).toMatchObject(
+              recoveryScenario === 'uncertain-manual'
+                ? { kind: 'partial', stage: 'bootstrap', bootstrap: { kind: 'pending' } }
+                : { kind: 'started', bootstrap: { kind: 'accepted' } },
+            );
+            expect(nextLaunch.session.id).not.toBe(id);
+            expect(
+              forgottenDatabase
+                .prepare('SELECT canonical_path FROM org_plan_launches WHERE launch_id=?')
+                .get('ordinary-launch'),
+            ).toEqual({ canonical_path: null });
+            expect(
+              forgottenDatabase
+                .prepare('SELECT session_id FROM org_plan_launches WHERE canonical_path=?')
+                .get(planPath),
+            ).toEqual({ session_id: nextLaunch.session.id });
+            expect((await app.inject('/api/sessions')).json()).toHaveLength(1);
+            expect(
+              (await app.inject(`/api/sessions/${nextLaunch.session.id}`)).json(),
+            ).toMatchObject({ autopilot: { enabled: false } });
+            const nextId = nextLaunch.session.id;
+            const nextSignal = {
+              schemaVersion: 1,
+              planPath,
+              reason: 'supervision-start',
+              updatedAt: new Date().toISOString(),
+            };
+            if (recoveryScenario === 'stop-late-signal') {
+              expect(
+                (
+                  await app.inject({
+                    method: 'POST',
+                    url: `/api/sessions/${nextId}/stop`,
+                    payload: {},
+                  })
+                ).statusCode,
+              ).toBe(202);
+              await writeFile(
+                planStatusFilePath(planStatusDirectoryPath(workspacePath, nextId), planPath),
+                JSON.stringify(nextSignal),
+              );
+              await app.close();
+              const restarted = await composeAuthorizedApp(options);
+              try {
+                await restarted.listen({ host: '127.0.0.1', port: 0 });
+                await expect
+                  .poll(
+                    async () =>
+                      (await restarted.inject(`/api/sessions/${nextId}`)).json().lastOrgPlan,
+                  )
+                  .toMatchObject({ attached: true, path: planPath });
+                expect((await restarted.inject(`/api/sessions/${nextId}`)).json()).toMatchObject({
+                  state: 'stopped',
+                  desiredState: 'stopped',
+                  autopilot: { enabled: false },
+                });
+                const retained = (
+                  await restarted.inject({
+                    method: 'POST',
+                    url: '/api/plans/execute',
+                    payload: {
+                      reference,
+                      expectedRevision: preparedAgain.revision,
+                      skillProfile,
+                      launchId: 'after-forget',
+                    },
+                  })
+                ).json();
+                expect(retained).toMatchObject({
+                  kind: 'started',
+                  session: { id: nextId, state: 'stopped' },
+                  bootstrap: nextLaunch.bootstrap,
+                });
+                coordinator!.evaluate(nextId);
+                await drainTimers();
+                expect(
+                  handles.flatMap((handle) =>
+                    handle.requests.filter((request) => request.method === 'turn/start'),
+                  ),
+                ).toHaveLength(2);
+              } finally {
+                await restarted.close();
+              }
+            } else {
+              const manual = await app.inject({
+                method: 'POST',
+                url: `/api/sessions/${nextId}/turns`,
+                headers: { 'idempotency-key': 'manual-recovery' },
+                payload: {
+                  text: 'Inspect the existing request and continue this ordinary supervisor session.',
+                },
+              });
+              expect(manual.statusCode).toBe(202);
+              const recoveredRecord = JSON.parse(
+                (
+                  forgottenDatabase
+                    .prepare('SELECT record_json FROM org_plan_launches WHERE launch_id=?')
+                    .get('after-forget') as { record_json: string }
+                ).record_json,
+              );
+              expect(recoveredRecord).toMatchObject({
+                phase: 'submitting',
+                manualRecoveryTurnId: manual.json().activeTurnId,
+              });
+              await writeFile(
+                planStatusFilePath(planStatusDirectoryPath(workspacePath, nextId), planPath),
+                JSON.stringify(nextSignal),
+              );
+              await expect
+                .poll(
+                  async () =>
+                    (await app.inject(`/api/sessions/${nextId}`)).json().autopilot.enabled,
+                )
+                .toBe(true);
+              const live = handles.find((handle) =>
+                handle.requests.some(
+                  (request) =>
+                    request.method === 'turn/start' &&
+                    (request.params as { threadId?: string }).threadId === manual.json().threadId,
+                ),
+              );
+              expect(live?.notify).toBeTypeOf('function');
+              live!.notify!({
+                method: 'turn/completed',
+                params: {
+                  threadId: manual.json().threadId,
+                  turn: { id: manual.json().activeTurnId, status: 'completed' },
+                },
+              });
+              await expect
+                .poll(async () => (await app.inject(`/api/sessions/${nextId}`)).json().state)
+                .toBe('ready');
+              await expect
+                .poll(async () => {
+                  coordinator!.activityChanged(nextId);
+                  coordinator!.evaluate(nextId);
+                  await drainTimers();
+                  return (
+                    forgottenDatabase
+                      .prepare(
+                        'SELECT count(*) AS count FROM autopilot_controls WHERE session_id=?',
+                      )
+                      .get(nextId) as { count: number }
+                  ).count;
+                })
+                .toBeGreaterThan(0);
+              const replayed = (
+                await app.inject({
+                  method: 'POST',
+                  url: '/api/plans/execute',
+                  payload: {
+                    reference,
+                    expectedRevision: preparedAgain.revision,
+                    skillProfile,
+                    launchId: 'after-forget',
+                  },
+                })
+              ).json();
+              expect(replayed).toMatchObject({
+                kind: 'partial',
+                bootstrap: { kind: 'pending' },
+                session: { id: nextId },
+              });
+            }
+          } finally {
+            forgottenDatabase.close();
+          }
+        } finally {
+          bootstrapGate.resolve();
+          if (pendingExecution) await Promise.allSettled([pendingExecution]);
+          await app.close();
+          attach.mockRestore();
+          supervisionStarted.mockRestore();
+          runtimeStart.mockRestore();
+        }
+      },
+    );
+
     it('retains an authored plan without starting supervision', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
@@ -7687,6 +8317,7 @@ describe('production composition', () => {
           'protected',
         ],
         ['POST', '/api/plans/prepare', '/api/plans/prepare', 'protected'],
+        ['POST', '/api/plans/execute', '/api/plans/execute', 'protected'],
         [
           'HEAD',
           '/api/workspaces/:workspaceId/plans',

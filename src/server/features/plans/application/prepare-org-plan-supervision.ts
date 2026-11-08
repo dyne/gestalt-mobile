@@ -30,7 +30,7 @@ export type PrepareOrgPlanDependencies = {
     fileRevision: string,
   ): Promise<{ workspace: OrgPlanWorkspace; revision: string } | null>;
   runtimeAvailable(): Promise<boolean>;
-  owner(canonicalPath: string): Promise<{ sessionId: string } | null>;
+  owner(canonicalPath: string): Promise<{ sessionId?: string } | null>;
   policy(plan: SupervisedPlan): ReturnType<typeof assessModelPolicyAdmission>;
   settings(workspacePath: string, skillProfile?: string): Promise<OrgPlanSettingsRead>;
 };
@@ -101,7 +101,7 @@ export async function prepareOrgPlanSupervision(
         kind: 'blocked',
         code: 'ACTIVE_SUPERVISION',
         reason: 'This plan already has a supervisor. Open its session to continue or recover it.',
-        existingSessionId: owner.sessionId,
+        ...(owner.sessionId ? { existingSessionId: owner.sessionId } : {}),
       };
     if (!(await deps.runtimeAvailable()))
       return blocked('CODEX_UNAVAILABLE', 'Codex supervision is currently unavailable.');
