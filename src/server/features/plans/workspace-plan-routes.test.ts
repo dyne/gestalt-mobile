@@ -40,7 +40,11 @@ describe('workspace plan catalog routes', () => {
         ],
         read: async (_path: string, planName: string) => {
           reads.push(planName);
-          return { kind: 'available' as const, plan };
+          return {
+            kind: 'available' as const,
+            plan,
+            sourcePath: '/workspace/plans/roadmap space.org',
+          };
         },
       },
     };
@@ -52,7 +56,10 @@ describe('workspace plan catalog routes', () => {
     ]);
     const response = await app.inject('/api/workspaces/opaque/plans/plans%2Froadmap%20space.org');
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ title: 'Catalog plan' });
+    expect(response.json()).toMatchObject({
+      title: 'Catalog plan',
+      sourcePath: '/workspace/plans/roadmap space.org',
+    });
     expect(reads).toEqual(['plans/roadmap space.org']);
     await app.close();
   });
@@ -97,6 +104,7 @@ describe('workspace plan catalog routes', () => {
           kind: 'source',
           title: 'Meeting notes',
           source: '#+TITLE: Meeting notes\n\n* Notes',
+          sourcePath: '/workspace/notes/meeting.org',
         }),
       },
     });
@@ -108,6 +116,7 @@ describe('workspace plan catalog routes', () => {
       planName: 'notes/meeting.org',
       title: 'Meeting notes',
       source: '#+TITLE: Meeting notes\n\n* Notes',
+      sourcePath: '/workspace/notes/meeting.org',
     });
     await app.close();
   });

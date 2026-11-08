@@ -168,11 +168,12 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
       workspacePath: workspace,
     });
     return parsed.kind === 'available'
-      ? parsed
+      ? { ...parsed, sourcePath: candidate.canonicalPath }
       : {
           kind: 'source',
           title: fallbackTitle(planName, candidate.source),
           source: candidate.source,
+          sourcePath: candidate.canonicalPath,
         };
   }
 

@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <script lang="ts">
   import OrgNotes from './OrgNotes.svelte';
+  import PlanFilePath from './PlanFilePath.svelte';
   import type { WorkspaceOrgPreview } from '../sessions/relay-client.js';
   import { parseOrgDocument } from './org-document.js';
 
@@ -14,18 +15,27 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onclose: () => void;
     verifiedReferences?: ReadonlySet<string>;
     onreference?: (path: string) => void;
+    sourcePath?: string;
+    oncopyresult?: (copied: boolean) => void;
   };
 
-  let { preview, onclose, onreference, verifiedReferences = new Set<string>() }: Props = $props();
+  let {
+    preview,
+    onclose,
+    onreference,
+    verifiedReferences = new Set<string>(),
+    sourcePath,
+    oncopyresult,
+  }: Props = $props();
   let document = $derived(parseOrgDocument(preview.source));
   let metadata = $derived(document.metadata.filter(([key]) => key !== 'TITLE'));
 </script>
 
 <article class="org-document" aria-labelledby="org-document-title">
   <header>
-    <div>
+    <div class="document-heading">
       <h2 id="org-document-title">{preview.title}</h2>
-      <code>{preview.planName}</code>
+      <PlanFilePath path={preview.sourcePath || sourcePath || preview.planName} {oncopyresult} />
     </div>
     <button class="close" type="button" aria-label="Close plan and return to list" onclick={onclose}
       >×</button
@@ -119,9 +129,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   dd {
     margin: 0;
   }
-  code {
-    font: inherit;
-    color: var(--theme-text-muted);
+  .document-heading {
+    min-inline-size: 0;
   }
   .close {
     flex: 0 0 auto;

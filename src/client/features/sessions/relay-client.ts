@@ -37,6 +37,7 @@ export type WorkspaceOrgPreview = Readonly<{
   planName: string;
   title: string;
   source: string;
+  sourcePath?: string;
 }>;
 
 export type RelayWorkspaceFile = Readonly<{

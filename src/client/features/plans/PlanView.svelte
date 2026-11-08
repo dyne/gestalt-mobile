@@ -12,6 +12,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import type { PlanStep, SupervisedPlan } from './contracts.js';
   import type { PlanState } from './plan-controller.js';
   import PlanProgress from './PlanProgress.svelte';
+  import PlanFilePath from './PlanFilePath.svelte';
   import { presentPlan } from './plan-presentation.js';
 
   type Props = {
@@ -21,6 +22,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onopenfull?: () => void;
     verifiedReferences?: ReadonlySet<string>;
     onreference?: (path: string) => void;
+    sourcePath?: string;
+    oncopyresult?: (copied: boolean) => void;
   };
   type DescriptionKey = keyof PlanStep['description'];
 
@@ -41,6 +44,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onopenfull,
     onreference,
     verifiedReferences = new Set<string>(),
+    sourcePath,
+    oncopyresult,
   }: Props = $props();
   let detailsById = $state<Partial<Record<string, HTMLDetailsElement>>>({});
   let lastCurrentStepId: string | null = null;
@@ -182,8 +187,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {:else if plan}
   <section class="plan" class:compact aria-labelledby="plan-title">
     <header>
-      <div>
+      <div class="plan-heading">
         <h2 id="plan-title">{plan.title}</h2>
+        {#if !compact && (plan.sourcePath || sourcePath)}
+          <PlanFilePath path={plan.sourcePath || sourcePath!} {oncopyresult} />
+        {/if}
       </div>
       {#if compact}
         {#if onopenfull}<button type="button" onclick={onopenfull}>Full plan</button>{/if}
@@ -313,6 +321,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     gap: 1rem;
     justify-content: space-between;
     align-items: start;
+  }
+  .plan-heading {
+    min-inline-size: 0;
   }
   h2,
   p {

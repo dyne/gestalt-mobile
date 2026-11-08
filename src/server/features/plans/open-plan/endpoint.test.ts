@@ -20,7 +20,11 @@ const plan = {
 
 describe('open session plan endpoint', () => {
   it('associates a workspace-relative supervised plan with a known session', async () => {
-    const open = vi.fn(async () => ({ kind: 'available' as const, plan }));
+    const open = vi.fn(async () => ({
+      kind: 'available' as const,
+      plan,
+      sourcePath: '/workspace/plans/roadmap.org',
+    }));
     const app = fastify();
     registerOpenPlan(app, { exists: (id) => id === 'session-1', open });
 
@@ -31,7 +35,10 @@ describe('open session plan endpoint', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ title: 'Selected plan' });
+    expect(response.json()).toMatchObject({
+      title: 'Selected plan',
+      sourcePath: '/workspace/plans/roadmap.org',
+    });
     expect(open).toHaveBeenCalledWith('session-1', 'plans/roadmap.org');
     await app.close();
   });
@@ -44,6 +51,7 @@ describe('open session plan endpoint', () => {
         kind: 'source',
         title: 'Notes',
         source: '#+TITLE: Notes\n* Topic',
+        sourcePath: '/workspace/notes.org',
       }),
     });
 
@@ -59,6 +67,7 @@ describe('open session plan endpoint', () => {
       planName: 'notes.org',
       title: 'Notes',
       source: '#+TITLE: Notes\n* Topic',
+      sourcePath: '/workspace/notes.org',
     });
     await app.close();
   });

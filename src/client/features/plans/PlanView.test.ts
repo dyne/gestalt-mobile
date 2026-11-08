@@ -100,11 +100,13 @@ describe('PlanView', () => {
       state: ready({ steps: [{ ...l1, description: { effort: 'Medium', notes: longNotes } }] }),
       compact: true,
       onopenfull,
+      sourcePath: '/work/project/.gestalt/roadmap.org',
     });
     expect(screen.getByRole('progressbar', { name: 'Plan progress' })).toBeTruthy();
     expect(screen.getAllByText('Effort:')).toHaveLength(2);
     expect(view.container.textContent).not.toContain(longNotes);
     expect(screen.queryByRole('button', { name: 'Close plan and return to list' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Copy Org file path' })).toBeNull();
     await fireEvent.click(screen.getByRole('button', { name: 'Full plan' }));
     expect(onopenfull).toHaveBeenCalledOnce();
     await view.rerender({ state: ready({ currentStepId: l2.id }), compact: true, onopenfull });

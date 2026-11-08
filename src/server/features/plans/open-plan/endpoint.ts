@@ -26,13 +26,15 @@ export function registerOpenPlan(
 
     try {
       const result = await deps.open(sessionId, planName);
-      if (result.kind === 'available') return reply.send(result.plan);
+      if (result.kind === 'available')
+        return reply.send({ ...result.plan, sourcePath: result.sourcePath });
       if (result.kind === 'source')
         return reply.send({
           kind: 'org-source',
           planName,
           title: result.title,
           source: result.source,
+          sourcePath: result.sourcePath,
         });
       if (result.kind === 'missing') return reply.code(404).send({ code: 'PLAN_NOT_FOUND' });
       return reply.code(422).send({ code: 'PLAN_UNAVAILABLE' });

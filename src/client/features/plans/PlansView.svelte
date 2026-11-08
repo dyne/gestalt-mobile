@@ -32,6 +32,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onreference?: (path: string) => void;
     onarchive?: (planName: string) => void;
     archivingPlans?: readonly string[];
+    sourcePath?: string;
+    oncopyresult?: (copied: boolean) => void;
   };
 
   let {
@@ -43,6 +45,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onreference,
     checkreferences,
     archivingPlans = [],
+    sourcePath,
+    oncopyresult,
   }: Props = $props();
   let verifiedReferences = $state<ReadonlySet<string>>(new Set());
   $effect(() => {
@@ -181,9 +185,23 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {/snippet}
 
 {#if planState?.kind === 'org-source'}
-  <OrgDocumentView preview={planState} onclose={close} {onreference} {verifiedReferences} />
+  <OrgDocumentView
+    preview={planState}
+    onclose={close}
+    {onreference}
+    {verifiedReferences}
+    {sourcePath}
+    {oncopyresult}
+  />
 {:else if planState}
-  <PlanView state={planState} onclose={close} {onreference} {verifiedReferences} />
+  <PlanView
+    state={planState}
+    onclose={close}
+    {onreference}
+    {verifiedReferences}
+    {sourcePath}
+    {oncopyresult}
+  />
 {:else}
   <section class="plans" aria-labelledby="plans-title">
     <div class="catalog-heading">
