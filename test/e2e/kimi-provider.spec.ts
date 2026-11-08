@@ -142,8 +142,13 @@ test('explains why kimi cannot be selected when it is not installed', async ({ p
   await expect(page.getByText(/Kimi is unavailable because its CLI was not found/)).toHaveCount(0);
   await expect(page.getByLabel('Sandbox')).toBeVisible();
   await expect(page.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue(
-    'gpt-6.1-sol',
+    'gpt-5.6-terra',
   );
+  await expect(
+    page
+      .getByRole('combobox', { name: 'Model', exact: true })
+      .locator('option[value="gpt-6.1-sol"]'),
+  ).toHaveCount(0);
 });
 
 test(

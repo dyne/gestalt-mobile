@@ -8,6 +8,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { onDestroy, onMount, tick, untrack } from 'svelte';
   import { selectTheme } from './features/theme/browser-theme.js';
   import { type ThemeId } from './features/theme/theme-registry.js';
+  import {
+    newSessionFallback,
+    resolveNewSessionDefaults,
+  } from '../shared/contracts/session-defaults.js';
 
   let {
     authorizedFetch,
@@ -166,12 +170,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let shellStatus = $state('Loading relay…');
   let theme = $state<ThemeId>(untrack(() => initialTheme));
   let workspaceTree = $state<WorkspaceOption[]>([]);
-  const defaultSessionModel = 'gpt-6.1-sol';
-  let sessionReasoningEffort =
-    $state<import('../shared/contracts/session-model-settings.js').ThinkingLevel>('medium');
-  let sessionExecutorModel = $state('gpt-5.6-terra');
-  let sessionExecutorReasoningEffort =
-    $state<import('../shared/contracts/session-model-settings.js').ThinkingLevel>('high');
+  const defaultSessionModel = newSessionFallback.model;
+  let sessionReasoningEffort = $state<
+    import('../shared/contracts/session-model-settings.js').ThinkingLevel
+  >(newSessionFallback.reasoningEffort);
+  let sessionExecutorModel = $state<string>(newSessionFallback.executorModel);
+  let sessionExecutorReasoningEffort = $state<
+    import('../shared/contracts/session-model-settings.js').ThinkingLevel
+  >(newSessionFallback.executorReasoningEffort);
   let sessionModels = $state.raw<Record<LlmProvider, string[]>>({
     codex: [defaultSessionModel],
     kimi: [],
@@ -310,8 +316,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let sessionListAbort: AbortController | null = null;
   let chatEnabled = $derived(sessions.some((session) => session.id === sessionId));
   let recentSessions = $state<RecentSession[]>([]);
-  let sandbox = $state<NonNullable<StartSessionSettings['sandbox']>>('workspace-git');
-  let approvalPolicy = $state<NonNullable<StartSessionSettings['approvalPolicy']>>('never');
+  let sandbox = $state<NonNullable<StartSessionSettings['sandbox']>>(newSessionFallback.sandbox);
+  let approvalPolicy = $state<NonNullable<StartSessionSettings['approvalPolicy']>>(
+    newSessionFallback.approvalPolicy,
+  );
   let startRequestKey = $state<string | null>(null);
   let sessionStartState = $state<SessionStartState>({ starting: false, error: null });
   let startingSession = $derived(sessionStartState.starting);
@@ -725,7 +733,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       workspaceTree = bootstrap.workspaces;
       codexProfiles = bootstrap.profiles;
       sessionModels = {
-        codex: [...new Set([defaultSessionModel, ...(bootstrap.models?.codex ?? [])])],
+        codex: [...new Set(bootstrap.models?.codex ?? [defaultSessionModel])],
         kimi: bootstrap.models?.kimi ?? [],
       };
       selectedSessionModels = {
@@ -735,16 +743,24 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       providerCapabilities = bootstrap.capabilities?.providers ?? null;
       try {
         if (bootstrap.sessionDefaultsError) throw new Error('SESSION_DEFAULTS_READ_FAILED');
-        const defaults = bootstrap.sessionDefaults;
-        if (defaults) {
+        const saved = bootstrap.sessionDefaults;
+        if (saved) {
+          const defaults = resolveNewSessionDefaults(
+            saved,
+            saved?.provider ?? 'codex',
+            sessionModels[saved?.provider ?? 'codex'],
+          );
           sandbox = defaults.sandbox;
           approvalPolicy = defaults.approvalPolicy;
           selectedSessionSkillProfile = defaults.skillProfile;
           sessionProvider = defaults.provider;
-          sessionReasoningEffort = defaults.reasoningEffort ?? 'medium';
-          sessionExecutorModel = defaults.executorModel ?? 'gpt-5.6-terra';
-          sessionExecutorReasoningEffort = defaults.executorReasoningEffort ?? 'high';
-          selectedSessionModels = { ...selectedSessionModels, [defaults.provider]: defaults.model };
+          sessionReasoningEffort = defaults.reasoningEffort;
+          sessionExecutorModel = defaults.executorModel;
+          sessionExecutorReasoningEffort = defaults.executorReasoningEffort;
+          selectedSessionModels = {
+            codex: resolveNewSessionDefaults(saved, 'codex', sessionModels.codex).model,
+            kimi: resolveNewSessionDefaults(saved, 'kimi', sessionModels.kimi).model,
+          };
           if (findTreeNode(bootstrap.workspaces, defaults.workspaceId))
             sessionWorkspaceId = defaults.workspaceId;
           if (!sessionModels[defaults.provider].includes(defaults.model)) {
@@ -753,6 +769,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               [defaults.provider]: [defaults.model, ...sessionModels[defaults.provider]],
             };
           }
+        } else if (selectedSessionModels.codex === defaultSessionModel) {
+          // Initial fallback may follow the real catalog; in-progress provider/model choices stay owned by the form.
+          selectedSessionModels = {
+            ...selectedSessionModels,
+            codex: resolveNewSessionDefaults(null, 'codex', sessionModels.codex).model,
+          };
         }
       } catch (error) {
         reportRelayError(error, 'SESSION_DEFAULTS_READ_FAILED');

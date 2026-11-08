@@ -43,6 +43,59 @@ function plan(title: string): string {
 }
 
 describe('FilesystemWorkspacePlanCatalog', () => {
+  it('reads execution admission through the canonical reader and preserves parser reasons', async () => {
+    const root = await workspace();
+    await mkdir(join(root, '.gestalt'));
+    const filename = join(root, '.gestalt', 'plan.org');
+    await writeFile(filename, plan('Admission'));
+    const catalog = new FilesystemWorkspacePlanCatalog();
+    const result = await catalog.readExecution(root, '.gestalt/plan.org');
+    expect(result).toMatchObject({
+      kind: 'available',
+      canonicalPath: await filesystem.realpath(filename),
+      revision: expect.stringMatching(/^[a-f0-9]{64}$/),
+      plan: { title: 'Admission' },
+    });
+    expect(await catalog.readExecution(root, '.gestalt/plan.org')).toEqual(result);
+    await writeFile(filename, plan('Admission').replace(':ID: first-task', ':ID:'));
+    expect(await catalog.readExecution(root, '.gestalt/plan.org')).toEqual({
+      kind: 'invalid',
+      reason: 'MISSING_REQUIRED_FIELD',
+    });
+    await writeFile(filename, '#+TITLE: Notes\n* Notes');
+    expect(await catalog.readExecution(root, '.gestalt/plan.org')).toEqual({
+      kind: 'invalid',
+      reason: 'MALFORMED_ORG',
+    });
+  });
+
+  it('keeps missing, unreadable, oversized, traversal and symlink execution reads unavailable', async () => {
+    const root = await workspace();
+    const outside = await workspace();
+    await mkdir(join(root, '.gestalt'));
+    await writeFile(join(outside, 'plan.org'), plan('Outside'));
+    await symlink(outside, join(root, 'linked'));
+    await symlink(join(outside, 'plan.org'), join(root, '.gestalt', 'linked.org'));
+    await writeFile(join(root, '.gestalt', 'oversized.org'), 'x'.repeat(1_048_577));
+    const catalog = new FilesystemWorkspacePlanCatalog();
+    for (const name of ['../plan.org', '/plan.org', 'a/../plan.org', 'missing.org']) {
+      expect(await catalog.readExecution(root, name)).toEqual({ kind: 'missing' });
+    }
+    for (const name of ['linked/plan.org', '.gestalt/linked.org', '.gestalt/oversized.org']) {
+      expect(await catalog.readExecution(root, name)).toEqual({ kind: 'unavailable' });
+    }
+    await writeFile(join(root, '.gestalt', 'denied.org'), plan('Denied'));
+    const denied = new FilesystemWorkspacePlanCatalog({
+      ...filesystem,
+      readFile: async () => {
+        throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      },
+    });
+    expect(await denied.readExecution(root, '.gestalt/denied.org')).toEqual({
+      kind: 'unavailable',
+    });
+  });
+
   it('shares concurrent discovery and reuses unchanged entries while detecting edits, additions and deletions', async () => {
     const root = await workspace();
     await mkdir(join(root, '.gestalt'));

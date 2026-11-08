@@ -7686,6 +7686,7 @@ describe('production composition', () => {
           '/api/workspaces/workspace-1/plans',
           'protected',
         ],
+        ['POST', '/api/plans/prepare', '/api/plans/prepare', 'protected'],
         [
           'HEAD',
           '/api/workspaces/:workspaceId/plans',

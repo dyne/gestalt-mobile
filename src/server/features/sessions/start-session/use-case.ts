@@ -13,12 +13,10 @@ import type { ProfileCatalog, WorkspaceCatalog } from '../../catalog/application
 import type { ModelCatalog } from '../../catalog/application/ports.js';
 import { DEFAULT_SESSION_MODEL, type StartSessionSettings } from '../application/start-settings.js';
 import type { SkillCatalog, SkillProfileStore } from '../../skills/application/ports.js';
-import {
-  reconcileSkillSelectionSnapshot,
-  type SkillProfile,
-} from '../../skills/model/skill-profile.js';
-import { SkillProfileError } from '../../skills/model/errors.js';
+import type { SkillProfile } from '../../skills/model/skill-profile.js';
 import type { LlmProvider } from '../../../../shared/contracts/llm-provider.js';
+import { defaultProviderModel } from '../../../../shared/contracts/session-defaults.js';
+import { resolveSessionSkillSelection } from '../application/resolve-session-skills.js';
 
 export async function startSession(
   input: { workspaceId: string; profile: string; skillProfile?: string } & StartSessionSettings,
@@ -58,46 +56,19 @@ export async function startSession(
     // An omitted model resolves to the provider's own default: the relay-wide
     // default when that provider serves it, otherwise the provider's first
     // available model, so a kimi request never inherits the codex default.
-    model ??= models.includes(DEFAULT_SESSION_MODEL)
-      ? DEFAULT_SESSION_MODEL
-      : (models[0] ?? DEFAULT_SESSION_MODEL);
+    model ??= defaultProviderModel(input.provider, models);
     if (!models.includes(model))
       throw new Error(
         input.provider === 'codex' ? 'CODEX_MODEL_UNAVAILABLE' : 'KIMI_MODEL_UNAVAILABLE',
       );
+    if (input.provider === 'codex' && input.executorModel && !models.includes(input.executorModel))
+      throw new Error('CODEX_EXECUTOR_MODEL_UNAVAILABLE');
   } else {
     model ??= DEFAULT_SESSION_MODEL;
   }
-  let effectiveSkillSelection = deps.inheritedSkillSelection;
-  if (!effectiveSkillSelection) {
-    const selectedProfile = input.skillProfile
-      ? await deps.skillProfiles.readGlobalProfile(input.skillProfile)
-      : deps.defaultSkillProfile;
-    if (input.skillProfile && !selectedProfile)
-      throw new SkillProfileError(
-        'UNKNOWN_SKILL_PROFILE',
-        'The selected skill profile does not exist.',
-      );
-    const [projectProfile, catalog] = await Promise.all([
-      deps.skillProfiles.readWorkspaceDefault(workspace.realPath),
-      deps.skillCatalog(input.provider, input.profile).list(workspace.realPath),
-    ]);
-    const sourceProfile = selectedProfile ?? projectProfile;
-    const reconciledSkills = reconcileSkillSelectionSnapshot(catalog.skills, sourceProfile?.skills);
-    effectiveSkillSelection = {
-      ...(sourceProfile?.capabilities ? { capabilities: sourceProfile.capabilities } : {}),
-      ...(selectedProfile ? { selectedProfileName: selectedProfile.name } : {}),
-      skills: [
-        ...reconciledSkills.skills.map((skill) => ({
-          name: skill.name,
-          path: skill.path,
-          enabled: skill.enabled,
-        })),
-        ...reconciledSkills.missing,
-      ],
-      ...(reconciledSkills.warnings.length > 0 ? { warnings: reconciledSkills.warnings } : {}),
-    };
-  }
+  const effectiveSkillSelection =
+    deps.inheritedSkillSelection ??
+    (await resolveSessionSkillSelection({ ...input, workspacePath: workspace.realPath }, deps));
   const branch = await deps.gitBranch?.(workspace.realPath);
   const session = RelaySession.create({
     id: deps.createId(),

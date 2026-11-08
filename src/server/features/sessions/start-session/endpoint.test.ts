@@ -22,6 +22,43 @@ const skills = {
 };
 
 describe('POST /api/sessions', () => {
+  it('reports an unavailable executor model as a recoverable settings problem before persistence', async () => {
+    const app = fastify();
+    const save = vi.fn();
+    const activate = vi.fn();
+    registerStartSession(app, {
+      createId: () => 's',
+      now: () => 't',
+      save,
+      activate,
+      workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
+      profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      models: { list: async () => ['available'] },
+      ...skills,
+    });
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/sessions',
+        payload: {
+          workspaceId: 'w',
+          profile: 'default',
+          provider: 'codex',
+          model: 'available',
+          executorModel: 'removed',
+        },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({
+        code: 'CODEX_EXECUTOR_MODEL_UNAVAILABLE',
+        retryable: true,
+      });
+      expect(save).not.toHaveBeenCalled();
+      expect(activate).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
   it.each(['SESSION_SCRATCH_CONTAINMENT_BUSY', 'SESSION_SCRATCH_CONTAINMENT_INVALID'])(
     'reports %s as bounded retryable workspace failure before saving or activating',
     async (code) => {
