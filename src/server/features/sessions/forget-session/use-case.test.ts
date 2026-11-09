@@ -140,6 +140,39 @@ async function fixture() {
 }
 
 describe('durable Forget orchestration', () => {
+  it.skipIf(process.platform === 'win32')(
+    'forgets scratch containing non-UTF-8 filenames without touching external targets',
+    async () => {
+      const f = await fixture();
+      const outside = join(f.root, 'outside');
+      await writeFile(outside, 'keep');
+      const rawPath = (parent: string | Buffer, name: string) =>
+        Buffer.concat([Buffer.from(parent), Buffer.from(`/${name}-`), Buffer.from([0xff, 0x0a])]);
+      const directory = rawPath(f.context.directory, 'directory');
+      await mkdir(directory);
+      await writeFile(rawPath(directory, 'file'), 'disposable');
+      await writeFile(rawPath(f.context.directory, 'file'), 'disposable');
+      await symlink(outside, rawPath(directory, 'link'));
+      const forget = f.make();
+      const app = fastify();
+      registerForgetSession(app, {
+        find: (id) => f.sessions.find(id),
+        forget: (id) => forget.execute(id),
+      });
+      try {
+        const reply = await app.inject({ method: 'DELETE', url: `/api/sessions/${f.session.id}` });
+        expect(reply.statusCode, reply.body).toBe(204);
+        expect(f.operations.find(f.session.id)?.phase).toBe('completed');
+        expect(f.sessions.find(f.session.id)).toBeNull();
+        await expect(lstat(f.context.directory)).rejects.toMatchObject({ code: 'ENOENT' });
+        expect(await readFile(outside, 'utf8')).toBe('keep');
+      } finally {
+        await app.close();
+        await forget.drain();
+      }
+    },
+  );
+
   it('retries Forget successfully when a retained Self DEBUG workspace no longer exists', async () => {
     const f = await fixture();
     const forget = f.make(
