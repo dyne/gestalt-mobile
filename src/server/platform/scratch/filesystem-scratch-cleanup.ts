@@ -5,7 +5,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, opendir, readdir, realpath, rename, rm, rmdir } from 'node:fs/promises';
+import { lstat, mkdir, readdir, realpath, rename, rm, rmdir } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   emptyScratchCounts,
@@ -27,6 +27,11 @@ import { claimScratchContainment, containmentFenceName } from './containment-fen
 
 function reject(reason: ScratchCleanupReason): never {
   throw new Error(`SCRATCH_CLEANUP_${reason}`);
+}
+
+/** POSIX payload names need not be UTF-8. Keep their bytes for filesystem calls. */
+function payloadPath(directory: string | Buffer, name: Buffer): Buffer {
+  return Buffer.concat([Buffer.from(directory), Buffer.from(sep), name]);
 }
 
 /** Only the managed namespace is traversed. There are no prefix/age/PID legacy recognizers. */
@@ -161,12 +166,14 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
         );
         // Keep authority metadata until disposable payload has been removed. A failed
         // payload deletion is retryable; an interrupted metadata retirement is unknown.
-        for (const child of await readdir(directory)) {
+        for (const child of await readdir(directory, { encoding: 'buffer' })) {
           if (
-            [scratchMarkerName, 'leases', '.controller-lock', containmentFenceName].includes(child)
+            [scratchMarkerName, 'leases', '.controller-lock', containmentFenceName].includes(
+              child.toString(),
+            )
           )
             continue;
-          await rm(join(directory, child), { recursive: true });
+          await rm(payloadPath(directory, child), { recursive: true });
         }
         if ((await readdir(directory)).includes('leases'))
           await rm(join(directory, 'leases'), { recursive: true });
@@ -276,7 +283,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
   }
 
   private async validatePayload(
-    directory: string,
+    directory: string | Buffer,
     root = directory,
     depth = 0,
     budget = { entries: 0 },
@@ -286,21 +293,21 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
     // contents recursively as another owner's payload.
     if (
       directory !== root &&
-      basename(directory) === 'sessions' &&
-      basename(dirname(directory)) === 'tmp'
+      basename(directory.toString()) === 'sessions' &&
+      basename(dirname(directory.toString())) === 'tmp'
     )
       reject('unrecognized');
-    for await (const entry of await opendir(directory)) {
+    for (const entry of await readdir(directory, { encoding: 'buffer', withFileTypes: true })) {
       const child = entry.name;
       if (++budget.entries > 100_000) reject('unrecognized');
       if (
         directory !== root &&
         [scratchMarkerName, '.controller-lock', '.association-lock', containmentFenceName].includes(
-          child,
+          child.toString(),
         )
       )
         reject('unrecognized');
-      const path = join(directory, child);
+      const path = payloadPath(directory, child);
       const info = await lstat(path);
       if (
         (process.getuid && info.uid !== process.getuid()) ||
