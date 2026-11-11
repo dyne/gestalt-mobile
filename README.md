@@ -497,13 +497,21 @@ partial failures. An unavailable workspace or discovery failure means cleanup is
 incomplete; the notification does not claim those locations were checked.
 
 Running, open, stopped and saved/reopenable sessions keep their temporary files.
-**Stop** retains them. **Forget** waits for owned work to stop, removes eligible
-temporary files and retires its saved entry. Active or uncertain tool leases and
-nested session folders keep their files protected without blocking retirement.
-The completed operation records `scratchRetained: true` when files remain;
-**Clean TMP** can remove them later once ownership checks permit it. Unconfirmed
-runtime shutdown, unsafe paths and filesystem failures retain the entry and offer
-a retry. Reloading recovers the backend operation's state.
+Only one session may run in each canonical selected workspace folder. Saved,
+stopped sessions may coexist; another running session blocks Start and Open and
+the interface offers **Open running session**. Different selected folders and Git
+worktrees remain independent. Agent children belong to their parent session.
+
+**Stop** retains temporary data. **Forget** waits for owned work to stop and
+retires its saved entry. When the last known session for that workspace is
+forgotten, it deletes the **entire `<workspace>/tmp` directory**, including legacy
+output and old lease metadata. Reserve that directory for disposable data.
+While other saved sessions remain, workspace scratch is retained until final
+Forget. If another known session's
+workspace is inside `tmp`, forget that contained session first. New sessions are
+blocked throughout cleanup. Unconfirmed shutdown, unsafe paths and deletion
+failures retain a retryable entry; final Forget never reports success with files
+left behind. Reloading recovers the backend operation's state.
 
 Mobile allocates temporary storage in each selected workspace. The Launcher
 validates and forwards that ownership context to managed tools, and Agents uses

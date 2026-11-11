@@ -74,6 +74,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     selectedSkillProfile: string;
     skillProfileError: string;
     startingSession: boolean;
+    workspaceConflictSessionId?: string;
     openingSessionId: string | null;
     onworkspacechange: (value: string) => void;
     onexpandedchange: (value: Set<string>) => void;
@@ -138,6 +139,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     selectedSkillProfile,
     skillProfileError,
     startingSession,
+    workspaceConflictSessionId,
     openingSessionId,
     onworkspacechange,
     onexpandedchange,
@@ -328,6 +330,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                   >{forgetState.phase === 'failed' ? 'Retry Forget' : 'Forget'}</AppControl
                 >
               {/if}
+              {#if session.forgetOperation?.blockingSessionId}
+                <AppControl
+                  compact
+                  full
+                  onclick={() => onopen(session.forgetOperation!.blockingSessionId!)}
+                  >Open blocking session</AppControl
+                >
+              {/if}
             </div>
             <div class="session-details">
               {@render forgettingStatus(forgetState)}
@@ -424,6 +434,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <AppControl compact full disabled={forgetting} onclick={() => onforget(session.id)}
               >{forgetState?.phase === 'failed' ? 'Retry Forget' : 'Forget'}</AppControl
             >
+            {#if session.forgetOperation?.blockingSessionId}
+              <AppControl
+                compact
+                full
+                onclick={() => onopen(session.forgetOperation!.blockingSessionId!)}
+                >Open blocking session</AppControl
+              >
+            {/if}
           </div>
           <div class="session-details">
             {@render forgettingStatus(forgetState)}
@@ -635,6 +653,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         </div>
       </details>
       <div class="create-session-actions">
+        {#if workspaceConflictSessionId}
+          <AppControl type="button" onclick={() => onopen(workspaceConflictSessionId!)}>
+            Open running session
+          </AppControl>
+        {/if}
         <AppControl
           class="new-session-button"
           type="submit"

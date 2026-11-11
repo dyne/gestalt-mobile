@@ -113,8 +113,10 @@ The launcher implements CLI allocation before cleanup may recognize CLI owners.
 Mobile's durable roster is its authority, covering running, open and saved/
 reopenable sessions even without a runtime, browser connection or active turn.
 Stop/release keeps scratch. Forget first stops and releases owned work before
-targeted cleanup and durable roster retirement. Protected or indeterminate scratch
-may be retained after retirement; this grants no additional deletion authority.
+targeted cleanup and durable roster retirement. Intermediate Forget may retain
+scratch while other saved sessions remain for the same canonical folder. Final
+Forget instead owns deletion of the entire explicitly disposable workspace `tmp`
+directory, after confirmed runtime shutdown and nested known-session checks.
 Resuming forgotten history requires a new allocation. Allocation/association APIs
 grant no deletion authority. Clean TMP must skip unknown versions, links, foreign
 owners, indeterminate leases and unregistered/ambiguous contents. Never sweep
@@ -183,9 +185,9 @@ Under these fences cleanup rereads the full authoritative roster, protecting
 both contained selected-workspace paths and their scratch paths, including the
 logical path of an owner already in its removal namespace. Targeted Forget uses
 the same roster and excludes only its exact authorized target. Another protected
-workspace keeps the outer owner's files intact. After runtime release, Forget may
-retire the outer roster entry with `scratchRetained: true`; the inner roster and
-its workspace remain protected.
+workspace keeps the outer owner's files intact. Final Forget reports the blocking
+session and remains retryable until a known session inside `tmp` has been
+forgotten. Unregistered nested test fixtures are disposable during final Forget.
 
 Nested ownership markers, leases/fences and indeterminate nested `tmp/sessions`
 namespaces are retained conservatively, including empty nested containers. An
@@ -283,8 +285,9 @@ Same-process requests join one promise; cross-process requests/retries use the
 same operation ID. Startup retries unfinished operations without assuming the
 prior runtime died. It re-enters resource release before attempting deletion.
 Unknown crashed controller fences or process leases remain protected, including
-on restart. They retain files without preventing roster retirement after confirmed
-runtime release, and never authorize stealing a lock or expiring a lease.
+on restart during per-owner Clean TMP and intermediate Forget. During final
+workspace Forget, old markers and leases are disposable metadata; they do not
+authorize signaling a PID or change the requirement to confirm runtime shutdown.
 
 Mobile-owned Codex resources and host-test guardians publish individual process
 leases before launch. Normal exit releases only the exact claim after confirmed
@@ -299,11 +302,12 @@ history, auth and profiles are never removed.
 
 Cleanup targets only the session's validated managed owner/removal directories,
 under its durable operation's authority. A successful request returns 204 after
-cleanup and atomic roster/operation finalization. Protected, busy, uncertain or
-nested owners retain their files and record `scratchRetained: true` durably.
-Known workspace locators survive retirement, so later Clean TMP still discovers
-retained files and rechecks their leases, metadata, nesting and current roster.
-Unsafe paths and I/O failures still fail cleanup. Failure returns 503 with
+cleanup and atomic roster/operation finalization. Intermediate operations may
+record `scratchRetained: true`. Final Forget removes all contents of the selected
+workspace's `tmp`, preserving source, Git and persistent `.gestalt` data outside
+that directory. A known workspace contained inside `tmp` blocks final deletion
+with `SESSION_NESTED_WORKSPACE` and `blockingSessionId`. Unsafe directory roots,
+unconfirmed runtime shutdown and I/O failures still fail cleanup. Failure returns 503 with
 `SESSION_FORGET_FAILED` and operation metadata, retaining the roster and original
 thread identity for recovery/retry. Repeated completed requests remain idempotent.
 Promoting forgotten provider history creates a new relay identity and fresh
@@ -320,3 +324,30 @@ allocation therefore uses the greater of that counter and the durable journal
 tail plus one. Failure and retry events keep distinct replay sequences, including
 for sessions whose counter was already frozen by an earlier release. The fence
 continues to reject late state saves and completed-session resurrection.
+
+## Workspace admission and final cleanup
+
+Production repository writes reserve at most one active session per canonical
+selected folder, across providers and SQLite connections. Start publishes its
+reservation before launching a runtime. Open, automatic writer acquisition and
+recovery reserve before native startup too. A stopped or released saved session
+does not occupy the running slot. Conflicts return `SESSION_WORKSPACE_BUSY` and
+the existing session ID; the UI offers an explicit Open action. Child agents do
+not acquire another root-session slot. Separate canonical folders, including
+Git worktrees, remain independent.
+
+Every Forget claims a durable workspace operation fence. A second Forget in that
+folder must retry, so concurrent requests cannot both classify themselves as
+intermediate. New sessions and runtime activations for the folder, and new known
+workspaces inside its `tmp`, are blocked until cleanup and finalization finish.
+Existing nested sessions may still be forgotten to resolve a cleanup blocker.
+
+Final cleanup checks the current known-session roster, then atomically renames
+`tmp` into `.gestalt/forgotten-tmp/<operationId>` under a short SQLite write
+transaction. Recursive deletion runs outside that transaction. The durable
+retired path makes interrupted deletion retryable and prevents an older duplicate
+request from deleting a later session's new `tmp`. The workspace fence is removed
+in the same transaction that completes Forget and retires the saved entry.
+An external publisher recreating `tmp` during cleanup prevents successful final
+completion. These fences govern Mobile sessions sharing this relay database;
+they do not assert ownership over independently launched native CLI sessions.

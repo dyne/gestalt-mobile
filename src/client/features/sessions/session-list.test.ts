@@ -10,7 +10,25 @@ import {
   displayWorkspacePath,
   managedSessionDetails,
   retainForgottenSession,
+  workspaceSessionConflict,
 } from './session-list.js';
+
+it('blocks Open of a different session in the same canonical folder while allowing saved history and independent folders', () => {
+  const sessions = [
+    { id: 'running', state: 'ready', workspacePath: '/w' },
+    { id: 'saved', state: 'stopped', workspacePath: '/w' },
+    { id: 'other', state: 'ready', workspacePath: '/other' },
+  ];
+  expect(workspaceSessionConflict(sessions, 'saved')?.id).toBe('running');
+  expect(workspaceSessionConflict(sessions, 'running')).toBeUndefined();
+  expect(workspaceSessionConflict(sessions, 'other')).toBeUndefined();
+  expect(
+    workspaceSessionConflict(
+      sessions.map((session) => ({ ...session, state: 'stopped' })),
+      'saved',
+    ),
+  ).toBeUndefined();
+});
 
 describe('managedSessionDetails', () => {
   it('exposes the resumable thread ID, workspace path, and updated time', () => {

@@ -5,6 +5,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import { WorkspaceSessionConflict } from '../../features/sessions/application/workspace-conflict.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { SessionScratch } from '../../features/sessions/application/session-scratch.js';
 
@@ -131,6 +132,7 @@ export class KimiSessionRuntime {
   }
 
   public async start(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
+    this.input.scratch?.reserveRuntime?.(session);
     const handle = await this.ensureServer(session);
     const created = (await handle.client.post('/api/v1/sessions', {
       metadata: { cwd: session.workspacePath },
@@ -395,6 +397,7 @@ export class KimiSessionRuntime {
       const restored = await this.restoreWithOutcome(session, now);
       return { session: restored.session, replacementCreated: restored.replacementCreated };
     } catch (error) {
+      if (error instanceof WorkspaceSessionConflict) throw error;
       throw classifyWriterAcquisitionFailure(error);
     }
   }
@@ -476,6 +479,7 @@ export class KimiSessionRuntime {
 
   /** Attaches to the durable kimi session recorded on the relay snapshot. */
   private async attachExisting(session: RelaySessionSnapshot): Promise<RelaySessionSnapshot> {
+    this.input.scratch?.reserveRuntime?.(session);
     if (!session.threadId) throw new Error('KIMI_THREAD_ID_MISSING');
     const handle = await this.ensureServer(session);
     await handle.client.get(`/api/v1/sessions/${session.threadId}`);

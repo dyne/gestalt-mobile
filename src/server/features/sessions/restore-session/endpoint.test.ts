@@ -16,6 +16,30 @@ import { CodexSessionRuntime } from '../../../platform/codex/session-runtime.js'
 import type { RelaySessionSnapshot } from '../model/relay-session.js';
 
 describe('POST /api/sessions/:id/restore', () => {
+  it('keeps the workspace reserved when failed startup cannot confirm process shutdown', async () => {
+    const app = fastify();
+    let current = persistedSession('stopped');
+    registerRestoreSession(app, {
+      find: () => current,
+      save: (session) => {
+        current = session;
+      },
+      restore: async () => {
+        throw new Error('startup failed');
+      },
+      close: async () => {
+        throw new Error('shutdown unconfirmed');
+      },
+    });
+    try {
+      const response = await app.inject({ method: 'POST', url: '/api/sessions/session-1/restore' });
+      expect(response.statusCode).toBe(502);
+      expect(current.state).toBe('recovering');
+      expect(current.desiredState).toBe('active');
+    } finally {
+      await app.close();
+    }
+  });
   it('restores a resumable session and persists its ready state', async () => {
     const app = fastify();
     let saved = false;

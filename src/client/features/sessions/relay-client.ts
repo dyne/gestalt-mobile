@@ -64,6 +64,7 @@ export type RelayWorkspaceDirectory = Readonly<{
 export type RelaySession = {
   id: string;
   state: string;
+  desiredState?: 'active' | 'stopped';
   forgetOperation?: SessionForgetOperation;
   workspaceId?: string;
   workspacePath?: string;
@@ -234,6 +235,7 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       detail?: unknown;
       title?: unknown;
       replaceAllowed?: unknown;
+      sessionId?: unknown;
     } | null;
     const safeCode =
       typeof body?.code === 'string' && /^[A-Z0-9_]+$/.test(body.code) ? body.code : undefined;
@@ -249,6 +251,7 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       ...(safeCode ? { code: safeCode } : {}),
       ...(typeof body?.replaceAllowed === 'boolean' ? { replaceAllowed: body.replaceAllowed } : {}),
       status: response.status,
+      ...(typeof body?.sessionId === 'string' ? { sessionId: body.sessionId } : {}),
     });
   }
   async function request<T>(

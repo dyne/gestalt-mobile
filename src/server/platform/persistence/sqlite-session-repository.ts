@@ -5,6 +5,10 @@
  */
 
 import type { DatabaseSync } from 'node:sqlite';
+import {
+  canonicalSessionWorkspace,
+  type SqliteWorkspaceLifecycle,
+} from './sqlite-workspace-lifecycle.js';
 
 import {
   createEffectiveSkillSelection,
@@ -38,38 +42,61 @@ type Row = {
 };
 
 export class SqliteSessionRepository {
-  constructor(private readonly db: DatabaseSync) {}
-  save(session: RelaySessionSnapshot): void {
-    this.db
-      .prepare(
-        'INSERT INTO relay_sessions (id,workspace_id,workspace_path,provider,profile,model,branch,sandbox,approval_policy,thread_id,state,desired_state,active_turn_id,protocol_version,attention_tool_capability,failure_count,effective_skill_selection_json,last_org_plan_json,model_settings_json,self_debug_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,workspace_path=excluded.workspace_path,provider=excluded.provider,profile=excluded.profile,model=excluded.model,branch=excluded.branch,sandbox=excluded.sandbox,approval_policy=excluded.approval_policy,thread_id=excluded.thread_id,state=excluded.state,desired_state=excluded.desired_state,active_turn_id=excluded.active_turn_id,protocol_version=excluded.protocol_version,attention_tool_capability=excluded.attention_tool_capability,failure_count=excluded.failure_count,effective_skill_selection_json=excluded.effective_skill_selection_json,last_org_plan_json=excluded.last_org_plan_json,model_settings_json=excluded.model_settings_json,self_debug_json=excluded.self_debug_json,updated_at=excluded.updated_at',
-      )
-      .run(
-        session.id,
-        session.workspaceId,
-        session.workspacePath,
-        session.provider,
-        session.profile,
-        session.model ?? null,
-        session.branch ?? null,
-        session.executionPolicy?.sandbox ?? null,
-        session.executionPolicy?.approvalPolicy ?? null,
-        session.threadId,
-        session.state,
-        session.desiredState,
-        session.activeTurnId,
-        session.protocolVersion,
-        session.attentionToolCapability ?? null,
-        session.failureCount,
-        session.effectiveSkillSelection === undefined
-          ? null
-          : JSON.stringify(session.effectiveSkillSelection),
-        session.lastOrgPlan === undefined ? null : JSON.stringify(session.lastOrgPlan),
-        session.modelSettings === undefined ? null : JSON.stringify(session.modelSettings),
-        session.selfDebug ? JSON.stringify(session.selfDebug) : null,
-        session.createdAt,
-        session.updatedAt,
-      );
+  constructor(
+    private readonly db: DatabaseSync,
+    private readonly workspaceLifecycle?: SqliteWorkspaceLifecycle,
+  ) {}
+  save(session: RelaySessionSnapshot, requireAdmission = false): void {
+    const nested = this.db.isTransaction;
+    this.db.exec(nested ? 'SAVEPOINT save_session' : 'BEGIN IMMEDIATE');
+    try {
+      // A Forget tombstone takes precedence over admission and late status writes.
+      if (
+        this.db
+          .prepare('SELECT 1 FROM session_forget_operations WHERE session_id=?')
+          .get(session.id)
+      ) {
+        this.db.exec(nested ? 'RELEASE save_session' : 'COMMIT');
+        return;
+      }
+      this.workspaceLifecycle?.assertSave(session, requireAdmission);
+      this.db
+        .prepare(
+          'INSERT INTO relay_sessions (id,workspace_id,workspace_path,provider,profile,model,branch,sandbox,approval_policy,thread_id,state,desired_state,active_turn_id,protocol_version,attention_tool_capability,failure_count,effective_skill_selection_json,last_org_plan_json,model_settings_json,self_debug_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,workspace_path=excluded.workspace_path,provider=excluded.provider,profile=excluded.profile,model=excluded.model,branch=excluded.branch,sandbox=excluded.sandbox,approval_policy=excluded.approval_policy,thread_id=excluded.thread_id,state=excluded.state,desired_state=excluded.desired_state,active_turn_id=excluded.active_turn_id,protocol_version=excluded.protocol_version,attention_tool_capability=excluded.attention_tool_capability,failure_count=excluded.failure_count,effective_skill_selection_json=excluded.effective_skill_selection_json,last_org_plan_json=excluded.last_org_plan_json,model_settings_json=excluded.model_settings_json,self_debug_json=excluded.self_debug_json,updated_at=excluded.updated_at',
+        )
+        .run(
+          session.id,
+          session.workspaceId,
+          this.workspaceLifecycle
+            ? canonicalSessionWorkspace(session.workspacePath)
+            : session.workspacePath,
+          session.provider,
+          session.profile,
+          session.model ?? null,
+          session.branch ?? null,
+          session.executionPolicy?.sandbox ?? null,
+          session.executionPolicy?.approvalPolicy ?? null,
+          session.threadId,
+          session.state,
+          session.desiredState,
+          session.activeTurnId,
+          session.protocolVersion,
+          session.attentionToolCapability ?? null,
+          session.failureCount,
+          session.effectiveSkillSelection === undefined
+            ? null
+            : JSON.stringify(session.effectiveSkillSelection),
+          session.lastOrgPlan === undefined ? null : JSON.stringify(session.lastOrgPlan),
+          session.modelSettings === undefined ? null : JSON.stringify(session.modelSettings),
+          session.selfDebug ? JSON.stringify(session.selfDebug) : null,
+          session.createdAt,
+          session.updatedAt,
+        );
+      this.db.exec(nested ? 'RELEASE save_session' : 'COMMIT');
+    } catch (error) {
+      this.db.exec(nested ? 'ROLLBACK TO save_session; RELEASE save_session' : 'ROLLBACK');
+      throw error;
+    }
   }
   find(id: string): RelaySessionSnapshot | null {
     const row = this.db.prepare('SELECT * FROM relay_sessions WHERE id = ?').get(id) as

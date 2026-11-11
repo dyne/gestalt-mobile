@@ -6,6 +6,7 @@
 
 import type { SessionForgetOperation } from '../../../../shared/contracts/session-forget.js';
 import type { RelaySessionSnapshot } from '../model/relay-session.js';
+import { WorkspaceSessionConflict } from '../application/workspace-conflict.js';
 
 export interface ForgetOperationStore {
   find(id: string): SessionForgetOperation | null;
@@ -76,12 +77,15 @@ export class ForgetSession {
       operation = this.deps.operations.finalize({ ...operation, updatedAt: this.deps.now() });
       this.deps.changed(operation);
       return operation;
-    } catch {
+    } catch (error) {
       operation = this.deps.operations.update({
         ...operation,
         phase: 'failed',
         failureCode,
         updatedAt: this.deps.now(),
+        ...(error instanceof WorkspaceSessionConflict
+          ? { blockingSessionId: error.sessionId }
+          : {}),
       });
       this.deps.changed(operation);
       return operation;

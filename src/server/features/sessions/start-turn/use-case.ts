@@ -5,6 +5,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { WorkspaceSessionConflict } from '../application/workspace-conflict.js';
 import { RelaySession, type RelaySessionSnapshot } from '../model/relay-session.js';
 import {
   WriterAcquisitionError,
@@ -250,7 +251,8 @@ async function cleanupAcquiredWriter(
   try {
     await deps.releaseWriter?.(acquired.id);
   } catch {
-    // Process loss is already a valid release outcome.
+    // Keep the workspace reservation when shutdown could not be confirmed.
+    return;
   }
   try {
     deps.save(original);
@@ -270,6 +272,16 @@ async function ensureWriter(
   try {
     return await deps.ensureWriter(session);
   } catch (error) {
+    if (error instanceof WorkspaceSessionConflict)
+      return {
+        statusCode: 409,
+        body: JSON.stringify({
+          code: error.code,
+          detail: error.message,
+          sessionId: error.sessionId,
+          retryable: true,
+        }),
+      };
     if (
       error instanceof WriterAcquisitionError &&
       error.kind === 'writerBusy' &&

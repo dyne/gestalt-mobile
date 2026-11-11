@@ -159,6 +159,7 @@ export function registerSessionRoutes(
       registerRestoreSession(app, {
         find: sessions.find,
         restore: sessions.restore,
+        close: sessions.close,
         save: sessions.save,
         ownsWriter: sessions.ownsWriter,
         idempotency: sessions.idempotency,

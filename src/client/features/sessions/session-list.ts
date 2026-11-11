@@ -6,6 +6,24 @@
 
 import type { RecentSession, RelaySession } from './relay-client.js';
 
+/** Canonical workspace paths are supplied by the server; the runtime also enforces admission. */
+export function workspaceSessionConflict(
+  sessions: readonly RelaySession[],
+  targetId: string,
+): RelaySession | undefined {
+  const target = sessions.find((session) => session.id === targetId);
+  if (!target?.workspacePath) return undefined;
+  return sessions.find(
+    (session) =>
+      session.id !== targetId &&
+      session.workspacePath === target.workspacePath &&
+      session.desiredState !== 'stopped' &&
+      ['starting', 'ready', 'turnActive', 'recovering', 'attentionRequired'].includes(
+        session.state,
+      ),
+  );
+}
+
 export function hasAssignedOrgPlan(session: RelaySession | null | undefined): boolean {
   return Boolean(session?.plan || session?.lastOrgPlan?.attached);
 }

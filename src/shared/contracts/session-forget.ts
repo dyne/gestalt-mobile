@@ -12,5 +12,6 @@ export type SessionForgetOperation = Readonly<{
   updatedAt: string;
   /** Forget completed while ownership checks retained disposable files. */
   scratchRetained?: true;
+  blockingSessionId?: string;
   failureCode?: 'SESSION_RELEASE_UNCONFIRMED' | 'SESSION_CLEANUP_FAILED' | 'SESSION_FORGET_FAILED';
 }>;

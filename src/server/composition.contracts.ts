@@ -173,10 +173,13 @@ function liveAppServer(handles: LiveServerHandle[]) {
   };
 }
 
-async function createComposedSession(app: Awaited<ReturnType<typeof composeAuthorizedApp>>) {
+async function createComposedSession(
+  app: Awaited<ReturnType<typeof composeAuthorizedApp>>,
+  workspaceName = 'workspace',
+) {
   const workspace = (await app.inject('/api/bootstrap'))
     .json()
-    .workspaces[0]?.children.find((item: { name: string }) => item.name === 'workspace');
+    .workspaces[0]?.children.find((item: { name: string }) => item.name === workspaceName);
   expect(workspace).toBeDefined();
   const created = await app.inject({
     method: 'POST',
@@ -2302,6 +2305,8 @@ describe('production composition', () => {
       ownTemporaryPaths(root, dataDir);
       const workspacePath = join(root, 'workspace');
       await mkdir(workspacePath);
+      const otherWorkspace = join(root, 'workspace-other');
+      await mkdir(otherWorkspace);
       const handles: LiveServerHandle[] = [];
       const app = await composeAuthorizedApp({
         root,
@@ -2321,7 +2326,10 @@ describe('production composition', () => {
       });
       onTestFinished(() => app.close());
       // Managed TMPDIR fixtures share an ancestor publication fence during session creation.
-      const sessions = [await createComposedSession(app), await createComposedSession(app)];
+      const sessions = [
+        await createComposedSession(app),
+        await createComposedSession(app, 'workspace-other'),
+      ];
       await vi.waitFor(async () =>
         expect(
           await Promise.all(
@@ -2352,10 +2360,11 @@ describe('production composition', () => {
 `;
       await Promise.all(
         sessions.map(async (sessionId, index) => {
-          const planPath = join(workspacePath, `autopilot-${index}.org`);
+          const selectedWorkspace = index === 0 ? workspacePath : otherWorkspace;
+          const planPath = join(selectedWorkspace, `autopilot-${index}.org`);
           await writeFile(planPath, planText);
           await writeFile(
-            planStatusFilePath(planStatusDirectoryPath(workspacePath, sessionId), planPath),
+            planStatusFilePath(planStatusDirectoryPath(selectedWorkspace, sessionId), planPath),
             JSON.stringify({
               schemaVersion: 1,
               planPath,
@@ -5230,8 +5239,10 @@ describe('production composition', () => {
         },
       });
       onTestFinished(() => fixture.app.close());
-      const peer = await createComposedSession(fixture.app);
-      await installAutopilotPlan(fixture.app, peer, fixture.workspacePath, 'peer-plan');
+      const peerWorkspace = join(fixture.root, 'workspace-peer');
+      await mkdir(peerWorkspace);
+      const peer = await createComposedSession(fixture.app, 'workspace-peer');
+      await installAutopilotPlan(fixture.app, peer, peerWorkspace, 'peer-plan');
       const starts = () =>
         fixture.handles
           .flatMap((handle) => handle.requests)
@@ -6916,7 +6927,8 @@ describe('production composition', () => {
       });
       expect(transitions).toBeDefined();
       const sessionA = await createComposedSession(app);
-      const sessionB = await createComposedSession(app);
+      await mkdir(join(root, 'workspace-peer'));
+      const sessionB = await createComposedSession(app, 'workspace-peer');
       const handleA = await vi.waitFor(() => {
         const handle = handles.find((candidate) => candidate.calls.includes('thread/start'));
         expect(handle?.request).toBeDefined();
@@ -7193,7 +7205,8 @@ describe('production composition', () => {
         launchAppServer: liveAppServer(handles),
       });
       const supportedSession = await createComposedSession(first);
-      const legacySession = await createComposedSession(first);
+      await mkdir(join(root, 'workspace-legacy'));
+      const legacySession = await createComposedSession(first, 'workspace-legacy');
       await vi.waitFor(() =>
         expect(handles.filter((handle) => handle.calls.includes('thread/start'))).toHaveLength(2),
       );
