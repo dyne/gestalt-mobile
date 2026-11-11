@@ -8,6 +8,41 @@ import { DatabaseSync } from 'node:sqlite';
 import { expect, it } from 'vitest';
 import { migrate } from './migrate.js';
 import { SqliteEventJournal } from './sqlite-event-journal.js';
+import { SqliteForgetOperationStore } from './sqlite-forget-operation-store.js';
+
+it('recovers an already-frozen Forget cursor without weakening the roster fence', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    migrate(db);
+    db.prepare(
+      "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,next_sequence,created_at,updated_at) VALUES ('s','w','/w','p','stopped','stopped',1,'t','t')",
+    ).run();
+    new SqliteForgetOperationStore(db).begin('s');
+    db.prepare(
+      "INSERT INTO session_events (session_id,sequence,occurred_at,type,payload_json) VALUES ('s',1,'t','session.forget.updated','{}')",
+    ).run();
+    // An upgrade must also recover the old counter frozen on an existing event.
+    migrate(db);
+    const journal = new SqliteEventJournal(db);
+    expect(journal.append('s', 'session.forget.updated', { phase: 'cleaning' }, 't').sequence).toBe(
+      2,
+    );
+    expect(journal.append('s', 'session.forget.updated', { phase: 'failed' }, 't').sequence).toBe(
+      3,
+    );
+    expect(journal.replay('s', 1)).toMatchObject({
+      kind: 'replay',
+      events: [{ sequence: 2 }, { sequence: 3 }],
+    });
+    db.prepare("UPDATE relay_sessions SET model = 'late-restore' WHERE id = 's'").run();
+    expect(
+      db.prepare("SELECT model, next_sequence FROM relay_sessions WHERE id = 's'").get(),
+    ).toEqual({ model: null, next_sequence: 1 });
+    expect(new SqliteForgetOperationStore(db).find('s')?.scratchRetained).toBeUndefined();
+  } finally {
+    db.close();
+  }
+});
 
 it('reads chat cuts without decoding unrelated payloads and bounds replay before decoding', () => {
   const db = new DatabaseSync(':memory:');

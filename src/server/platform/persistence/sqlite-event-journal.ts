@@ -78,8 +78,14 @@ export class SqliteEventJournal {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const row = this.db
-        .prepare('SELECT next_sequence AS sequence FROM relay_sessions WHERE id = ?')
-        .get(sessionId) as { sequence: number } | undefined;
+        // Forget fences roster writes, including the sequence counter. Allocate
+        // above the durable journal tail as well, including already-stuck rows.
+        .prepare(
+          `SELECT MAX(next_sequence, COALESCE(
+          (SELECT MAX(sequence) + 1 FROM session_events WHERE session_id = ?), 1
+        )) AS sequence FROM relay_sessions WHERE id = ?`,
+        )
+        .get(sessionId, sessionId) as { sequence: number } | undefined;
       if (!row) throw new Error('SESSION_NOT_FOUND');
       const inserted = this.db
         .prepare(
