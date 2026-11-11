@@ -4,9 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-/** Every reason published by the bundled org-plan helper. */
+/** Helper publications and Mobile's display-only attachment signal. */
 export const planSignalReasons = [
   'authoring-start',
+  'display-open',
   'work-start',
   'checkpoint',
   'update',

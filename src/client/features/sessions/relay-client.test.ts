@@ -9,6 +9,25 @@ import { describe, expect, it } from 'vitest';
 import { createRelayClient, type RelayAvailableSkill } from './relay-client.js';
 
 describe('relay client', () => {
+  it('preserves the occupied-workspace Execute conflict and existing session', async () => {
+    const blocked = {
+      kind: 'blocked',
+      code: 'WORKSPACE_BUSY',
+      reason: 'Close the running session before Execute.',
+      existingSessionId: 'author',
+    };
+    const client = createRelayClient(
+      async () => new Response(JSON.stringify(blocked), { status: 409 }),
+    );
+    expect(
+      await client.startOrgPlanSupervision({
+        reference: { kind: 'workspace', workspaceId: 'project', planName: '.gestalt/plan.org' },
+        expectedRevision: 'revision',
+        skillProfile: '',
+        launchId: 'intent',
+      }),
+    ).toEqual(blocked);
+  });
   it('prepares a read-only plan reference with the confirmed revision and profile and preserves conflicts', async () => {
     const requests: Array<{ url: string; init?: RequestInit }> = [];
     const blocked = { kind: 'blocked', code: 'CONTEXT_CHANGED', reason: 'Refresh and confirm.' };

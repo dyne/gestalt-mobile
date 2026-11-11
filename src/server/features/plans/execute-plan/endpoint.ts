@@ -31,7 +31,7 @@ export function registerExecuteOrgPlan(app: FastifyInstance, deps: ExecuteOrgPla
           ? 409
           : 400
         : result.kind === 'blocked' &&
-            ['CONTEXT_CHANGED', 'ACTIVE_SUPERVISION'].includes(result.code)
+            ['CONTEXT_CHANGED', 'ACTIVE_SUPERVISION', 'WORKSPACE_BUSY'].includes(result.code)
           ? 409
           : 200;
     return reply.code(status).send(result);

@@ -79,12 +79,12 @@ export class FilesystemPlanStatusSource implements PlanStatusSource {
     return lease;
   }
 
-  /** Explicit attachments use the same durable publication and watchers as helper updates. */
+  /** Viewing retains a durable display attachment; execution needs an explicit start signal. */
   async attach(
     session: Readonly<{ id: string; workspacePath: string }>,
     requestedPath: string,
     listener: (update: PlanStatusUpdate) => void,
-    reason = 'supervision-start',
+    reason = 'display-open',
   ): Promise<void> {
     const [planPath, workspacePath] = await Promise.all([
       this.planReadFilesystem.realpath(requestedPath),

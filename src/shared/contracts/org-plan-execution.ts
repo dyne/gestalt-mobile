@@ -44,7 +44,7 @@ export const orgPlanLaunchConflictSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('blocked'),
-      code: z.enum(['CONTEXT_CHANGED', 'ACTIVE_SUPERVISION']),
+      code: z.enum(['CONTEXT_CHANGED', 'ACTIVE_SUPERVISION', 'WORKSPACE_BUSY']),
       reason: z.string().min(1),
       existingSessionId: identity.optional(),
     })
@@ -121,7 +121,8 @@ export type OrgPlanPreparation =
         | 'MODEL_UNAVAILABLE'
         | 'SKILL_PROFILE_UNAVAILABLE'
         | 'GESTALT_CAPABILITIES_UNAVAILABLE'
-        | 'ACTIVE_SUPERVISION';
+        | 'ACTIVE_SUPERVISION'
+        | 'WORKSPACE_BUSY';
       reason: string;
       existingSessionId?: string;
     }>;

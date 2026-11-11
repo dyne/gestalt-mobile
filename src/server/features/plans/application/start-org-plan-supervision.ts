@@ -5,6 +5,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { WorkspaceSessionConflict } from '../../sessions/application/workspace-conflict.js';
 import {
   orgPlanLaunchRequestSchema,
   type OrgPlanLaunchRequest,
@@ -209,6 +210,15 @@ async function continueLaunch(
       );
     } catch (error) {
       session = deps.sessions.find(record.sessionId);
+      if (!session && error instanceof WorkspaceSessionConflict) {
+        deps.launches.revokePublication(record, deps.sessions);
+        return {
+          kind: 'blocked',
+          code: 'WORKSPACE_BUSY',
+          reason: error.message,
+          existingSessionId: error.sessionId,
+        };
+      }
       if (session) deps.launches.save({ ...record, phase: 'session' }, 'creating');
       else if (error instanceof OrgPlanSessionNotPublished) {
         deps.launches.revokePublication(record, deps.sessions);
