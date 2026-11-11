@@ -215,7 +215,15 @@ export class CodexPlaywright {
           : binding.reason
             ? 'unavailable'
             : 'idle',
-      ...(pending ? { boundary: 'owned-runtime-resume' } : {}),
+      ...(pending
+        ? {
+            boundary: 'owned-runtime-resume',
+            nextAction: 'next-root-turn',
+            message: desired
+              ? 'Activation cannot complete during this turn. Keep the start request pending, finish independent work, then end the turn. Mobile will apply it before the next authorized root turn when the root and children are idle. If no continuation is already authorized, explain that the user can send a follow-up message. Do not poll or stop the request while browser work remains.'
+              : 'Release will complete before the next authorized root turn when the root and children are idle. End this turn after independent work; polling during this turn cannot detach the browser.',
+          }
+        : {}),
       ...(binding.reason ? { reason: binding.reason } : {}),
       ...(binding.version ? { packageVersion: binding.version } : {}),
       packageStatus: binding.packageStatus,
@@ -466,7 +474,7 @@ export class CodexPlaywright {
           config.developer_instructions = withCapabilityInstructions(
             instructions,
             'playwright',
-            '<gestalt_playwright_unavailable>Browser guidance is inactive until this host verifies connected standard tools. Use gestalt_managed_playwright for session-scoped requests. Installation or a plan declaration never grants consent. Pending activation requires a safe owned-runtime resume.</gestalt_playwright_unavailable>',
+            '<gestalt_playwright_unavailable>Browser guidance is inactive until this host verifies connected standard tools. Use gestalt_managed_playwright for session-scoped requests. Installation or a plan declaration never grants consent. Pending activation cannot complete within the requesting turn: keep the request pending, finish independent work and end the turn. Mobile applies it before the next already-authorized root turn at a safe idle boundary. If none is authorized, explain that the user can send a follow-up message. Do not poll or stop while browser work remains; no manual session restart is required.</gestalt_playwright_unavailable>',
           );
         else delete config.developer_instructions;
         return config;
