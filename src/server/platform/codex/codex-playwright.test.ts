@@ -390,7 +390,7 @@ describe('managed Mobile Playwright session', () => {
           () => true,
           () => [f.authority.session],
         ),
-      ).rejects.toThrow('SESSION_CLEANUP_FAILED');
+      ).resolves.toBe('retained');
     } finally {
       release();
       await preparing;

@@ -21,6 +21,7 @@ export class SqliteForgetOperationStore implements ForgetOperationStore {
           phase: SessionForgetOperation['phase'];
           updated_at: string;
           failure_code: SessionForgetOperation['failureCode'] | null;
+          scratch_retained: number;
         }
       | undefined;
     return row
@@ -30,6 +31,7 @@ export class SqliteForgetOperationStore implements ForgetOperationStore {
           phase: row.phase,
           updatedAt: row.updated_at,
           ...(row.failure_code ? { failureCode: row.failure_code } : {}),
+          ...(row.scratch_retained ? { scratchRetained: true as const } : {}),
         }
       : null;
   }
@@ -56,13 +58,14 @@ export class SqliteForgetOperationStore implements ForgetOperationStore {
   update(operation: SessionForgetOperation): SessionForgetOperation {
     this.db
       .prepare(
-        `UPDATE session_forget_operations SET phase = ?, updated_at = ?, failure_code = ?
+        `UPDATE session_forget_operations SET phase = ?, updated_at = ?, failure_code = ?, scratch_retained = ?
       WHERE session_id = ? AND operation_id = ? AND phase != 'completed'`,
       )
       .run(
         operation.phase,
         operation.updatedAt,
         operation.failureCode ?? null,
+        operation.scratchRetained ? 1 : 0,
         operation.sessionId,
         operation.operationId,
       );

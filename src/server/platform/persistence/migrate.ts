@@ -60,6 +60,13 @@ export function migrate(database: DatabaseSync): void {
   CREATE TRIGGER IF NOT EXISTS forget_fence_update BEFORE UPDATE ON relay_sessions
     WHEN EXISTS (SELECT 1 FROM session_forget_operations WHERE session_id = NEW.id)
     BEGIN SELECT RAISE(IGNORE); END;`);
+  const forgetColumns = database
+    .prepare('PRAGMA table_info(session_forget_operations)')
+    .all() as Array<{ name: string }>;
+  if (!forgetColumns.some((column) => column.name === 'scratch_retained'))
+    database.exec(
+      'ALTER TABLE session_forget_operations ADD COLUMN scratch_retained INTEGER NOT NULL DEFAULT 0',
+    );
   database.exec(`CREATE TABLE IF NOT EXISTS scratch_known_workspaces (
     workspace_path TEXT PRIMARY KEY
   ); INSERT OR IGNORE INTO scratch_known_workspaces (workspace_path)

@@ -113,7 +113,8 @@ The launcher implements CLI allocation before cleanup may recognize CLI owners.
 Mobile's durable roster is its authority, covering running, open and saved/
 reopenable sessions even without a runtime, browser connection or active turn.
 Stop/release keeps scratch. Forget first stops and releases owned work before
-targeted deletion and durable roster retirement.
+targeted cleanup and durable roster retirement. Protected or indeterminate scratch
+may be retained after retirement; this grants no additional deletion authority.
 Resuming forgotten history requires a new allocation. Allocation/association APIs
 grant no deletion authority. Clean TMP must skip unknown versions, links, foreign
 owners, indeterminate leases and unregistered/ambiguous contents. Never sweep
@@ -182,8 +183,9 @@ Under these fences cleanup rereads the full authoritative roster, protecting
 both contained selected-workspace paths and their scratch paths, including the
 logical path of an owner already in its removal namespace. Targeted Forget uses
 the same roster and excludes only its exact authorized target. Another protected
-workspace keeps the outer owner and its retryable frame intact; Forget returns
-503 rather than a false 204.
+workspace keeps the outer owner's files intact. After runtime release, Forget may
+retire the outer roster entry with `scratchRetained: true`; the inner roster and
+its workspace remain protected.
 
 Nested ownership markers, leases/fences and indeterminate nested `tmp/sessions`
 namespaces are retained conservatively, including empty nested containers. An
@@ -268,7 +270,8 @@ retained candidates as documented in [legacy provenance](legacy-scratch-provenan
 
 `DELETE /api/sessions/:id` uses a dedicated operation, independent of Stop and
 release. Its fixed metadata contains `operationId`, `sessionId`, `phase` and
-`updatedAt`, plus a bounded `failureCode` on failure. Phases are `stopping`,
+`updatedAt`, plus a bounded `failureCode` on failure and optional
+`scratchRetained: true` when cleanup preserves files. Phases are `stopping`,
 `cleaning`, `finalizing`, `failed`, and `completed`. The roster's list/get read
 models include `forgetOperation`; `session.forget.updated` events publish the
 same typed metadata while the frame exists. No percentage is inferred.
@@ -280,7 +283,8 @@ Same-process requests join one promise; cross-process requests/retries use the
 same operation ID. Startup retries unfinished operations without assuming the
 prior runtime died. It re-enters resource release before attempting deletion.
 Unknown crashed controller fences or process leases remain protected, including
-on restart. This is a visible retryable failure, never authority to steal a lock.
+on restart. They retain files without preventing roster retirement after confirmed
+runtime release, and never authorize stealing a lock or expiring a lease.
 
 Mobile-owned Codex resources and host-test guardians publish individual process
 leases before launch. Normal exit releases only the exact claim after confirmed
@@ -294,8 +298,12 @@ its subscription; other sessions keep the shared service. Persistent provider
 history, auth and profiles are never removed.
 
 Cleanup targets only the session's validated managed owner/removal directories,
-under its durable operation's authority. A successful request returns 204 only
-after deletion and atomic roster/operation finalization. Failure returns 503 with
+under its durable operation's authority. A successful request returns 204 after
+cleanup and atomic roster/operation finalization. Protected, busy, uncertain or
+nested owners retain their files and record `scratchRetained: true` durably.
+Known workspace locators survive retirement, so later Clean TMP still discovers
+retained files and rechecks their leases, metadata, nesting and current roster.
+Unsafe paths and I/O failures still fail cleanup. Failure returns 503 with
 `SESSION_FORGET_FAILED` and operation metadata, retaining the roster and original
 thread identity for recovery/retry. Repeated completed requests remain idempotent.
 Promoting forgotten provider history creates a new relay identity and fresh
@@ -306,3 +314,9 @@ controls disabled. A frame stays visible until confirmed successful retirement;
 failure keeps it retryable and uses shared error feedback. Reconnect and reload
 rehydrate the operation from backend list/get/bootstrap models, independent of
 the original request or socket lifetime.
+
+The roster write fence also blocks updates to its cached event sequence. Journal
+allocation therefore uses the greater of that counter and the durable journal
+tail plus one. Failure and retry events keep distinct replay sequences, including
+for sessions whose counter was already frozen by an earlier release. The fence
+continues to reject late state saves and completed-session resurrection.

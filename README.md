@@ -497,10 +497,13 @@ partial failures. An unavailable workspace or discovery failure means cleanup is
 incomplete; the notification does not claim those locations were checked.
 
 Running, open, stopped and saved/reopenable sessions keep their temporary files.
-**Stop** retains them. **Forget** waits for owned work to stop, then removes the
-session's attributed temporary files and retires its saved entry. Its frame shows
-progress until confirmed completion; a failure retains the entry and offers a
-retry. Reloading recovers the backend operation's state.
+**Stop** retains them. **Forget** waits for owned work to stop, removes eligible
+temporary files and retires its saved entry. Active or uncertain tool leases and
+nested session folders keep their files protected without blocking retirement.
+The completed operation records `scratchRetained: true` when files remain;
+**Clean TMP** can remove them later once ownership checks permit it. Unconfirmed
+runtime shutdown, unsafe paths and filesystem failures retain the entry and offer
+a retry. Reloading recovers the backend operation's state.
 
 Mobile allocates temporary storage in each selected workspace. The Launcher
 validates and forwards that ownership context to managed tools, and Agents uses
