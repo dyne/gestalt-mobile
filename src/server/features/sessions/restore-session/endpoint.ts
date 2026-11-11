@@ -5,6 +5,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import { WorkspaceSessionConflict } from '../application/workspace-conflict.js';
 
 import { idempotencyKey } from '../../../platform/http/idempotency.js';
 import { RelaySession, relayOwnsWriter } from '../model/relay-session.js';
@@ -19,6 +20,7 @@ export function registerRestoreSession(
     restore(session: RelaySessionSnapshot): Promise<RestoreSessionResult | RelaySessionSnapshot>;
     save(session: RelaySessionSnapshot): void;
     ownsWriter?(id: string): boolean;
+    close?(id: string): void | Promise<void>;
     idempotency?: {
       get(scope: string, key: string): { statusCode: number; body: string } | null;
       put(scope: string, key: string, statusCode: number, body: string): void;
@@ -48,7 +50,12 @@ export function registerRestoreSession(
     let restored: RestoreSessionResult | RelaySessionSnapshot;
     try {
       restored = await deps.restore(session);
-    } catch {
+    } catch (error) {
+      try {
+        await deps.close?.(id);
+      } catch {
+        return reply.code(502).send({ code: 'RESTORE_FAILED' });
+      }
       // The pre-I/O recovery marker must never strand a saved session: keep
       // its original thread and inactive state available for a later Open.
       deps.save(
@@ -56,6 +63,7 @@ export function registerRestoreSession(
           ? RelaySession.rehydrate(session).stop(new Date().toISOString()).snapshot
           : session,
       );
+      if (error instanceof WorkspaceSessionConflict) throw error;
       return reply.code(502).send({ code: 'RESTORE_FAILED' });
     }
     const response =

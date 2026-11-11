@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 
 import type { ProblemDetail } from '../../../shared/contracts/problem.js';
 import { problem as createProblem } from './problem.js';
+import { WorkspaceSessionConflict } from '../../features/sessions/application/workspace-conflict.js';
 
 export function registerProblemHandler(app: FastifyInstance, serveSpa = false): void {
   app.setNotFoundHandler((request, reply) => {
@@ -26,6 +27,14 @@ export function registerProblemHandler(app: FastifyInstance, serveSpa = false): 
   });
 
   app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof WorkspaceSessionConflict)
+      return reply
+        .code(409)
+        .type('application/problem+json')
+        .send({
+          ...createProblem(error.code, 409, error.message, true),
+          sessionId: error.sessionId,
+        });
     if (
       typeof error === 'object' &&
       error !== null &&

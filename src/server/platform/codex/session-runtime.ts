@@ -5,6 +5,7 @@
  */
 
 import { ORG_PLAN_CAPABILITIES } from '../plans/org-plan-capabilities.js';
+import { WorkspaceSessionConflict } from '../../features/sessions/application/workspace-conflict.js';
 import { readExecutorConfiguration } from './executor-configuration.js';
 import type {
   SessionScratch,
@@ -318,6 +319,7 @@ export class CodexSessionRuntime {
   private readonly childTopologyReads = new Map<string, Promise<readonly DirectChildThread[]>>();
   private readonly writerAcquisitions = new Map<string, Promise<WriterAcquisition>>();
   private readonly liveResources = new Map<string, Set<SessionResource>>();
+  private readonly confirmedWorkspaceReleases = new Set<string>();
   private readonly resourceCreations = new Map<string, Set<Promise<SessionResource>>>();
   private readonly resourceReleases = new Map<SessionResource, Promise<void>>();
 
@@ -402,7 +404,9 @@ export class CodexSessionRuntime {
 
   /** Forget requires actual release, including resources still starting or already closing. */
   async releaseForForget(session: RelaySessionSnapshot): Promise<void> {
+    let observedResource = false;
     for (const resource of this.liveResources.get(session.id) ?? []) {
+      observedResource = true;
       resource.beginExplicitShutdown();
       if (resource.active) {
         if (session.activeTurnId) await this.interruptTurn(session, session.activeTurnId);
@@ -457,11 +461,14 @@ export class CodexSessionRuntime {
       ...[this.writerAcquisitions.get(session.id)].filter((item) => item !== undefined),
     ]);
     for (const resource of this.liveResources.get(session.id) ?? []) {
+      observedResource = true;
       resource.beginExplicitShutdown();
       resource.dispose();
       await this.confirmResourceRelease(resource, true);
     }
     this.retrieval?.release?.(session.id);
+    if (observedResource && !this.liveResources.get(session.id)?.size)
+      this.confirmedWorkspaceReleases.add(session.id);
   }
 
   private confirmResourceRelease(resource: SessionResource, strict = false): Promise<void> {
@@ -781,6 +788,7 @@ export class CodexSessionRuntime {
       const restored = await this.restoreWithOutcome(session, now);
       return { session: restored.session, replacementCreated: restored.replacementCreated };
     } catch (error) {
+      if (error instanceof WorkspaceSessionConflict) throw error;
       throw classifyWriterAcquisitionFailure(error);
     }
   }
@@ -814,6 +822,15 @@ export class CodexSessionRuntime {
     }[] = [],
     executor?: { threadId: string; taskPath: string },
   ): Promise<boolean> {
+    // A user-confirmed Close already quiesced this root. Reopening it solely
+    // for takeover would conflict with the incoming workspace's running slot.
+    if (
+      session.desiredState === 'stopped' &&
+      this.confirmedWorkspaceReleases.has(session.id) &&
+      !this.liveResources.get(session.id)?.size &&
+      !recordedProcesses.some((claim) => ['running', 'detached-active'].includes(claim.state))
+    )
+      return true;
     let expired = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -1790,6 +1807,8 @@ export class CodexSessionRuntime {
   }
 
   private async createResourceInner(session: RelaySessionSnapshot): Promise<SessionResource> {
+    this.scratch?.reserveRuntime?.(session);
+    this.confirmedWorkspaceReleases.delete(session.id);
     const deadline = xerjDeadline();
     const lease = this.planStatusSource
       ? await this.planStatusSource.open(

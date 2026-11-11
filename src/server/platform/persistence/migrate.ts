@@ -67,6 +67,18 @@ export function migrate(database: DatabaseSync): void {
     database.exec(
       'ALTER TABLE session_forget_operations ADD COLUMN scratch_retained INTEGER NOT NULL DEFAULT 0',
     );
+  database.exec(`CREATE TABLE IF NOT EXISTS workspace_forget_locks (
+    workspace_path TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    operation_id TEXT NOT NULL UNIQUE
+  );`);
+  if (!forgetColumns.some((column) => column.name === 'blocking_session_id'))
+    database.exec('ALTER TABLE session_forget_operations ADD COLUMN blocking_session_id TEXT');
+  const workspaceLockColumns = database
+    .prepare('PRAGMA table_info(workspace_forget_locks)')
+    .all() as Array<{ name: string }>;
+  if (!workspaceLockColumns.some((column) => column.name === 'retired_path'))
+    database.exec('ALTER TABLE workspace_forget_locks ADD COLUMN retired_path TEXT');
   database.exec(`CREATE TABLE IF NOT EXISTS scratch_known_workspaces (
     workspace_path TEXT PRIMARY KEY
   ); INSERT OR IGNORE INTO scratch_known_workspaces (workspace_path)

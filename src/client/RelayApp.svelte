@@ -144,6 +144,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     displayWorkspacePath,
     hasAssignedOrgPlan,
     retainForgottenSession,
+    workspaceSessionConflict,
   } from './features/sessions/session-list.js';
   import SkillsView from './features/skills/SkillsView.svelte';
   import { SkillsState } from './features/skills/skills-state.js';
@@ -324,6 +325,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   );
   let startRequestKey = $state<string | null>(null);
   let sessionStartState = $state<SessionStartState>({ starting: false, error: null });
+  let workspaceConflictSessionId = $state<string | undefined>();
   let startingSession = $derived(sessionStartState.starting);
   let openingSessionId = $state<string | null>(null);
   const sessionPresentation = new SessionPresentation((id) => {
@@ -546,6 +548,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     },
     onSendError: (error, operationId) => {
       const feedback = relayFeedback(error, 'MESSAGE_SEND_FAILED');
+      if (
+        feedback.code === 'SESSION_WORKSPACE_BUSY' &&
+        error instanceof Error &&
+        'sessionId' in error &&
+        typeof error.sessionId === 'string'
+      ) {
+        workspaceConflictSessionId = error.sessionId;
+        tab = 'sessions';
+      }
       if (feedback.code === 'SESSION_WORKSPACE_UNAVAILABLE') {
         writerFeedback = null;
         retryOperationId = null;
@@ -575,7 +586,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   const sessionStartController = new SessionStartController(
     { start: relay.startSession },
     createIdempotencyKey,
-    (next) => (sessionStartState = next),
+    (next) => {
+      sessionStartState = next;
+      workspaceConflictSessionId = next.conflict?.sessionId;
+    },
   );
   const gitController = new GitController(
     { getSummary: relay.getGitSummary, pull: relay.pullGit, checkout: relay.checkoutGitBranch },
@@ -924,7 +938,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     });
     if (!session) {
       if (sessionStartState.error)
-        shellStatus = reportRelayError(new Error(sessionStartState.error), 'SESSION_START_FAILED');
+        shellStatus = reportRelayError(
+          Object.assign(
+            new Error(sessionStartState.error),
+            sessionStartState.conflict ? { code: 'SESSION_WORKSPACE_BUSY' } : {},
+          ),
+          'SESSION_START_FAILED',
+        );
       return;
     }
     try {
@@ -1133,6 +1153,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   async function openSession(id: string) {
     if (sessionForgetting.isBusy(id)) return;
+    const conflict = workspaceSessionConflict(sessions, id);
+    if (conflict) {
+      workspaceConflictSessionId = conflict.id;
+      tab = 'sessions';
+      shellStatus = reportRelayError(
+        Object.assign(new Error('Workspace already running'), { code: 'SESSION_WORKSPACE_BUSY' }),
+        'SESSION_WORKSPACE_BUSY',
+      );
+      return;
+    }
     shellStatus = 'Opening session…';
     const opening = sessionPresentation.beginOpen(id);
     try {
@@ -2026,11 +2056,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     selectedSkillProfile={selectedSessionSkillProfile}
     skillProfileError={sessionSkillProfileError}
     {startingSession}
+    {workspaceConflictSessionId}
     {openingSessionId}
     savingDefaults={savingSessionDefaults}
     bind:advancedExpanded={sessionAdvancedExpanded}
     onsavedefaults={() => void saveSessionDefaults()}
-    onworkspacechange={(value) => (sessionWorkspaceId = value)}
+    onworkspacechange={(value) => {
+      sessionWorkspaceId = value;
+      workspaceConflictSessionId = undefined;
+    }}
     onexpandedchange={(value) => (sessionExpandedIds = value)}
     onsandboxchange={(value) => (sandbox = value)}
     onapprovalpolicychange={(value) => (approvalPolicy = value)}

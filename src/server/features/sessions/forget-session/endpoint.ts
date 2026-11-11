@@ -23,6 +23,13 @@ export function registerForgetSession(
     if (deps.forget) {
       const operation = await deps.forget(id);
       if (!operation) return reply.code(404).send({ code: 'SESSION_NOT_FOUND' });
+      if (operation.phase === 'failed' && operation.blockingSessionId)
+        return reply.code(409).send({
+          code: 'SESSION_NESTED_WORKSPACE',
+          sessionId: operation.blockingSessionId,
+          detail: 'Forget the contained workspace session first, then retry.',
+          operation,
+        });
       if (operation.phase !== 'completed')
         return reply.code(503).send({ code: 'SESSION_FORGET_FAILED', operation });
       return reply.code(204).send();

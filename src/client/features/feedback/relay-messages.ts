@@ -5,6 +5,10 @@
  */
 
 const relayMessages = {
+  SESSION_WORKSPACE_BUSY:
+    'A session is already running in this workspace. Open it or stop it first.',
+  SESSION_WORKSPACE_CLEANING: 'This workspace is being forgotten. Retry when cleanup finishes.',
+  SESSION_NESTED_WORKSPACE: 'Forget the session inside this temporary directory first, then retry.',
   FILE_PREVIEW_NOT_FOUND: 'This file or folder no longer exists. Check the path and try again.',
   FILE_PREVIEW_UNREADABLE:
     'This path could not be read. It must be inside the workspace and accessible without symbolic links.',

@@ -6,7 +6,11 @@
 
 import type { RelaySession, StartSessionSettings } from './relay-client.js';
 
-export type SessionStartState = Readonly<{ starting: boolean; error: string | null }>;
+export type SessionStartState = Readonly<{
+  starting: boolean;
+  error: string | null;
+  conflict?: { workspaceId: string; sessionId: string };
+}>;
 export type SessionStartTransport = Readonly<{
   start(workspaceId: string, settings: StartSessionSettings, key: string): Promise<RelaySession>;
 }>;
@@ -39,6 +43,13 @@ export class SessionStartController {
         this.#publish({
           starting: false,
           error: error instanceof Error ? error.message : 'Could not start session.',
+          ...(error instanceof Error &&
+          'code' in error &&
+          error.code === 'SESSION_WORKSPACE_BUSY' &&
+          'sessionId' in error &&
+          typeof error.sessionId === 'string'
+            ? { conflict: { workspaceId, sessionId: error.sessionId } }
+            : {}),
         });
       return null;
     } finally {

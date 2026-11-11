@@ -26,6 +26,13 @@ function expandAdvanced() {
   (document.querySelector('.advanced-settings') as HTMLDetailsElement).open = true;
 }
 
+it('offers an explicit Open action after a workspace admission conflict', async () => {
+  const onopen = vi.fn();
+  renderView({ workspaceConflictSessionId: 'existing', onopen });
+  await fireEvent.click(screen.getByRole('button', { name: 'Open running session' }));
+  expect(onopen).toHaveBeenCalledWith('existing');
+});
+
 const repository: WorkspaceOption = {
   id: 'opaque:group/repository%leaf',
   name: 'repository',

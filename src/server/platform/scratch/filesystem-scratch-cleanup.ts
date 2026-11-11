@@ -40,7 +40,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
     session: ScratchSessionOwner,
     authorized: () => boolean,
     protectedSessions: () => readonly ScratchSessionOwner[],
-  ): Promise<'retained' | void> {
+  ) {
     // A retained session can outlive its workspace (including Self DEBUG).
     // Only an absent workspace is already clean; existing links and invalid
     // paths must still pass the normal canonical-path checks below.
@@ -58,10 +58,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
       mobileScratchOwnerId(session.id),
       authorized,
     );
-    if (counts.failed || counts.reasons.unsafe) throw new Error('SESSION_CLEANUP_FAILED');
-    // Forget retires the roster, not the authority of a borrower or nested owner.
-    // Keep protected/indeterminate scratch for later ownership-aware cleanup.
-    if (counts.skipped) return 'retained';
+    if (counts.skipped || counts.failed) throw new Error('SESSION_CLEANUP_FAILED');
   }
   async canonicalWorkspace(path: string): Promise<string> {
     return canonicalScratchWorkspace(path);

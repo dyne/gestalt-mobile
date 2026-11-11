@@ -74,7 +74,10 @@ function validateMarker(value: unknown, expected: ScratchMarker): ScratchMarker 
 
 export class FilesystemSessionScratch implements SessionScratch {
   private readonly pending = new Map<string, Promise<unknown>>();
-  constructor(readonly assertAvailable: (sessionId: string) => void = () => {}) {}
+  constructor(
+    readonly assertAvailable: (sessionId: string) => void = () => {},
+    readonly reserveRuntime?: (session: Readonly<{ id: string; workspacePath: string }>) => void,
+  ) {}
 
   /** A live process claim remains protected across relay crashes and other servers. */
   async borrow(

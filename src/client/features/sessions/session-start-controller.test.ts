@@ -8,6 +8,19 @@ import { describe, expect, it, vi } from 'vitest';
 import { SessionStartController } from './session-start-controller.js';
 
 describe('SessionStartController', () => {
+  it('preserves the conflicting session identity for an explicit Open action', async () => {
+    const error = Object.assign(new Error('Already running'), {
+      code: 'SESSION_WORKSPACE_BUSY',
+      sessionId: 'existing',
+    });
+    const controller = new SessionStartController(
+      { start: vi.fn().mockRejectedValue(error) },
+      () => 'key',
+      vi.fn(),
+    );
+    expect(await controller.start('workspace', {})).toBeNull();
+    expect(controller.state.conflict).toEqual({ workspaceId: 'workspace', sessionId: 'existing' });
+  });
   it('uses one key for a request and suppresses duplicate starts', async () => {
     let resolve!: (value: { id: string; state: string }) => void;
     const start = vi.fn(

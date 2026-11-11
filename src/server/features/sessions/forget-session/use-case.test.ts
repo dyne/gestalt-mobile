@@ -20,8 +20,10 @@ import { migrate } from '../../../platform/persistence/migrate.js';
 import { SqliteSessionRepository } from '../../../platform/persistence/sqlite-session-repository.js';
 import { SqliteForgetOperationStore } from '../../../platform/persistence/sqlite-forget-operation-store.js';
 import { SqliteEventJournal } from '../../../platform/persistence/sqlite-event-journal.js';
+import { SqliteWorkspaceLifecycle } from '../../../platform/persistence/sqlite-workspace-lifecycle.js';
 import { FilesystemSessionScratch } from '../../../platform/scratch/filesystem-session-scratch.js';
 import { FilesystemScratchCleanup } from '../../../platform/scratch/filesystem-scratch-cleanup.js';
+import { FilesystemWorkspaceForget } from '../../../platform/scratch/filesystem-workspace-forget.js';
 import { stopOwnedProcessGroup } from '../../../platform/scratch/owned-process-group.js';
 import { CodexSessionRuntime, type AppServer } from '../../../platform/codex/session-runtime.js';
 import type { ForgetPhase } from '../../../../shared/contracts/session-forget.js';
@@ -88,6 +90,7 @@ async function fixture() {
   const journal = new SqliteEventJournal(db);
   const scratch = new FilesystemSessionScratch((id) => operations.assertAvailable(id));
   const cleanup = new FilesystemScratchCleanup();
+  const workspaceCleanup = new FilesystemWorkspaceForget(db);
   const session = {
     ...RelaySession.create({
       id: 'relay-1',
@@ -113,8 +116,9 @@ async function fixture() {
       clean: (owner, operationId) =>
         clean
           ? clean()
-          : cleanup.cleanSession(
+          : workspaceCleanup.clean(
               owner,
+              operationId,
               () => {
                 const current = store.find(owner.id);
                 return current?.operationId === operationId && current.phase === 'cleaning';
@@ -151,8 +155,93 @@ async function fixture() {
 }
 
 describe('durable Forget orchestration', () => {
+  it('keeps shared tmp until the last saved session is forgotten, then removes all disposable leftovers', async () => {
+    const f = await fixture();
+    const saved = {
+      ...f.session,
+      id: 'saved',
+      state: 'stopped' as const,
+      desiredState: 'stopped' as const,
+    };
+    f.sessions.save(saved);
+    const legacy = join(f.workspacePath, 'tmp', 'old-unregistered-output');
+    await writeFile(legacy, 'temporary');
+    const source = join(f.workspacePath, 'source');
+    await writeFile(source, 'keep');
+    const forget = f.make();
+    expect((await forget.execute(f.session.id))?.phase).toBe('completed');
+    expect(await readFile(legacy, 'utf8')).toBe('temporary');
+    expect(f.sessions.find(saved.id)).not.toBeNull();
+    expect((await forget.execute(saved.id))?.phase).toBe('completed');
+    await expect(lstat(join(f.workspacePath, 'tmp'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(source, 'utf8')).toBe('keep');
+  });
+
+  it('retries an interrupted final deletion using its durable retired path', async () => {
+    const f = await fixture();
+    gates.remove = async (path) => {
+      if (path.includes('/forgotten-tmp/'))
+        throw Object.assign(new Error('disk failure'), { code: 'EIO' });
+    };
+    const failed = await f.make().execute(f.session.id);
+    expect(failed).toMatchObject({ phase: 'failed', failureCode: 'SESSION_CLEANUP_FAILED' });
+    expect(f.sessions.find(f.session.id)).not.toBeNull();
+    const guarded = new SqliteSessionRepository(f.db, new SqliteWorkspaceLifecycle(f.db));
+    expect(() => guarded.save({ ...f.session, id: 'new' })).toThrow('being forgotten');
+    gates.remove = undefined;
+    const reopened = new DatabaseSync(f.databasePath);
+    databases.push(reopened);
+    expect(
+      await f
+        .make(undefined, undefined, new SqliteForgetOperationStore(reopened))
+        .execute(f.session.id),
+    ).toMatchObject({ phase: 'completed', operationId: failed?.operationId });
+    await expect(lstat(join(f.workspacePath, 'tmp'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('never lets a delayed duplicate Forget delete a later session tmp directory', async () => {
+    const f = await fixture();
+    const firstEntered = latch(),
+      secondEntered = latch(),
+      firstRelease = latch(),
+      secondRelease = latch();
+    let deletions = 0;
+    gates.remove = async (path) => {
+      if (!path.includes('/forgotten-tmp/')) return;
+      if (++deletions === 1) {
+        firstEntered.release();
+        await firstRelease.wait;
+      } else {
+        secondEntered.release();
+        await secondRelease.wait;
+      }
+    };
+    const first = f.make().execute(f.session.id);
+    let second: ReturnType<ForgetSession['execute']> | undefined;
+    try {
+      await barrier(firstEntered.wait, first);
+      second = f.make().execute(f.session.id);
+      await barrier(secondEntered.wait, second);
+      firstRelease.release();
+      expect((await first)?.phase).toBe('completed');
+      const fresh = { ...f.session, id: 'fresh' };
+      const guarded = new SqliteSessionRepository(f.db, new SqliteWorkspaceLifecycle(f.db));
+      guarded.save(fresh);
+      const context = await f.scratch.allocate(fresh);
+      const payload = join(context.directory, 'new-output');
+      await writeFile(payload, 'new');
+      secondRelease.release();
+      expect((await second)?.phase).toBe('completed');
+      expect(await readFile(payload, 'utf8')).toBe('new');
+    } finally {
+      firstRelease.release();
+      secondRelease.release();
+      await Promise.allSettled([first, second]);
+    }
+  });
+
   it.each(['serena-mcp', 'playwright-mcp', 'context-mode-execution'])(
-    'retries failed Forget with an active %s lease without deleting its files or metadata',
+    'retries final Forget and deletes disposable scratch containing an old %s lease',
     async (consumer) => {
       const f = await fixture();
       const leaseId = randomUUID();
@@ -186,11 +275,9 @@ describe('durable Forget orchestration', () => {
         expect(f.operations.find(f.session.id)).toMatchObject({
           operationId: prior.operationId,
           phase: 'completed',
-          scratchRetained: true,
         });
         expect(f.operations.find(f.session.id)?.failureCode).toBeUndefined();
-        expect(await readFile(leasePath, 'utf8')).toBe(lease);
-        expect(await readFile(join(f.context.directory, 'payload'), 'utf8')).toBe('scratch');
+        await expect(lstat(join(f.workspacePath, 'tmp'))).rejects.toMatchObject({ code: 'ENOENT' });
         const reopened = new DatabaseSync(f.databasePath);
         databases.push(reopened);
         expect(new SqliteForgetOperationStore(reopened).find(f.session.id)).toEqual(
@@ -205,25 +292,18 @@ describe('durable Forget orchestration', () => {
     },
   );
 
-  it('forgets a Self DEBUG fixture containing a nested managed namespace without deleting either owner', async () => {
+  it('deletes unregistered nested test scratch on final Self DEBUG Forget', async () => {
     const f = await fixture();
     const workspacePath = join(f.context.directory, 'fixture-workspace');
     await mkdir(workspacePath);
     const nested = await f.scratch.allocate({ id: 'nested-fixture', workspacePath });
     const marker = join(nested.directory, '.gestalt-owner.json');
-    const priorMarker = await readFile(marker, 'utf8');
+    expect(await readFile(marker, 'utf8')).toBeTruthy();
     expect(await f.make().execute(f.session.id)).toMatchObject({
       phase: 'completed',
-      scratchRetained: true,
     });
     expect(f.sessions.find(f.session.id)).toBeNull();
-    expect(await readFile(marker, 'utf8')).toBe(priorMarker);
-    expect(await readFile(join(f.context.directory, 'payload'), 'utf8')).toBe('scratch');
-    expect(await f.cleanup.cleanWorkspace(f.workspacePath, () => f.sessions.list())).toMatchObject({
-      removed: 0,
-      skipped: 1,
-      reasons: { unrecognized: 1 },
-    });
+    await expect(lstat(join(f.workspacePath, 'tmp'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('journals every failure and retry after Forget fences late roster saves', async () => {
@@ -343,7 +423,7 @@ describe('durable Forget orchestration', () => {
     }
   });
 
-  it('forgets the outer roster entry while retaining another durable inner workspace', async () => {
+  it('requires forgetting a contained known session before deleting the outer tmp directory', async () => {
     const f = await fixture();
     const workspacePath = join(f.context.directory, 'selected-workspace');
     await mkdir(workspacePath);
@@ -361,15 +441,18 @@ describe('durable Forget orchestration', () => {
     });
     try {
       const first = await app.inject({ method: 'DELETE', url: `/api/sessions/${f.session.id}` });
-      expect(first.statusCode, first.body).toBe(204);
-      const completed = f.operations.find(f.session.id);
-      expect(completed).toMatchObject({ phase: 'completed', scratchRetained: true });
+      expect(first.statusCode, first.body).toBe(409);
+      const blocked = f.operations.find(f.session.id);
+      expect(blocked).toMatchObject({ phase: 'failed', blockingSessionId: inner.id });
       const retry = await app.inject({ method: 'DELETE', url: `/api/sessions/${f.session.id}` });
-      expect(retry.statusCode).toBe(204);
-      expect(f.operations.find(f.session.id)).toEqual(completed);
-      expect(f.sessions.find(f.session.id)).toBeNull();
+      expect(retry.statusCode).toBe(409);
+      expect(f.operations.find(f.session.id)?.operationId).toEqual(blocked?.operationId);
+      expect(f.sessions.find(f.session.id)).not.toBeNull();
       expect(f.sessions.find(inner.id)).not.toBeNull();
       expect(await readFile(payload, 'utf8')).toBe('saved-inner');
+      expect((await forget.execute(inner.id))?.phase).toBe('completed');
+      expect((await forget.execute(f.session.id))?.phase).toBe('completed');
+      await expect(lstat(join(f.workspacePath, 'tmp'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await app.close();
       await forget.drain();
@@ -510,7 +593,7 @@ describe('durable Forget orchestration', () => {
     const deleting = latch();
     const deleteRelease = latch();
     gates.remove = async (path) => {
-      if (path.endsWith('/payload')) {
+      if (path.includes('/forgotten-tmp/')) {
         deleting.release();
         await deleteRelease.wait;
       }
@@ -632,9 +715,9 @@ describe('durable Forget orchestration', () => {
     },
   );
 
-  it('forgets after restart without releasing unknown leases and permits later Clean TMP', async () => {
+  it('deletes old lease metadata on final Forget after restart without inferring process ownership from it', async () => {
     const f = await fixture();
-    const claim = await f.scratch.borrow(f.session);
+    await f.scratch.borrow(f.session);
     const prior = f.operations.begin(f.session.id)!;
     const reopened = new DatabaseSync(f.databasePath);
     databases.push(reopened);
@@ -643,23 +726,11 @@ describe('durable Forget orchestration', () => {
     expect(completed).toMatchObject({
       operationId: prior.operationId,
       phase: 'completed',
-      scratchRetained: true,
     });
     expect(f.sessions.find(f.session.id)).toBeNull();
     expect(operations.find(f.session.id)).toEqual(completed);
     expect(f.sessions.knownWorkspacePaths()).toContain(f.workspacePath);
-    expect(await readFile(join(f.context.directory, 'payload'), 'utf8')).toBe('scratch');
-    expect(await f.cleanup.cleanWorkspace(f.workspacePath, () => f.sessions.list())).toMatchObject({
-      removed: 0,
-      skipped: 1,
-      reasons: { lease: 1 },
-    });
-    await claim.release();
-    expect(await f.cleanup.cleanWorkspace(f.workspacePath, () => f.sessions.list())).toMatchObject({
-      removed: 1,
-      skipped: 0,
-    });
-    await expect(lstat(f.context.directory)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(join(f.workspacePath, 'tmp'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await f.make().execute(f.session.id)).toEqual(completed);
   });
 

@@ -71,6 +71,8 @@ import { SimpleWebAuthnAdapter } from './platform/auth/simple-webauthn-adapter.j
 import type { WebAuthnCeremonyService } from './features/auth/application/ports.js';
 import { authorizationSessionId, authorizedDeviceId } from './features/auth/domain/identifiers.js';
 import { SqliteSessionRepository } from './platform/persistence/sqlite-session-repository.js';
+import { SqliteWorkspaceLifecycle } from './platform/persistence/sqlite-workspace-lifecycle.js';
+import { FilesystemWorkspaceForget } from './platform/scratch/filesystem-workspace-forget.js';
 import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
 import { SqlitePendingInteractionStore } from './platform/persistence/sqlite-pending-interaction-store.js';
 import { SqliteIdempotencyStore } from './platform/persistence/sqlite-idempotency-store.js';
@@ -302,7 +304,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     database.close();
     throw error;
   }
-  const sessions = new SqliteSessionRepository(database);
+  const sessions = new SqliteSessionRepository(database, new SqliteWorkspaceLifecycle(database));
   const forgetOperations = new SqliteForgetOperationStore(database);
   // Only sessions found while opening the relay database belong to a previous
   // process. A listen hook can run after a new session has already started in
@@ -741,7 +743,18 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     databasePath,
   );
   const homeDirectory = options.homeDirectory ?? homedir();
-  const sessionScratch = new FilesystemSessionScratch((id) => forgetOperations.assertAvailable(id));
+  const sessionScratch = new FilesystemSessionScratch(
+    (id) => forgetOperations.assertAvailable(id),
+    ({ id }) => {
+      forgetOperations.assertAvailable(id);
+      const current = sessions.find(id);
+      if (!current) throw new Error('SESSION_NOT_FOUND');
+      sessions.save(
+        RelaySession.rehydrate(current).beginRecovery(new Date().toISOString()).snapshot,
+        true,
+      );
+    },
+  );
   // Constructing the manager is cheap (no spawn until `ensure`); building it
   // before the model catalog lets the catalog reuse the gestalt-owned servers.
   const kimiManager =
@@ -2070,6 +2083,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const ownerRuntime = (session: Readonly<{ provider: LlmProvider }>) =>
     session.provider === 'kimi' ? kimiRuntime : runtime;
   const scratchCleanup = new FilesystemScratchCleanup();
+  const workspaceForget = new FilesystemWorkspaceForget(database);
   const cleanTmp = new CleanSessionScratch({
     sessions: () => sessions.list(),
     knownWorkspacePaths: async () => [root, ...sessions.knownWorkspacePaths()],
@@ -2092,8 +2106,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       await playwright.waitForRelease(session.id);
     },
     clean: (session, operationId) =>
-      scratchCleanup.cleanSession(
+      workspaceForget.clean(
         session,
+        operationId,
         () => {
           const operation = forgetOperations.find(session.id);
           return operation?.operationId === operationId && operation.phase === 'cleaning';
@@ -2340,12 +2355,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         : undefined,
     releaseWriter:
       runtime || kimiRuntime
-        ? (id) => {
+        ? async (id) => {
             providerRecovery.cancel(id);
             dismissPendingInteractions(id, new Date().toISOString());
             const session = sessions.find(id);
             const owner = session ? ownerRuntime(session) : null;
-            return owner ? owner.release(id) : Promise.resolve();
+            if (owner && session) await owner.releaseForForget(session);
           }
         : undefined,
     onStarted: (session) => {
@@ -2916,7 +2931,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 activity.dispose(id);
                 const session = sessions.find(id);
                 const owner = session ? ownerRuntime(session) : null;
-                return owner ? owner.release(id) : Promise.resolve();
+                if (session && owner) await owner.releaseForForget(session);
+                await playwright.waitForRelease(id);
               }
             : undefined,
         replyInteraction:
