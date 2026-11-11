@@ -32,7 +32,11 @@ export function planAttachmentSupervision(
     !!update.reason?.match(/^(?:l2:|review:|measure:)/)
   )
     return true;
-  if (update.reason === 'authoring-start' || (sameAttachment && previous.supervision === false))
+  if (
+    update.reason === 'display-open' ||
+    update.reason === 'authoring-start' ||
+    (sameAttachment && previous.supervision === false)
+  )
     return false;
   return (
     progressed(update.plan.steps) ||

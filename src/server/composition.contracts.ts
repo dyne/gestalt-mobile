@@ -2165,6 +2165,26 @@ describe('production composition', () => {
       expect(opened.statusCode).toBe(200);
       expect(opened.json()).toMatchObject({ title: 'Autopilot fixture', allDone: false });
       expect((await app.inject(`/api/sessions/${sessionId}/plan`)).statusCode).toBe(200);
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+        lastOrgPlan: { supervision: false },
+        autopilot: { enabled: false },
+      });
+      // This coordinator fixture begins execution through the supervisor's explicit
+      // helper publication, independently of the passive visualizer attachment.
+      await writeFile(
+        planStatusFilePath(planStatusDirectoryPath(workspacePath, sessionId), planPath),
+        JSON.stringify({
+          schemaVersion: 1,
+          planPath,
+          reason: 'supervision-start',
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      await vi.waitFor(async () =>
+        expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+          lastOrgPlan: { supervision: true },
+        }),
+      );
       await app.listen({ host: '127.0.0.1', port: 0 });
       const address = app.server.address();
       if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
@@ -8302,6 +8322,85 @@ describe('production composition', () => {
           attach.mockRestore();
           supervisionStarted.mockRestore();
           runtimeStart.mockRestore();
+        }
+      },
+    );
+
+    it.each(['TODO', 'WIP'] as const)(
+      'keeps a validated %s plan passive in the visualizer until Execute is confirmed',
+      async (state) => {
+        const f = await orgPlanActivationFixture();
+        let app = await f.open();
+        try {
+          const authorId = await createComposedSession(app);
+          const planPath = join(f.workspacePath, '.gestalt', 'activation.org');
+          await writeFile(
+            planPath,
+            state === 'TODO' ? autopilotPlanText().replace('* WIP', '* TODO') : autopilotPlanText(),
+          );
+          for (let opened = 0; opened < 2; opened++) {
+            const view = await app.inject({
+              method: 'PUT',
+              url: `/api/sessions/${authorId}/plan`,
+              payload: { planName: '.gestalt/activation.org' },
+            });
+            expect(view.statusCode, view.body).toBe(200);
+            expect((await app.inject(`/api/sessions/${authorId}`)).json()).toMatchObject({
+              lastOrgPlan: { attached: true, supervision: false },
+              autopilot: { enabled: false },
+            });
+            await f.prepare(app);
+            expect(f.requests('turn/start')).toHaveLength(0);
+            expect(
+              f.database((db) => db.prepare('SELECT count(*) AS n FROM org_plan_launches').get()),
+            ).toEqual({ n: 0 });
+          }
+          // A deliberate Execute must report the occupied workspace and release
+          // its unpublished claim, rather than poisoning all subsequent retries.
+          const busyInput = await f.prepare(app);
+          const busy = await app.inject({
+            method: 'POST',
+            url: '/api/plans/execute',
+            payload: busyInput,
+          });
+          expect(busy.statusCode, busy.body).toBe(409);
+          expect(busy.json()).toMatchObject({
+            kind: 'blocked',
+            code: 'WORKSPACE_BUSY',
+            existingSessionId: authorId,
+          });
+          expect(f.requests('turn/start')).toHaveLength(0);
+          expect((await app.inject('/api/sessions')).json()).toHaveLength(1);
+          await app.close();
+          await rm(planStatusDirectoryPath(f.workspacePath, authorId), {
+            recursive: true,
+            force: true,
+          });
+          app = await f.open();
+          await app.listen({ host: '127.0.0.1', port: 0 });
+          expect((await app.inject(`/api/sessions/${authorId}`)).json()).toMatchObject({
+            lastOrgPlan: { attached: true, supervision: false },
+            autopilot: { enabled: false },
+          });
+          expect(f.requests('turn/start')).toHaveLength(0);
+          const input = await f.prepare(app);
+          const execute = await app.inject({
+            method: 'POST',
+            url: '/api/plans/execute',
+            payload: input,
+          });
+          expect(execute.json()).toMatchObject({
+            kind: 'started',
+            bootstrap: { kind: 'accepted' },
+          });
+          expect(f.requests('turn/start')).toHaveLength(1);
+          const supervisorId = execute.json().session.id;
+          expect(supervisorId).not.toBe(authorId);
+          expect((await app.inject(`/api/sessions/${authorId}`)).json().autopilot.enabled).toBe(
+            false,
+          );
+        } finally {
+          await app.close();
         }
       },
     );

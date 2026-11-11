@@ -8,6 +8,13 @@ the confirmed preparation revision, an optional supervisor skill profile, and a
 stable `launchId`. Paths, working folders, models and Autopilot switches are not
 accepted inputs. Callers first obtain read-only `/api/plans/prepare` context.
 
+Opening and validating a plan in the visualizer is passive. Its `display-open`
+attachment retains the plan for viewing, including existing WIP progress, without
+assigning supervision or enabling Autopilot. Reopening it and recovering that
+attachment after restart preserve this display-only role. Execute requires an
+explicit confirmed launch; an established supervisor keeps its existing role
+when its plan is viewed again.
+
 The typed relay-client method and `OrgPlanLaunchController` work without a
 mounted viewer. A trigger supplies the confirmed intent to `submit`; the
 controller manages in-flight submission, keeps the same identity for transport
@@ -63,6 +70,9 @@ Never-published retries re-run current file, policy, workspace, profile and defa
 admission. The command can exclude its own unpublished reservation during that
 read; it cannot exclude another supervisor. A stale confirmation revokes the
 publication revision before releasing ownership, fencing any delayed old publisher.
+If another session is running in the exact selected workspace, Execute returns
+`WORKSPACE_BUSY` with that session's identity and releases its unpublished plan
+claim. Close the running session and retry the same confirmed launch identity.
 
 Session publication and launch progress commit atomically. A retry after an unknown
 publication result uses the same allocated ID and publication gate; only the current
@@ -120,5 +130,5 @@ selection or disposal invalidates it across roster and draft reads, preventing a
 late response from changing the user's draft or destination. The persisted
 session remains discoverable in the ordinary roster. Dismissing the modal after
 submission leaves the server operation intact; leaving the viewer suppresses its
-late presentation. Neither handoff nor launch turns on Autopilot or attaches the
-plan through the activating open-plan endpoint.
+late presentation. Neither handoff nor launch turns on Autopilot or opens the
+plan through the passive visualizer endpoint.

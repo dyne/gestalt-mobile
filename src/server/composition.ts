@@ -2994,8 +2994,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           const result = await workspacePlanCatalog.read(session.workspacePath, planName);
           if (result.kind === 'available') {
             const planPath = resolve(session.workspacePath, ...planName.split('/'));
-            await planStatusSource.attach(session, planPath, (update) =>
-              acceptPlanUpdate(id, update),
+            await planStatusSource.attach(
+              session,
+              planPath,
+              (update) => acceptPlanUpdate(id, update),
+              'display-open',
             );
           }
           return result;

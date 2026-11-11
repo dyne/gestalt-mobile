@@ -35,6 +35,21 @@ const draft: Extract<PlanStatusUpdate, { kind: 'updated' }> = {
 };
 const previous = { filename: 'plan.org', title: 'Draft', path: draft.planPath, attached: true };
 
+it('does not infer execution from a visualized plan with existing work progress', () => {
+  const update = {
+    ...draft,
+    reason: 'display-open' as const,
+    plan: {
+      ...draft.plan,
+      steps: draft.plan.steps.map((step) => ({ ...step, state: 'WIP' as const })),
+    },
+  };
+  expect(planAttachmentSupervision(undefined, update, false)).toBe(false);
+  expect(planAttachmentSupervision(previous, update, false)).toBe(false);
+  expect(planAttachmentSupervision({ ...previous, supervision: true }, update, false)).toBe(true);
+  expect(planAttachmentSupervision(previous, update, true)).toBe(true);
+});
+
 it.each(['authoring-start', 'update', 'resync'] as const)(
   'retains %s drafts for display without assigning supervision, including legacy attachments',
   (reason) => {

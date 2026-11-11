@@ -607,6 +607,7 @@ it('persists explicit attachments across a new source, watches edits, and permit
     ),
   );
   expect(stored.planPath).toBe(planPath);
+  expect(stored.reason).toBe('display-open');
   first.closeAll();
   const second = new FilesystemPlanStatusSource(join(root, 'state'));
   await second.open(session, (update) => updates.push(update));
