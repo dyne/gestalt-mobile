@@ -18,7 +18,7 @@ export const gestaltManagedPlaywrightDynamicTool = {
   type: 'function',
   name: 'gestalt_managed_playwright',
   description:
-    'Request, inspect or release managed browser access for this root session. Profile consent is required. Start/stop may remain pending until a safe owned-runtime resume; tools and browser guidance are usable only after connected verification. Never starts a turn or clears Manual Off or attention. No commands, paths or environment accepted.',
+    'Request, inspect or release managed browser access for this root session. Profile consent is required. Pending start/stop cannot complete within this turn: finish independent work and end the turn; Mobile applies the request before the next authorized root turn at a safe idle boundary. Keep a pending start while browser work remains. No manual restart is required. Tools and guidance require connected verification. Never starts a turn or clears Manual Off or attention. No commands, paths or environment accepted.',
   inputSchema: {
     type: 'object',
     additionalProperties: false,

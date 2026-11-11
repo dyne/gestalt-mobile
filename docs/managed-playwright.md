@@ -142,6 +142,15 @@ itself. Unknown or active child topology defers attachment. Repeated controls
 are idempotent. A pending stop still needs that boundary to detach; releasing
 the session or closing Mobile tears down its owned connection directly.
 
+A pending response includes `nextAction: "next-root-turn"` and recovery guidance.
+Activation cannot finish within the turn that requests it; polling or waiting in
+that turn does not cross the boundary. Keep the start request pending while
+browser work remains, finish independent work, and end the turn. An existing
+authorized continuation can supply the next root turn; otherwise the user can
+send a follow-up message. No manual session restart is required. Calling `stop`
+before that boundary cancels the queued activation. Readiness remains `unknown`
+until the boundary runs the checks; it is not evidence of missing dependencies.
+
 Only `connected` with the expected standard tools enables matching browser
 guidance. An installed package, ready Chrome, a listed skill, or a pending
 request does not prove connection. Status reports bounded package/Chrome/Node
