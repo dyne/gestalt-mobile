@@ -231,7 +231,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
   }
   .execute-slot {
-    min-inline-size: 0;
+    display: contents;
   }
   @media (max-width: 40rem) {
     header {
@@ -241,15 +241,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       display: contents;
     }
     .document-heading :global(.plan-file-path) {
-      grid-column: 1 / -1;
+      grid-column: 1;
       grid-row: 2;
-    }
-    .execute-slot {
-      grid-column: 1 / -1;
-      grid-row: 3;
     }
     .close {
       grid-column: 2;
+    }
+  }
+  @media (max-width: 24rem) {
+    .document-heading :global(.plan-file-path) {
+      grid-column: 1 / -1;
     }
   }
 </style>

@@ -70,13 +70,15 @@ export type EffectiveSkillSelection = {
   warnings?: string[];
 };
 
-/** The user-facing identity of the most recent supervised Org Plan for a session. */
+/** The most recent authored or supervised Org Plan retained for a session. */
 export type LastOrgPlan = {
   filename: string;
   title: string;
   /** Canonical path and attachment state survive relay restarts. */
   path?: string;
   attached?: boolean;
+  /** False for display-only drafts; missing denotes a legacy attachment awaiting classification. */
+  supervision?: boolean;
 };
 
 export type SessionSandbox =

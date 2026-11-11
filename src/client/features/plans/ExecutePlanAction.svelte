@@ -238,6 +238,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <div class="execute-action">
   <AppControl
+    compact
+    class="execute-trigger"
     primary={!reason}
     disabled={!!reason || submitting}
     describedby={reason ? `${id}-reason` : undefined}
@@ -302,15 +304,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <style>
   .execute-action {
-    display: grid;
-    gap: 0.3rem;
-    min-inline-size: 0;
+    display: contents;
+  }
+  .execute-action > :global(.execute-trigger) {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+    white-space: nowrap;
   }
   .reason {
+    grid-column: 1 / -1;
+    grid-row: 2;
     color: var(--theme-text-muted);
     font-size: 0.8rem;
     overflow-wrap: anywhere;
-    max-inline-size: 28rem;
   }
   dialog {
     box-sizing: border-box;
@@ -361,6 +368,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin-block-start: 1.25rem;
   }
   @media (max-width: 40rem) {
+    .execute-action > :global(.execute-trigger) {
+      grid-row: 2;
+    }
+    .reason {
+      grid-row: 3;
+    }
     dialog {
       inline-size: calc(100vw - 0.5rem);
       max-block-size: calc(100dvh - 0.5rem);
@@ -378,6 +391,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     .dialog-actions {
       gap: 0.5rem;
       margin-block-start: 0.5rem;
+    }
+  }
+  @media (max-width: 24rem) {
+    .execute-action > :global(.execute-trigger) {
+      grid-row: 3;
+    }
+    .reason {
+      grid-row: 4;
     }
   }
 </style>

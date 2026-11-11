@@ -86,6 +86,21 @@ for (const renderer of ['supervised', 'org-source'] as ExecuteRenderer[]) {
         await page.getByRole('button', { name: 'Dismiss success notification' }).click();
         await target(close);
         const actionBox = await target(execute);
+        const actionSizing = await execute.evaluate((button) => {
+          const text = document.createRange();
+          text.selectNodeContents(button);
+          const style = getComputedStyle(button);
+          return {
+            width: button.getBoundingClientRect().width,
+            contentWidth:
+              text.getBoundingClientRect().width +
+              parseFloat(style.paddingLeft) +
+              parseFloat(style.paddingRight) +
+              parseFloat(style.borderLeftWidth) +
+              parseFloat(style.borderRightWidth),
+          };
+        });
+        expect(actionSizing.width).toBeLessThanOrEqual(Math.max(44, actionSizing.contentWidth) + 1);
         const closeBox = (await close.boundingBox())!;
         expect(
           actionBox.x >= closeBox.x + closeBox.width ||
@@ -209,6 +224,16 @@ for (const renderer of ['supervised', 'org-source'] as ExecuteRenderer[]) {
         await expect(
           page.getByText('This Org document is not a valid Gestalt plan.'),
         ).toBeVisible();
+        const blockedHeader = page.locator('.org-document > header');
+        const titleBox = (await blockedHeader
+          .getByRole('heading', { name: 'Plain notes' })
+          .boundingBox())!;
+        const blockedHeaderBox = (await blockedHeader.boundingBox())!;
+        expect(titleBox.width).toBeGreaterThan(blockedHeaderBox.width / 2);
+        const reasonBox = (await page
+          .getByText('This Org document is not a valid Gestalt plan.')
+          .boundingBox())!;
+        expect(reasonBox.y).toBeGreaterThanOrEqual(titleBox.y + titleBox.height);
         const disabledStyle = await disabled.evaluate((button) => ({
           color: getComputedStyle(button).color,
           background: getComputedStyle(button).backgroundColor,
