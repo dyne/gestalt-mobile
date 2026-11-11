@@ -142,6 +142,7 @@ import { isManagedPlaywrightCall } from '../shared/contracts/managed-playwright.
 import type { RetrievalCapabilityPort } from './features/skills/application/ports.js';
 import { compileSkillOverride, type SkillProfile } from './features/skills/model/skill-profile.js';
 import { SupervisedPlanRegistry } from './features/plans/application/supervised-plan-registry.js';
+import { planAttachmentSupervision } from './features/plans/application/plan-attachment-supervision.js';
 import { prepareOrgPlanSupervision } from './features/plans/application/prepare-org-plan-supervision.js';
 import {
   startOrgPlanSupervision,
@@ -343,6 +344,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     const identity =
       supervisedPlans.identity(sessionId) ?? autopilotStore.find(sessionId)?.planIdentity;
     const owner = identity ? takeoverStore.owner(identity) : null;
+    const path = sessions.find(sessionId)?.lastOrgPlan?.path;
+    const launchOwner = path ? orgPlanLaunches.owner(path) : null;
+    if (!owner && launchOwner && launchOwner.sessionId !== sessionId) return 'transferring';
     return !owner
       ? 'owned'
       : owner.sessionId !== sessionId
@@ -1295,6 +1299,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       const occurredAt = new Date().toISOString();
       const session = sessions.find(sessionId);
       if (session) {
+        const execution = autopilotStore.find(sessionId);
+        const launchOwner = orgPlanLaunches.owner(update.planPath);
+        const takeoverOwner = takeoverStore.owner(update.identity);
         const updated = {
           ...session,
           lastOrgPlan: {
@@ -1302,6 +1309,15 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             title: update.plan.title,
             path: update.planPath,
             attached: true,
+            supervision:
+              (takeoverOwner
+                ? takeoverOwner.sessionId === sessionId
+                : !launchOwner || launchOwner.sessionId === sessionId) &&
+              planAttachmentSupervision(
+                session.lastOrgPlan,
+                update,
+                execution?.planIdentity === update.identity && !!execution.supervision,
+              ),
           },
           updatedAt: occurredAt,
         };
@@ -2426,12 +2442,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             ['reserved', 'creating'].includes(pending.phase);
           if (pending && !reclaimableLaunchOwner(pending) && !ownUnpublished)
             return sessions.find(pending.sessionId) ? { sessionId: pending.sessionId } : {};
-          const owner = sessions
-            .list()
-            .find(
-              (session) =>
-                session.lastOrgPlan?.attached && session.lastOrgPlan.path === canonicalPath,
+          const identity = createHash('sha256').update(canonicalPath).digest('hex');
+          const owner = sessions.list().find((session) => {
+            if (!session.lastOrgPlan?.attached || session.lastOrgPlan.path !== canonicalPath)
+              return false;
+            const execution = autopilotStore.find(session.id);
+            return (
+              session.lastOrgPlan.supervision !== false ||
+              (execution?.planIdentity === identity && !!execution.supervision)
             );
+          });
           return owner ? { sessionId: owner.id } : null;
         },
       },

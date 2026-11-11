@@ -8293,6 +8293,146 @@ describe('production composition', () => {
       },
     );
 
+    it.each(['authoring-start', 'resync'])(
+      'executes a draft retained through %s in one new supervisor, including after restart',
+      async (reason) => {
+        const f = await orgPlanActivationFixture();
+        let app = await f.open();
+        try {
+          const authorId = await createComposedSession(app);
+          const planPath = join(f.workspacePath, '.gestalt', 'activation.org');
+          await writeFile(planPath, autopilotPlanText().replace('* WIP', '* TODO'));
+          await writeFile(
+            planStatusFilePath(planStatusDirectoryPath(f.workspacePath, authorId), planPath),
+            JSON.stringify({
+              schemaVersion: 1,
+              planPath,
+              reason,
+              updatedAt: new Date().toISOString(),
+            }),
+          );
+          await expect
+            .poll(async () => (await app.inject(`/api/sessions/${authorId}`)).json().lastOrgPlan)
+            .toMatchObject({ attached: true, path: planPath });
+          await f.prepare(app);
+          // Existing installations retained authoring attachments without an execution role.
+          f.database((db) =>
+            db
+              .prepare(
+                "UPDATE relay_sessions SET last_org_plan_json=json_remove(last_org_plan_json,'$.supervision') WHERE id=?",
+              )
+              .run(authorId),
+          );
+          await app.close();
+          app = await f.open();
+          await app.listen({ host: '127.0.0.1', port: 0 });
+          const payload = await f.prepare(app);
+          expect((await app.inject(`/api/sessions/${authorId}`)).json()).toMatchObject({
+            lastOrgPlan: { attached: true, supervision: false },
+            autopilot: { enabled: false },
+          });
+          const results = await Promise.all(
+            ['first', 'second'].map(async (launchId) =>
+              (
+                await app.inject({
+                  method: 'POST',
+                  url: '/api/plans/execute',
+                  payload: { ...payload, launchId },
+                })
+              ).json(),
+            ),
+          );
+          const started = results.find((result) => result.kind === 'started');
+          expect(started).toBeDefined();
+          expect(started.session.id).not.toBe(authorId);
+          expect(results.find((result) => result.kind === 'blocked')).toMatchObject({
+            code: 'ACTIVE_SUPERVISION',
+          });
+          expect((await app.inject('/api/sessions')).json()).toHaveLength(2);
+          expect(f.requests('turn/start')).toHaveLength(1);
+          // The author cannot acquire a second writer by publishing a late execution signal.
+          await writeFile(
+            planStatusFilePath(planStatusDirectoryPath(f.workspacePath, authorId), planPath),
+            JSON.stringify({
+              schemaVersion: 1,
+              planPath,
+              reason: 'supervision-start',
+              updatedAt: new Date().toISOString(),
+            }),
+          );
+          await expect
+            .poll(() =>
+              f.database((db) =>
+                db
+                  .prepare(
+                    "SELECT json_extract(payload_json,'$.reason') AS reason FROM session_events WHERE session_id=? AND type='plan.updated' ORDER BY sequence DESC LIMIT 1",
+                  )
+                  .get(authorId),
+              ),
+            )
+            .toEqual({ reason: 'supervision-start' });
+          await expect
+            .poll(async () => (await app.inject(`/api/sessions/${authorId}`)).json().lastOrgPlan)
+            .toMatchObject({ attached: true, supervision: false });
+          expect((await app.inject(`/api/sessions/${authorId}`)).json().autopilot.enabled).toBe(
+            false,
+          );
+          expect(
+            (
+              await app.inject({
+                method: 'PUT',
+                url: `/api/sessions/${authorId}/autopilot`,
+                payload: { enabled: true },
+              })
+            ).statusCode,
+          ).toBe(409);
+          await writeFile(
+            planStatusFilePath(
+              planStatusDirectoryPath(f.workspacePath, started.session.id),
+              planPath,
+            ),
+            JSON.stringify({
+              schemaVersion: 1,
+              planPath,
+              reason: 'supervision-start',
+              updatedAt: new Date().toISOString(),
+            }),
+          );
+          await expect
+            .poll(
+              async () =>
+                (await app.inject(`/api/sessions/${started.session.id}`)).json().lastOrgPlan,
+            )
+            .toMatchObject({ attached: true, supervision: true });
+          await app.inject({
+            method: 'PUT',
+            url: `/api/sessions/${started.session.id}/autopilot`,
+            payload: { enabled: false },
+          });
+          await app.close();
+          app = await f.open();
+          await app.listen({ host: '127.0.0.1', port: 0 });
+          expect(
+            (await app.inject(`/api/sessions/${started.session.id}`)).json().lastOrgPlan,
+          ).toMatchObject({ attached: true, supervision: true });
+          expect(
+            (
+              await app.inject({
+                method: 'POST',
+                url: '/api/plans/prepare',
+                payload: payload.reference,
+              })
+            ).json(),
+          ).toMatchObject({
+            code: 'ACTIVE_SUPERVISION',
+            existingSessionId: started.session.id,
+          });
+        } finally {
+          await app.close();
+        }
+      },
+    );
+
     it('retains an authored plan without starting supervision', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
@@ -8328,6 +8468,7 @@ describe('production composition', () => {
       );
 
       expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+        lastOrgPlan: { attached: true, supervision: false },
         autopilot: { enabled: false, state: 'disabled' },
       });
       expect(
