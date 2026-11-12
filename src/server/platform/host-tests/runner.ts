@@ -298,16 +298,22 @@ export class LocalHostTestRunner implements HostTestRunner {
     Object.assign(env, scratchEnvironment);
     let child;
     try {
-      child = spawn(
-        process.execPath,
-        ['-e', guardian, suite.command, JSON.stringify(suite.args), suite.repository],
-        {
-          cwd: suite.repository,
-          env,
-          detached: true,
-          shell: false,
-          stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-        },
+      child = spawn(process.execPath, ['--input-type=commonjs', '-', 'gestalt-host-tests'], {
+        cwd: suite.repository,
+        env,
+        detached: true,
+        shell: false,
+        stdio: ['pipe', 'pipe', 'pipe', 'ipc', 'pipe'],
+      });
+      // Source and invocation details use the source pipe; fd 4 stays open as
+      // the independent host lifetime pipe until cleanup is requested.
+      const source = child.stdin!;
+      child.stdin = child.stdio[4] as typeof child.stdin;
+      source.on('error', () => {});
+      source.end(
+        `process.argv = [process.execPath, ...${JSON.stringify([suite.command, JSON.stringify(suite.args), suite.repository])}];\n` +
+          `Object.defineProperty(process,'stdin',{value:new (require('node:net').Socket)({fd:4,readable:true,writable:false})});\n` +
+          guardian,
       );
     } catch (error) {
       closeSync(fd);

@@ -167,20 +167,35 @@ export function installShutdownHandlers(
   signalSource: Pick<NodeJS.Process, 'once' | 'removeListener'> = process,
 ): () => Promise<unknown> {
   let closing: Promise<unknown> | undefined;
+  let signalled = false;
   const shutdown = () => {
-    closing ??= app.close();
+    closing ??= Promise.resolve()
+      .then(() => app.close())
+      .finally(() => {
+        signalSource.removeListener('SIGINT', onInterrupt);
+        signalSource.removeListener('SIGTERM', onTerminate);
+      });
     return closing;
   };
   const onSignal = () => {
-    signalSource.removeListener('SIGINT', onSignal);
-    signalSource.removeListener('SIGTERM', onSignal);
+    if (signalled) return;
+    signalled = true;
     void shutdown().catch((error: unknown) => {
       process.exitCode = 1;
       console.error(error instanceof Error ? error.message : 'Shutdown failed');
     });
   };
-  signalSource.once('SIGINT', onSignal);
-  signalSource.once('SIGTERM', onSignal);
+  // Keep intercepting repeated console interrupts until graceful cleanup settles.
+  const onInterrupt = () => {
+    signalSource.once('SIGINT', onInterrupt);
+    onSignal();
+  };
+  const onTerminate = () => {
+    signalSource.once('SIGTERM', onTerminate);
+    onSignal();
+  };
+  signalSource.once('SIGINT', onInterrupt);
+  signalSource.once('SIGTERM', onTerminate);
   return shutdown;
 }
 

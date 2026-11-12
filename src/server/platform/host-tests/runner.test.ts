@@ -391,6 +391,19 @@ describe('host-owned tests', () => {
     ).toMatchObject({ runId: run.runId, state: 'passed' });
   });
 
+  it.runIf(process.platform === 'linux')(
+    'keeps supervisor source and run arguments out of the process listing',
+    async () => {
+      const f = await fixture(
+        "console.log(require('node:fs').readFileSync('/proc/'+process.ppid+'/cmdline','utf8'))",
+      );
+      const run = (await f.start()) as HostTestResult;
+      const result = await f.finish(run.runId);
+      const argv = (await readFile(result.logPath, 'utf8')).trim().split('\0').filter(Boolean);
+      expect(argv.slice(1)).toEqual(['--input-type=commonjs', '-', 'gestalt-host-tests']);
+    },
+  );
+
   it('cancels owned descendants on shutdown even after the test leader exits', async () => {
     const f = await fixture(
       "const p=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});console.log(p.pid);p.unref()",

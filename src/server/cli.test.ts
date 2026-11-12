@@ -5,6 +5,8 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { once } from 'node:events';
+import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -367,6 +369,60 @@ function fakeSignals(signals: EventEmitter): Pick<NodeJS.Process, 'once' | 'remo
 }
 
 describe('installShutdownHandlers', () => {
+  it('finishes asynchronous cleanup after repeated real console interrupts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-console-close-'));
+    temporaryDirectories.push(root);
+    const entry = join(root, 'console.mjs');
+    await writeFile(
+      entry,
+      `import {installShutdownHandlers} from ${JSON.stringify(new URL('./cli.ts', import.meta.url).href)};
+installShutdownHandlers({close:async()=>{process.send('closing');await new Promise(resolve=>setTimeout(resolve,150));process.disconnect();}});
+process.send('ready');`,
+    );
+    const child = spawn(process.execPath, ['--import', 'tsx', entry], {
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    });
+    child.stderr?.resume();
+    const exited = once(child, 'exit');
+    try {
+      await once(child, 'message');
+      const closing = once(child, 'message');
+      child.kill('SIGINT');
+      expect((await closing)[0]).toBe('closing');
+      child.kill('SIGINT');
+      child.kill('SIGTERM');
+      expect(await exited).toEqual([0, null]);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await exited;
+    }
+  });
+
+  it('keeps intercepting Ctrl+C and TERM until the shared graceful close settles', async () => {
+    const signals = new EventEmitter();
+    let release!: () => void;
+    const close = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const shutdown = installShutdownHandlers({ close }, fakeSignals(signals));
+    expect(signals.emit('SIGINT')).toBe(true);
+    await Promise.resolve();
+    try {
+      expect(signals.emit('SIGINT')).toBe(true);
+      expect(signals.emit('SIGTERM')).toBe(true);
+      expect(signals.emit('SIGTERM')).toBe(true);
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      await shutdown();
+    }
+    expect(signals.listenerCount('SIGINT')).toBe(0);
+    expect(signals.listenerCount('SIGTERM')).toBe(0);
+  });
+
   it('closes the app exactly once when multiple termination signals arrive', async () => {
     const signals = new EventEmitter();
     const close = vi.fn(async () => {});
