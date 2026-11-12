@@ -376,6 +376,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     const identity =
       supervisedPlans.identity(sessionId) ?? autopilotStore.find(sessionId)?.planIdentity;
     const owner = identity ? takeoverStore.owner(identity) : null;
+    if (identity && owner?.sessionId !== sessionId && takeoverStore.retired(identity, sessionId))
+      return 'replaced';
     const path = sessions.find(sessionId)?.lastOrgPlan?.path;
     const launchOwner = path ? orgPlanLaunches.owner(path) : null;
     if (!owner && launchOwner && launchOwner.sessionId !== sessionId) return 'transferring';
@@ -1361,6 +1363,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             path: update.planPath,
             attached: true,
             supervision:
+              session.desiredState !== 'stopped' &&
               (takeoverOwner
                 ? takeoverOwner.sessionId === sessionId
                 : !launchOwner || launchOwner.sessionId === sessionId) &&
@@ -2541,12 +2544,17 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             return {
               ...(sessions.find(pending.sessionId) ? { sessionId: pending.sessionId } : {}),
               reason:
-                'This plan or an overlapping workspace is reserved by another supervisor. Open its session to continue, or forget it to release the reservation.',
+                'This plan or an overlapping workspace is reserved by another supervisor. Open its session to continue, or close it to release the reservation.',
             };
           const busy = workspaceBusy(workspacePath);
           if (busy && busy.sessionId !== pending?.sessionId) return busy;
           const identity = createHash('sha256').update(canonicalPath).digest('hex');
           const owner = sessions.list().find((session) => {
+            if (
+              session.desiredState === 'stopped' &&
+              ['stopped', 'released'].includes(session.state)
+            )
+              return false;
             if (!session.lastOrgPlan?.attached || session.lastOrgPlan.path !== canonicalPath)
               return false;
             const execution = autopilotStore.find(session.id);
@@ -3025,6 +3033,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 const owner = session ? ownerRuntime(session) : null;
                 if (session && owner) await owner.releaseForForget(session);
                 await playwright.waitForRelease(id);
+                const current = sessions.find(id);
+                if (
+                  current?.desiredState === 'stopped' &&
+                  ['stopped', 'released'].includes(current.state)
+                ) {
+                  orgPlanLaunches.releaseSession(id);
+                  takeoverStore.releaseSession(id);
+                }
               }
             : undefined,
         replyInteraction:

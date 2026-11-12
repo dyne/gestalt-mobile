@@ -26,10 +26,12 @@ import { SqliteAuthorizationStore } from './platform/auth/sqlite-authorization-s
 import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
 import { SqliteIdempotencyStore } from './platform/persistence/sqlite-idempotency-store.js';
 import { SqliteOrgPlanLaunchStore } from './platform/persistence/sqlite-org-plan-launch-store.js';
+import { SqliteSupervisionTakeoverStore } from './platform/persistence/sqlite-supervision-takeover-store.js';
 import { SqliteSessionRepository } from './platform/persistence/sqlite-session-repository.js';
 import { RelaySession } from './features/sessions/model/relay-session.js';
 import { SqliteAutopilotStore } from './platform/persistence/sqlite-autopilot-store.js';
 import { startSupervisionProtocol } from './features/autopilot/domain/supervision-protocol.js';
+import { disabledAutopilot } from './features/autopilot/domain/autopilot-session.js';
 import { exportControlPlaneTrace } from './features/control-plane-trace/export-trace.js';
 import type { McpStartupStatus } from '../shared/contracts/mcp-startup-failure.js';
 import type { ToolEfficiencySnapshot } from '../shared/contracts/tool-efficiency.js';
@@ -7307,6 +7309,204 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('lifecycle', () => {
+    it.each(['stop', 'release'] as const)(
+      'releases supervisor reservations after %s while retaining history and scratch across restart',
+      async (operation) => {
+        const f = await orgPlanActivationFixture('codex-cli 0.167.0');
+        let app = await f.open();
+        try {
+          const payload = await f.prepare(app);
+          const launched = (
+            await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+          ).json();
+          expect(launched).toMatchObject({ kind: 'started' });
+          const id = launched.session.id;
+          const identity = f.database((db) => {
+            const record = new SqliteOrgPlanLaunchStore(db).forSession(id)!;
+            const identity = createHash('sha256').update(record.canonicalPath).digest('hex');
+            new SqliteSupervisionTakeoverStore(db, new SqliteAutopilotStore(db)).claim(
+              identity,
+              id,
+            );
+            return identity;
+          });
+          const marker = join(f.workspacePath, 'tmp', 'retained-on-close.txt');
+          await writeFile(marker, 'keep');
+          expect(
+            f.database(
+              (db) => new SqliteOrgPlanLaunchStore(db).workspaceOwner(f.workspacePath)?.sessionId,
+            ),
+          ).toBe(id);
+          expect(
+            (await app.inject({ method: 'POST', url: `/api/sessions/${id}/${operation}` }))
+              .statusCode,
+          ).toBe(202);
+          expect(
+            f.database((db) => new SqliteOrgPlanLaunchStore(db).workspaceOwner(f.workspacePath)),
+          ).toBeNull();
+          expect(
+            f.database((db) =>
+              new SqliteSupervisionTakeoverStore(db, new SqliteAutopilotStore(db)).owner(identity),
+            ),
+          ).toBeNull();
+          expect((await app.inject(`/api/sessions/${id}`)).statusCode).toBe(200);
+          expect(await readFile(marker, 'utf8')).toBe('keep');
+          await app.close();
+          app = await f.open();
+          const next = await createComposedSession(app);
+          expect(next).not.toBe(id);
+          expect(
+            (await app.inject({ method: 'POST', url: `/api/sessions/${next}/stop` })).statusCode,
+          ).toBe(202);
+          const prepared = (
+            await app.inject({
+              method: 'POST',
+              url: '/api/plans/prepare',
+              payload: payload.reference,
+            })
+          ).json();
+          expect(prepared).toMatchObject({ kind: 'eligible' });
+          const restarted = (
+            await app.inject({
+              method: 'POST',
+              url: '/api/plans/execute',
+              payload: {
+                ...payload,
+                expectedRevision: prepared.revision,
+                launchId: `next-${operation}`,
+              },
+            })
+          ).json();
+          expect(restarted).toMatchObject({ kind: 'started' });
+          expect(restarted.session.id).not.toBe(id);
+        } finally {
+          await app.close();
+        }
+      },
+    );
+    it('keeps the reservation until Close has confirmed runtime shutdown', async () => {
+      const f = await orgPlanActivationFixture('codex-cli 0.167.0');
+      const app = await f.open();
+      const gate = Promise.withResolvers<void>();
+      const original = CodexSessionRuntime.prototype.releaseForForget;
+      let pending: Promise<LightMyRequestResponse> | undefined;
+      let held = false;
+      const spy = vi
+        .spyOn(CodexSessionRuntime.prototype, 'releaseForForget')
+        .mockImplementationOnce(async function (this: CodexSessionRuntime, session) {
+          held = true;
+          await gate.promise;
+          return original.call(this, session);
+        });
+      try {
+        const payload = await f.prepare(app);
+        const launched = (
+          await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+        ).json();
+        expect(launched).toMatchObject({ kind: 'started' });
+        const id = launched.session.id;
+        pending = Promise.resolve(
+          app.inject({ method: 'POST', url: `/api/sessions/${id}/release` }),
+        );
+        await expect.poll(() => held, { timeout: 2_000 }).toBe(true);
+        expect(
+          f.database(
+            (db) => new SqliteOrgPlanLaunchStore(db).workspaceOwner(f.workspacePath)?.sessionId,
+          ),
+        ).toBe(id);
+        const blocked = await app.inject({
+          method: 'POST',
+          url: '/api/sessions',
+          payload: {
+            workspaceId: payload.reference.workspaceId,
+            profile: 'default',
+            provider: 'codex',
+          },
+        });
+        expect(blocked.statusCode).toBe(409);
+        expect(blocked.json()).toMatchObject({ code: 'SESSION_WORKSPACE_LOCKED' });
+        gate.resolve();
+        expect((await pending).statusCode).toBe(202);
+        expect(await createComposedSession(app)).not.toBe(id);
+      } finally {
+        gate.resolve();
+        await pending?.catch(() => undefined);
+        spy.mockRestore();
+        await app.close();
+      }
+    });
+
+    it('retains reservations when Close cannot confirm runtime shutdown and releases them on retry', async () => {
+      const f = await orgPlanActivationFixture('codex-cli 0.167.0');
+      const app = await f.open();
+      const spy = vi.spyOn(CodexSessionRuntime.prototype, 'releaseForForget');
+      try {
+        const payload = await f.prepare(app);
+        const launched = (
+          await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+        ).json();
+        expect(launched).toMatchObject({ kind: 'started' });
+        const id = launched.session.id;
+        spy.mockRejectedValueOnce(new Error('SESSION_RELEASE_UNCONFIRMED'));
+        expect(
+          (await app.inject({ method: 'POST', url: `/api/sessions/${id}/release` })).statusCode,
+        ).toBe(500);
+        expect(
+          f.database(
+            (db) => new SqliteOrgPlanLaunchStore(db).workspaceOwner(f.workspacePath)?.sessionId,
+          ),
+        ).toBe(id);
+        expect(
+          (await app.inject({ method: 'POST', url: `/api/sessions/${id}/release` })).statusCode,
+        ).toBe(202);
+        expect(
+          f.database((db) => new SqliteOrgPlanLaunchStore(db).workspaceOwner(f.workspacePath)),
+        ).toBeNull();
+        expect(await createComposedSession(app)).not.toBe(id);
+      } finally {
+        spy.mockRestore();
+        await app.close();
+      }
+    });
+
+    it('keeps a retired supervisor fenced after its successor releases the reservation', async () => {
+      const f = await orgPlanActivationFixture('codex-cli 0.167.0');
+      const app = await f.open();
+      try {
+        const payload = await f.prepare(app);
+        const launched = (
+          await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+        ).json();
+        expect(launched).toMatchObject({ kind: 'started' });
+        const id = launched.session.id;
+        expect(
+          (await app.inject({ method: 'POST', url: `/api/sessions/${id}/release` })).statusCode,
+        ).toBe(202);
+        f.database((db) => {
+          const launch = new SqliteOrgPlanLaunchStore(db).forSession(id)!;
+          const identity = createHash('sha256').update(launch.canonicalPath).digest('hex');
+          const autopilot = new SqliteAutopilotStore(db);
+          const state = autopilot.find(id) ?? disabledAutopilot(id, new Date().toISOString());
+          autopilot.save({ ...state, planIdentity: identity });
+          const takeover = new SqliteSupervisionTakeoverStore(db, autopilot);
+          const successor = takeover.claim(identity, 'successor')!;
+          expect(takeover.retire(successor, [id])).toBe(true);
+          takeover.releaseSession('successor');
+        });
+        const turnsBefore = f.requests('turn/start').length;
+        const resumed = await app.inject({
+          method: 'POST',
+          url: `/api/sessions/${id}/turns`,
+          payload: { text: 'Continue work' },
+        });
+        expect(resumed.statusCode).toBe(409);
+        expect(resumed.json()).toMatchObject({ code: 'SESSION_SUPERVISOR_REPLACED' });
+        expect(f.requests('turn/start')).toHaveLength(turnsBefore);
+      } finally {
+        await app.close();
+      }
+    });
+
     it('requires the prior session to stop, then fences it while a supervisor owns its workspace', async () => {
       const f = await orgPlanActivationFixture('codex-cli 0.167.0');
       const app = await f.open();

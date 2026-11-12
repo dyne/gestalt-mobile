@@ -101,6 +101,11 @@ export class SqliteOrgPlanLaunchStore implements OrgPlanLaunchStore {
       )
       .run(record.launchId, record.sessionId, record.canonicalPath);
   }
+  releaseSession(sessionId: string): void {
+    this.db
+      .prepare('UPDATE org_plan_launches SET canonical_path=NULL WHERE session_id=?')
+      .run(sessionId);
+  }
   acquireOwner(record: OrgPlanLaunchRecord): boolean {
     return this.activationTransaction(() => {
       const owner = this.workspaceOwner(record.context.workspace.path);

@@ -29,6 +29,10 @@ import { registerStopSession } from './stop-session/endpoint.js';
 import { registerRefreshActivity } from './refresh-activity/endpoint.js';
 import { registerGetRetrievalReadiness } from './get-retrieval-readiness/endpoint.js';
 import { registerCleanTmp } from './clean-tmp/endpoint.js';
+import {
+  WriterAcquisitionError,
+  writerAcquisitionProblem,
+} from './application/writer-acquisition.js';
 
 export function registerSessionRoutes(
   app: FastifyInstance,
@@ -219,6 +223,7 @@ export function registerSessionRoutes(
 }
 
 function safeErrorLabel(error: unknown): string {
+  if (error instanceof WriterAcquisitionError) return writerAcquisitionProblem(error.kind).code;
   if (typeof error === 'object' && error !== null && 'code' in error) {
     const code = (error as { code?: unknown }).code;
     if (typeof code === 'string' && /^[A-Z0-9_]+$/.test(code)) return code;
