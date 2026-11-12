@@ -8,6 +8,16 @@ import { describe, expect, it } from 'vitest';
 import { relayFeedback } from './relay-messages.js';
 
 describe('relayFeedback', () => {
+  it('explains a retained supervisor reservation without exposing runtime details', () => {
+    const result = relayFeedback(
+      Object.assign(new Error('private runtime detail'), { code: 'SESSION_WORKSPACE_LOCKED' }),
+      'SESSION_START_FAILED',
+    );
+    expect(result.code).toBe('SESSION_WORKSPACE_LOCKED');
+    expect(result.message).toContain('An Org-plan supervisor reserves this workspace');
+    expect(result.message).toContain('close it to release the reservation');
+    expect(result.message).not.toContain('private runtime detail');
+  });
   it('maps a recognized stable code', () =>
     expect(relayFeedback(new Error('GIT_CLONE_FAILED'), 'RELAY_UNAVAILABLE')).toEqual({
       code: 'GIT_CLONE_FAILED',

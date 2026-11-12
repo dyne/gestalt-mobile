@@ -44,7 +44,7 @@ export function writerAcquisitionProblem(kind: WriterAcquisitionFailureKind): {
         code: 'SESSION_WORKSPACE_LOCKED',
         retryable: false,
         detail:
-          'An Org-plan supervisor owns this workspace. Continue in its session, or forget that session to release the reservation.',
+          'An Org-plan supervisor owns this workspace. Continue in its session, or close that session to release the reservation.',
       };
     case 'supervisorReplaced':
       return {

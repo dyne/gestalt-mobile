@@ -37,6 +37,28 @@ function record(): OrgPlanLaunchRecord {
   };
 }
 
+it('releases session reservations without erasing history or allowing stale saves to reclaim them', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    migrate(db);
+    const store = new SqliteOrgPlanLaunchStore(db);
+    const initial = record();
+    store.reserve(initial);
+    store.releaseSession(initial.sessionId);
+    expect(store.workspaceOwner('/project')).toBeNull();
+    expect(store.forSession(initial.sessionId)).toEqual(initial);
+    expect(store.save({ ...initial, phase: 'creating' }, 'reserved')).toBe(true);
+    expect(store.workspaceOwner('/project')).toBeNull();
+    const replacement = { ...record(), launchId: 'next', sessionId: 'next' };
+    expect(store.reserve(replacement).kind).toBe('reserved');
+    store.releaseSession(initial.sessionId);
+    expect(store.workspaceOwner('/project')?.sessionId).toBe('next');
+    expect(store.acquireOwner(initial)).toBe(false);
+  } finally {
+    db.close();
+  }
+});
+
 it('reserves overlapping workspaces across distinct plans and releases them with plan ownership', () => {
   const db = new DatabaseSync(':memory:');
   try {

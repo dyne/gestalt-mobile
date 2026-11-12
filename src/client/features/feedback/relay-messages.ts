@@ -25,6 +25,8 @@ const relayMessages = {
     'Session history could not be loaded from its provider. Try again shortly; reopen the session if this persists.',
   SESSION_WRITER_BUSY:
     'This thread is active in another Codex client. Release it there, then retry sending here.',
+  SESSION_WORKSPACE_LOCKED:
+    'An Org-plan supervisor reserves this workspace. Open its session to continue, or close it to release the reservation.',
   SESSION_WORKSPACE_UNAVAILABLE:
     'This session workspace is unavailable. Your message remains in the conversation for copying; restore workspace access before sending again.',
   SESSION_RUNTIME_DEPENDENCY_FAILED:

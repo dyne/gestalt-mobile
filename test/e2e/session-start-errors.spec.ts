@@ -11,6 +11,7 @@ for (const [code, guidance] of [
   ['CODEX_EXECUTOR_MODEL_UNAVAILABLE', 'Choose an available executor model'],
   ['CODEX_MODEL_UNAVAILABLE', 'Choose an available model'],
   ['SESSION_WORKSPACE_UNAVAILABLE', 'temporary ownership could not be confirmed'],
+  ['SESSION_WORKSPACE_LOCKED', 'close it to release the reservation'],
 ]) {
   test(`explains ${code} in the session creation error toast`, async ({ page }) => {
     await mockAuthenticatedStatus(page);

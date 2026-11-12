@@ -21,12 +21,22 @@ export class SqliteSupervisionTakeoverStore implements SupervisionTakeoverStore 
   ) {}
   owner(planIdentity: string): TakeoverClaim | null {
     const row = this.db
-      .prepare('SELECT session_id,epoch,phase FROM org_plan_takeovers WHERE plan_identity=?')
+      .prepare(
+        "SELECT session_id,epoch,phase FROM org_plan_takeovers WHERE plan_identity=? AND phase!='released'",
+      )
       .get(planIdentity) as
       { session_id: string; epoch: number; phase: 'stopping' | 'ready' } | undefined;
     return row
       ? { planIdentity, sessionId: row.session_id, epoch: row.epoch, phase: row.phase }
       : null;
+  }
+  /** Keep the epoch tombstone and retired-writer fences after confirmed runtime release. */
+  releaseSession(sessionId: string): void {
+    this.db
+      .prepare(
+        "UPDATE org_plan_takeovers SET phase='released',epoch=epoch+1 WHERE session_id=? AND phase!='released'",
+      )
+      .run(sessionId);
   }
   retired(planIdentity: string, sessionId: string): boolean {
     return Boolean(
@@ -95,7 +105,10 @@ export class SqliteSupervisionTakeoverStore implements SupervisionTakeoverStore 
           return null;
         }
       }
-      const epoch = previous?.sessionId === sessionId ? previous.epoch : (previous?.epoch ?? 0) + 1;
+      const retained = this.db
+        .prepare('SELECT epoch FROM org_plan_takeovers WHERE plan_identity=?')
+        .get(planIdentity) as { epoch: number } | undefined;
+      const epoch = previous?.sessionId === sessionId ? previous.epoch : (retained?.epoch ?? 0) + 1;
       const phase = previous?.sessionId === sessionId ? previous.phase : 'stopping';
       this.db
         .prepare(

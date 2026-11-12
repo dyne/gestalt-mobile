@@ -27,6 +27,7 @@ describe('SessionStartController', () => {
     ['CODEX_EXECUTOR_MODEL_UNAVAILABLE', 'executor model is unavailable'],
     ['CODEX_MODEL_UNAVAILABLE', 'Codex model is unavailable'],
     ['SESSION_WORKSPACE_UNAVAILABLE', 'temporary ownership could not be confirmed'],
+    ['SESSION_WORKSPACE_LOCKED', 'close it to release the reservation'],
   ])('preserves %s from the API through the start controller to feedback', async (code, reason) => {
     const relay = createRelayClient(
       async () =>

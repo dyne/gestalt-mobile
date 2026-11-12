@@ -336,6 +336,14 @@ the existing session ID; the UI offers an explicit Open action. Child agents do
 not acquire another root-session slot. Separate canonical folders, including
 Git worktrees, remain independent.
 
+Successful Stop/Close also releases that session's Org-plan workspace and
+supervisor-takeover reservations after its owned runtime work and browser
+resources have stopped. Saved history and scratch files remain available.
+Retired-supervisor fences and monotonic takeover epochs survive release, so a
+late callback cannot reclaim a reservation. Stopped plan attachments are display
+history rather than workspace ownership; another session or Execute can use the
+workspace without Forget, including after relay restart.
+
 Every Forget claims a durable workspace operation fence. A second Forget in that
 folder must retry, so concurrent requests cannot both classify themselves as
 intermediate. New sessions and runtime activations for the folder, and new known
