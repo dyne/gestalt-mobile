@@ -305,10 +305,23 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <h2 id="component-versions-title">Versions</h2>
       <dl>
         {#each componentVersions as component (component.id)}
-          <div>
+          <div class:with-status={component.status}>
             <dt>{component.label}</dt>
-            <dd title={component.version ?? 'Version unavailable'}>
+            <dd
+              class:with-status={component.status}
+              title={component.detail ?? component.version ?? 'Version unavailable'}
+            >
               {component.version ?? 'Unavailable'}
+              {#if component.status}
+                · {component.status === 'working'
+                  ? 'Working'
+                  : component.status === 'ready'
+                    ? 'Ready'
+                    : component.status === 'unavailable'
+                      ? 'Unavailable'
+                      : 'Unverified'}
+                {#if component.detail}<small>{component.detail}</small>{/if}
+              {/if}
             </dd>
           </div>
         {/each}
@@ -486,6 +499,26 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     text-align: end;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .component-versions dd.with-status {
+    white-space: normal;
+  }
+
+  .component-versions dl > div.with-status {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .component-versions .with-status dt {
+    overflow-wrap: anywhere;
+  }
+
+  .component-versions dd small {
+    display: block;
+    max-width: 28ch;
+    font-family: var(--theme-font-body);
+    font-size: 0.75rem;
+    overflow-wrap: anywhere;
   }
 
   .xerj-status dl > div {

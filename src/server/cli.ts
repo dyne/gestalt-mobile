@@ -6,6 +6,7 @@
 
 import { execFile } from 'node:child_process';
 import { withoutSessionScratch } from './platform/scratch/child-environment.js';
+import { probePlaywrightComponent } from './platform/codex/playwright-component.js';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -56,6 +57,7 @@ export type CliDependencies = {
   signalSource?: Pick<NodeJS.Process, 'once' | 'removeListener'>;
   probeCodexVersion?: () => Promise<string | null>;
   probeKimiVersion?: () => Promise<string | null>;
+  probePlaywrightComponent?: typeof probePlaywrightComponent;
   runStartupDoctor?: (cwd: string) => Promise<{ ok: boolean; report: string }>;
   compose?: typeof composeRelayApp;
   homeDirectory?: string;
@@ -75,6 +77,12 @@ export function componentVersions(
   mobileVersion: string,
   codexVersion: string | null,
   environment: NodeJS.ProcessEnv = process.env,
+  playwright: ComponentVersion = {
+    id: 'playwright',
+    label: 'Playwright MCP',
+    version: null,
+    status: 'unverified',
+  },
 ): readonly ComponentVersion[] {
   return [
     {
@@ -96,6 +104,7 @@ export function componentVersions(
     { id: 'codex', label: 'Codex CLI', version: codexVersion },
     { id: 'xerj', label: 'xerj', version: managedVersion(environment.GESTALT_XERJ_VERSION) },
     { id: 'serena', label: 'Serena', version: semanticVersion(environment.GESTALT_SERENA_VERSION) },
+    playwright,
     { id: 'uv', label: 'uv', version: semanticVersion(environment.GESTALT_UV_VERSION) },
     {
       id: 'serena-python',
@@ -382,6 +391,10 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
       mobileVersion,
       installedCodexVersion,
       dependencies.environment,
+      await (dependencies.probePlaywrightComponent ?? probePlaywrightComponent)(
+        config.root,
+        dependencies.environment,
+      ),
     ),
     startAppServers: true,
     homeDirectory: dependencies.homeDirectory,

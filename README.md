@@ -33,6 +33,13 @@ browser. Choose **Quit** from the configuration menu and confirm to stop the
 HTTP server and every managed Codex or Kimi process, including running work.
 Pressing Ctrl-C or sending SIGINT or SIGTERM uses the same clean shutdown path.
 
+The header configuration menu lists the installed **Playwright MCP** version,
+Chrome version, and startup readiness. **Working** means an isolated local page
+check passed using installed Chrome; **Ready** means only prerequisites were
+checked (for example, with an older manager). The check does not acquire a
+session browser lease or use its saved profile. This is a startup observation,
+not a continuous browser health monitor.
+
 Use `--icon <path>` to replace the installed PWA application icon with a local
 SVG or PNG. Relative paths resolve from the directory where Mobile is started:
 

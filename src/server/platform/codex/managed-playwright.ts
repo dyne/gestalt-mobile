@@ -28,6 +28,8 @@ export type PlaywrightReadiness = Readonly<{
   chrome: 'ready' | 'unavailable' | 'unknown';
   node: 'ready' | 'unavailable' | 'unknown';
   chromeVersion: string | null;
+  browserTest?: 'passed' | 'failed' | 'not-run';
+  playwrightVersion?: string | null;
 }>;
 const unknownReadiness = (): PlaywrightReadiness => ({
   ready: false,
@@ -85,7 +87,7 @@ export class ManagedPlaywright {
     }
   }
 
-  /** Doctor performs no repair, installation or browser launch. Output never escapes this adapter. */
+  /** Doctor never repairs or installs. --launch explicitly opts into an isolated browser test. */
   async ready(
     manager: string,
     cwd: string,
@@ -161,6 +163,15 @@ export class ManagedPlaywright {
               package: status(value.package?.ready),
               chrome: status(value.chrome?.ready),
               node: status(value.node?.ready),
+              playwrightVersion:
+                typeof value.package?.playwrightVersion === 'string' &&
+                value.package.playwrightVersion.length <= 100 &&
+                /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(value.package.playwrightVersion)
+                  ? value.package.playwrightVersion
+                  : null,
+              browserTest: ['passed', 'failed', 'not-run'].includes(value.browserTest)
+                ? value.browserTest
+                : 'not-run',
               chromeVersion:
                 typeof value.chrome?.version === 'string' &&
                 value.chrome.version.length <= 64 &&

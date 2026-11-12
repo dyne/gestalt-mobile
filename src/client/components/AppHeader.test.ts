@@ -25,6 +25,29 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('AppHeader', () => {
+  it.each(['working', 'ready', 'unavailable', 'unverified'] as const)(
+    'shows Playwright version and %s readiness alongside components',
+    (status) => {
+      render(AppHeader, {
+        theme: 'dyne-org',
+        onthemechange: () => {},
+        componentVersions: [
+          {
+            id: 'playwright',
+            label: 'Playwright MCP',
+            version: '0.0.85',
+            status,
+            detail: 'Browser session has not been tested.',
+          },
+        ],
+      });
+      const versions = screen.getByRole('region', { name: 'Versions', hidden: true });
+      const row = within(versions).getByText('Playwright MCP').nextElementSibling!;
+      expect(row.textContent).toContain('0.0.85');
+      expect(row.textContent).toContain(status[0].toUpperCase() + status.slice(1));
+      expect(row.textContent).toContain('Browser session has not been tested.');
+    },
+  );
   it('places Clean TMP before Upgrade without a confirmation dialog', async () => {
     const oncleantmp = vi.fn(async () => {});
     render(AppHeader, { theme: 'dyne-org', onthemechange: () => {}, oncleantmp });

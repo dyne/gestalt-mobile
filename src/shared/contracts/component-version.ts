@@ -18,4 +18,6 @@ export type ComponentVersion = Readonly<{
     | 'serena-python';
   label: string;
   version: string | null;
+  status?: 'working' | 'ready' | 'unavailable' | 'unverified';
+  detail?: string;
 }>;

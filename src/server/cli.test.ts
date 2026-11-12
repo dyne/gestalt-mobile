@@ -208,6 +208,12 @@ describe('runCli', () => {
         compose,
         probeCodexVersion,
         runStartupDoctor,
+        probePlaywrightComponent: async () => ({
+          id: 'playwright',
+          label: 'Playwright MCP',
+          version: '0.0.85',
+          status: 'ready',
+        }),
         environment: {
           GESTALT_MANAGER_VERSION: '0.1.0',
           GESTALT_AGENTS_VERSION: '2.9.0',
@@ -233,6 +239,7 @@ describe('runCli', () => {
           { id: 'codex', label: 'Codex CLI', version: 'codex-cli 1.2.3' },
           { id: 'xerj', label: 'xerj', version: '1.0.0-rc.87' },
           { id: 'serena', label: 'Serena', version: '1.7.0' },
+          { id: 'playwright', label: 'Playwright MCP', version: '0.0.85', status: 'ready' },
           { id: 'uv', label: 'uv', version: '0.11.12' },
           { id: 'serena-python', label: 'Serena Python', version: '3.13.12' },
         ],
