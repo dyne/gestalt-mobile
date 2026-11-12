@@ -147,6 +147,20 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
     return this.readFromWorkspace(workspace, planName);
   }
 
+  /** Downloads the original Org text through the same bounded, confined reader as the viewer. */
+  async readSource(
+    workspacePath: string,
+    planName: string,
+  ): Promise<{ kind: 'available'; source: string } | { kind: 'missing' | 'unavailable' }> {
+    if (!isPlanPath(planName)) return { kind: 'missing' };
+    const workspace = await this.workspace(workspacePath);
+    if (!workspace) return { kind: 'missing' };
+    const candidate = await this.readCandidate(workspace, planName);
+    return candidate.kind === 'readable'
+      ? { kind: 'available', source: candidate.source }
+      : candidate;
+  }
+
   /** Reuses the exact viewer reader without trusting its cached preview or sourcePath. */
   async readExecution(workspacePath: string, planName: string): Promise<ExecutionPlanRead> {
     if (!isPlanPath(planName)) return { kind: 'missing' };

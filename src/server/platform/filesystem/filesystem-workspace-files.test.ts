@@ -10,6 +10,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  rm,
   realpath,
   rename,
   stat,
@@ -18,7 +19,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 
 import { parseRelativeDirectory } from '../../features/files/domain/relative-directory.js';
 import { FilesystemWorkspaceFiles } from './filesystem-workspace-files.js';
@@ -26,6 +27,74 @@ import { FilesystemWorkspaceFiles } from './filesystem-workspace-files.js';
 const directory = (value: string) => parseRelativeDirectory(value)!;
 
 describe('FilesystemWorkspaceFiles', () => {
+  it('creates the Org upload directory and preserves existing plans with keep-both', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-org-upload-'));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    const files = new FilesystemWorkspaceFiles();
+    const upload = (content: string) =>
+      files.upload(root, {
+        directory: '.gestalt',
+        filename: 'roadmap.org',
+        conflict: 'keep-both',
+        content: Buffer.from(content),
+      });
+    expect(await upload('original')).toMatchObject({
+      kind: 'available',
+      path: '.gestalt/roadmap.org',
+    });
+    const second = await upload('second');
+    expect(second.kind).toBe('available');
+    if (second.kind === 'available') {
+      expect(second.path).not.toBe('.gestalt/roadmap.org');
+      expect(await readFile(join(root, second.path), 'utf8')).toBe('second');
+    }
+    expect(await readFile(join(root, '.gestalt', 'roadmap.org'), 'utf8')).toBe('original');
+    expect(
+      await files.upload(root, {
+        directory: '',
+        filename: 'other.org',
+        conflict: 'reject',
+        content: Buffer.from('chosen root'),
+      }),
+    ).toMatchObject({ kind: 'available', path: 'other.org' });
+    expect(await readFile(join(root, 'other.org'), 'utf8')).toBe('chosen root');
+  });
+
+  it.each(['symlink', 'file'])(
+    'does not upload through a .gestalt %s or accept path traversal',
+    async (kind) => {
+      const root = await mkdtemp(join(tmpdir(), 'gestalt-org-upload-'));
+      onTestFinished(() => rm(root, { recursive: true, force: true }));
+      const workspace = join(root, 'workspace'),
+        outside = join(root, 'outside');
+      await mkdir(workspace);
+      await mkdir(outside);
+      const files = new FilesystemWorkspaceFiles();
+      expect(
+        await files.upload(workspace, {
+          directory: '.gestalt',
+          filename: '../escape.org',
+          conflict: 'keep-both',
+          content: Buffer.from('no'),
+        }),
+      ).toEqual({ kind: 'invalid-destination' });
+      expect(await readdir(workspace)).toEqual([]);
+      if (kind === 'symlink') await symlink(outside, join(workspace, '.gestalt'));
+      else await writeFile(join(workspace, '.gestalt'), 'preserve');
+      expect(
+        await files.upload(workspace, {
+          directory: '.gestalt',
+          filename: 'plan.org',
+          conflict: 'keep-both',
+          content: Buffer.from('no'),
+        }),
+      ).toEqual({ kind: 'invalid-destination' });
+      expect(await readdir(outside)).toEqual([]);
+      if (kind === 'file')
+        expect(await readFile(join(workspace, '.gestalt'), 'utf8')).toBe('preserve');
+    },
+  );
+
   it('rejects folder creation through symlinks and preserves existing targets', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-files-'));
     const outside = await mkdtemp(join(tmpdir(), 'gestalt-files-outside-'));

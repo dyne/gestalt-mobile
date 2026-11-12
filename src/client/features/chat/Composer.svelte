@@ -244,13 +244,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     />
     <p class="upload-hint" aria-live="polite" aria-atomic="true">
       {#if uploading}
-        Uploading files to workspace root…
+        Uploading files…
       {:else if dragDepth > 0}
-        Drop files to upload to workspace root · {MAX_UPLOAD_BYTES / 1024 / 1024} MiB per file
+        Drop files to upload · {MAX_UPLOAD_BYTES / 1024 / 1024} MiB per file
       {:else}
         Upload or drop files · {MAX_UPLOAD_BYTES / 1024 / 1024} MiB per file
       {/if}
     </p>
+    <p class="upload-hint">Org files go to .gestalt/; other files go to the workspace root.</p>
   {/if}
   {#if detached}
     <p id="writer-hint" class="writer-hint">

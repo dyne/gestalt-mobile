@@ -9,6 +9,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import AppControl from '../../components/AppControl.svelte';
   import PlanView from './PlanView.svelte';
   import ExecutePlanAction from './ExecutePlanAction.svelte';
+  import DownloadPlanAction from './DownloadPlanAction.svelte';
   import type {
     OrgPlanReference,
     OrgPlanLaunchResult,
@@ -36,6 +37,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       'prepareOrgPlanSupervision' | 'startOrgPlanSupervision'
     >;
     onexecuteerror?: (message: string) => void;
+    downloadTransport?: Pick<ReturnType<typeof createRelayClient>, 'downloadOrgPlan'>;
+    ondownloaderror?: (message: string) => void;
     onexecuteresult?: (result: OrgPlanLaunchResult) => void;
     catalog: PlansCatalogState;
     state: PlanState | WorkspaceOrgPreview | null;
@@ -53,6 +56,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     executeReference,
     executeTransport,
     onexecuteerror,
+    downloadTransport,
+    ondownloaderror,
     onexecuteresult,
     catalog,
     state: planState,
@@ -202,13 +207,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {/snippet}
 
 {#snippet executeAction()}
-  <ExecutePlanAction
-    reference={executeReference}
-    sourceVersion={planState}
-    transport={executeTransport}
-    onerror={onexecuteerror}
-    onresult={onexecuteresult}
-  />
+  <div class="plan-controls">
+    <DownloadPlanAction
+      reference={executeReference}
+      transport={downloadTransport}
+      onerror={ondownloaderror}
+    />
+    <ExecutePlanAction
+      reference={executeReference}
+      sourceVersion={planState}
+      transport={executeTransport}
+      onerror={onexecuteerror}
+      onresult={onexecuteresult}
+    />
+  </div>
 {/snippet}
 
 {#if planState?.kind === 'org-source'}
@@ -273,6 +285,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {/if}
 
 <style>
+  .plan-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: start;
+    gap: 0.5rem;
+  }
+  @media (max-width: 60rem) {
+    .plan-controls {
+      grid-column: 1 / -1;
+      grid-row: 3;
+    }
+  }
   .plans {
     min-inline-size: 0;
     overflow-wrap: anywhere;

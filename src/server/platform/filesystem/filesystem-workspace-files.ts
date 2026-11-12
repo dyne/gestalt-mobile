@@ -235,6 +235,10 @@ export class FilesystemWorkspaceFiles implements WorkspaceFileSource {
     if (!validName(input.filename)) return { kind: 'invalid-destination' };
     const root = await this.canonicalDirectory(rootPath);
     if (!root) return { kind: 'unreadable' };
+    if (input.directory === '.gestalt' && /\.org$/i.test(input.filename)) {
+      const directory = await this.createDirectory(root, { directory: '', name: '.gestalt' });
+      if (directory.kind !== 'available' && directory.kind !== 'conflict') return directory;
+    }
     const parent = await anchoredDirectory(root, input.directory);
     if (!parent) return { kind: 'invalid-destination' };
     try {

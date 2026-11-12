@@ -3118,6 +3118,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       workspacePlanRoutes: { workspaces, plans: workspacePlanCatalog, archiver: planArchiver },
       prepareOrgPlanRoutes: { prepare: prepareOrgPlan },
       executeOrgPlanRoutes: { startOrgPlanSupervision: startPlanSupervision },
+      downloadOrgPlanRoutes: {
+        resolveReference: (reference) => orgPlanContext.resolveReference(reference),
+        readSource: (workspacePath, planName) =>
+          workspacePlanCatalog.readSource(workspacePath, planName),
+      },
       workspaceFileRoutes: {
         workspaces,
         files: workspaceFiles,

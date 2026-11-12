@@ -203,6 +203,7 @@ export type AppDependencies = {
     ): Promise<import('../shared/contracts/org-plan-execution.js').OrgPlanPreparation>;
   };
   executeOrgPlanRoutes?: import('./features/plans/execute-plan/endpoint.js').ExecuteOrgPlanRoutes;
+  downloadOrgPlanRoutes?: import('./features/plans/download-plan/endpoint.js').DownloadOrgPlanDependencies;
   workspaceFileRoutes?: {
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
     files: WorkspaceFileSource;
