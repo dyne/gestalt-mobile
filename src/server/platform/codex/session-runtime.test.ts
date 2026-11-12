@@ -1549,6 +1549,71 @@ describe('CodexSessionRuntime', () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it.each(['initialize', 'thread/read'])(
+    'cancels a detached history reader stalled in %s and waits for confirmed exit',
+    async (heldMethod) => {
+      const blocked = Promise.withResolvers<unknown>();
+      const released = Promise.withResolvers<void>();
+      let entered = false;
+      const close = vi.fn(() => blocked.reject(new Error('CODEX_APP_SERVER_CLOSED')));
+      const launch = vi.fn(() => ({
+        rpc: {
+          request: async (method: string) => {
+            if (method === heldMethod) {
+              entered = true;
+              return blocked.promise;
+            }
+            return {};
+          },
+          onNotification: () => () => {},
+          onServerRequest: () => () => {},
+        },
+        close,
+        closeAndWait: async () => {
+          close();
+          await released.promise;
+        },
+      }));
+      const runtime = new CodexSessionRuntime(launch);
+      const snapshot = RelaySession.create({
+        id: 'history-reader',
+        provider: 'codex',
+        workspaceId: 'workspace',
+        workspacePath: '/workspace',
+        profile: 'default',
+        effectiveSkillSelection: { skills: [] },
+        now: 'before',
+      }).snapshot;
+      let settled = false;
+      const read = runtime.readHistory({ ...snapshot, threadId: 'durable-thread' });
+      const outcome = read
+        .catch((error: unknown) => error)
+        .finally(() => {
+          settled = true;
+        });
+      try {
+        await vi.waitFor(() => expect(entered).toBe(true));
+        runtime.stopAll();
+        const draining = runtime.drainReleases();
+        await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+        expect(settled).toBe(false);
+        released.resolve();
+        expect(await outcome).toMatchObject({ message: 'CODEX_APP_SERVER_CLOSED' });
+        await draining;
+        await expect(
+          runtime.readHistory({ ...snapshot, threadId: 'durable-thread' }),
+        ).rejects.toThrow('CODEX_APP_SERVER_CLOSED');
+        expect(launch).toHaveBeenCalledOnce();
+      } finally {
+        blocked.reject(new Error('fixture cleanup'));
+        released.resolve();
+        runtime.stopAll();
+        await outcome;
+        await runtime.drainReleases();
+      }
+    },
+  );
+
   it('closes a detached reader when initialization fails', async () => {
     const close = vi.fn();
     const runtime = new CodexSessionRuntime(() => ({

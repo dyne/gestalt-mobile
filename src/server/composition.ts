@@ -3276,9 +3276,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     }
     await detachActiveSessions();
   });
-  app.addHook('onClose', async () => {
+  // HTTP close waits for accepted requests. A provider that never answers a
+  // history RPC must not keep us from reaching the normal runtime cleanup.
+  app.addHook('preClose', async () => {
     closing = true;
     providerRecovery.dispose();
+    runtime?.cancelHistoryReads();
+  });
+  app.addHook('onClose', async () => {
     await hostTests?.close();
     await forgetSessions.drain();
     await retrievalCapability.close?.();
