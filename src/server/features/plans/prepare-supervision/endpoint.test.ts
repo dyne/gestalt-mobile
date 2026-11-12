@@ -114,7 +114,7 @@ it('prepares repeatedly alongside live-plan routes with no activating attachment
       canonicalPath: '/workspace/.gestalt/plan.org',
       revision: 'revision',
     }),
-    runtimeAvailable: async () => true,
+    runtimeAvailable: async () => ({ available: true as const }),
     workspace: async () => ({
       workspace: { id: 'project', name: 'Project', path: '/workspace' },
       revision: 'revision',

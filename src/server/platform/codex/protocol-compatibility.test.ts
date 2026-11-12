@@ -8,28 +8,17 @@ import { describe, expect, it } from 'vitest';
 import { protocolCompatibility } from './protocol-compatibility.js';
 
 describe('protocolCompatibility', () => {
-  it('reports a stable mismatch code', () => {
-    expect(protocolCompatibility('codex-cli 1', 'codex-cli 2')).toEqual({
-      compatible: false,
-      code: 'CODEX_PROTOCOL_MISMATCH',
-    });
+  it.each([
+    'codex-cli 0.1.99',
+    'codex-cli 0.144.3',
+    'codex-cli 0.167.0',
+    'codex-cli 1.0.0',
+    'codex-cli 999.42.0',
+    'custom development build',
+  ])('admits installed Codex %s without a version policy', (version) => {
+    expect(protocolCompatibility(version)).toEqual({ compatible: true });
   });
-
-  it('accepts compatible newer minor and patch versions', () => {
-    expect(protocolCompatibility('codex-cli 0.146.2', 'codex-cli 0.144.5')).toEqual({
-      compatible: true,
-    });
-    expect(protocolCompatibility('codex-cli 1.0.0', 'codex-cli 0.144.5')).toEqual({
-      compatible: false,
-      code: 'CODEX_PROTOCOL_MISMATCH',
-    });
-  });
-
-  it('fails closed for unrelated pre-1.0, invalid, and major versions', () => {
-    for (const installed of ['codex-cli 0.1.99', 'codex-cli 0.149.0', 'unknown', 'codex-cli 1.0.0'])
-      expect(protocolCompatibility(installed, 'codex-cli 0.144.5')).toMatchObject({
-        compatible: false,
-        code: 'CODEX_PROTOCOL_MISMATCH',
-      });
+  it('reports a missing CLI separately from runtime operation failures', () => {
+    expect(protocolCompatibility(null)).toEqual({ compatible: false, code: 'CODEX_NOT_FOUND' });
   });
 });

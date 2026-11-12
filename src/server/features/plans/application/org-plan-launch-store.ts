@@ -44,6 +44,7 @@ export interface OrgPlanLaunchStore {
   find(launchId: string): OrgPlanLaunchRecord | null;
   forSession(sessionId: string): OrgPlanLaunchRecord | null;
   owner(canonicalPath: string): OrgPlanLaunchRecord | null;
+  workspaceOwner(workspacePath: string): OrgPlanLaunchRecord | null;
   reserve(record: OrgPlanLaunchRecord): {
     kind: 'reserved' | 'existing' | 'owned';
     record: OrgPlanLaunchRecord;

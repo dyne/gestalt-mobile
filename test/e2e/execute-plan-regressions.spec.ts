@@ -108,7 +108,12 @@ test('native modal keeps background inert, preserves keyboard order and Escape/C
   expect(state.toggles).toEqual([]);
 });
 
-for (const code of ['INVALID_PLAN', 'NO_REMAINING_WORK', 'CODEX_UNAVAILABLE'] as const) {
+for (const code of [
+  'INVALID_PLAN',
+  'NO_REMAINING_WORK',
+  'CODEX_UNAVAILABLE',
+  'CODEX_NOT_FOUND',
+] as const) {
   test(`authoritative ${code} stays disabled, including unknown eligibility while reading`, async ({
     page,
   }) => {
@@ -117,10 +122,14 @@ for (const code of ['INVALID_PLAN', 'NO_REMAINING_WORK', 'CODEX_UNAVAILABLE'] as
     state.prepareGate = new Promise<void>((resolve) => {
       release = resolve;
     });
+    const reason =
+      code === 'CODEX_NOT_FOUND'
+        ? 'Codex CLI was not found when Mobile started. Install Codex and restart Mobile.'
+        : 'Execution is unavailable for this document.';
     state.blocked = {
       kind: 'blocked',
       code,
-      reason: 'Execution is unavailable for this document.',
+      reason,
     };
     try {
       await page.goto('/');
@@ -130,7 +139,7 @@ for (const code of ['INVALID_PLAN', 'NO_REMAINING_WORK', 'CODEX_UNAVAILABLE'] as
       await expect(execute).toBeDisabled();
       await expect(page.getByText('Checking whether this plan can be executed…')).toBeVisible();
       release();
-      await expect(page.getByText('Execution is unavailable for this document.')).toBeVisible();
+      await expect(page.getByText(reason)).toBeVisible();
       await expect(execute).toBeDisabled();
       expect(await execute.getAttribute('aria-describedby')).toBeTruthy();
       expect(state.launchRequests).toEqual([]);

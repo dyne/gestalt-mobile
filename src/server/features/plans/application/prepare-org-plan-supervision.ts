@@ -29,8 +29,13 @@ export type PrepareOrgPlanDependencies = {
     canonicalPath: string,
     fileRevision: string,
   ): Promise<{ workspace: OrgPlanWorkspace; revision: string } | null>;
-  runtimeAvailable(): Promise<boolean>;
-  owner(canonicalPath: string): Promise<{ sessionId?: string } | null>;
+  runtimeAvailable(): Promise<
+    { available: true } | { available: false; code: 'CODEX_NOT_FOUND'; reason: string }
+  >;
+  owner(
+    canonicalPath: string,
+    workspacePath: string,
+  ): Promise<{ sessionId?: string; reason?: string } | null>;
   policy(plan: SupervisedPlan): ReturnType<typeof assessModelPolicyAdmission>;
   settings(workspacePath: string, skillProfile?: string): Promise<OrgPlanSettingsRead>;
 };
@@ -94,17 +99,27 @@ export async function prepareOrgPlanSupervision(
     return blocked('NO_REMAINING_WORK', 'Every plan step is complete and reviewed.');
   const policy = deps.policy(file.plan);
   if (!policy.allowed) return blocked('MODEL_POLICY_UNAVAILABLE', policy.action);
+  let owner: Awaited<ReturnType<PrepareOrgPlanDependencies['owner']>>;
   try {
-    const owner = await deps.owner(file.canonicalPath);
-    if (owner)
-      return {
-        kind: 'blocked',
-        code: 'ACTIVE_SUPERVISION',
-        reason: 'This plan already has a supervisor. Open its session to continue or recover it.',
-        ...(owner.sessionId ? { existingSessionId: owner.sessionId } : {}),
-      };
-    if (!(await deps.runtimeAvailable()))
-      return blocked('CODEX_UNAVAILABLE', 'Codex supervision is currently unavailable.');
+    owner = await deps.owner(file.canonicalPath, context.workspace.path);
+  } catch {
+    return blocked(
+      'WORKSPACE_UNAVAILABLE',
+      'Plan and workspace ownership could not be verified. Refresh and retry.',
+    );
+  }
+  if (owner)
+    return {
+      kind: 'blocked',
+      code: 'ACTIVE_SUPERVISION',
+      reason:
+        owner.reason ??
+        'This plan already has a supervisor. Open its session to continue or recover it.',
+      ...(owner.sessionId ? { existingSessionId: owner.sessionId } : {}),
+    };
+  try {
+    const runtime = await deps.runtimeAvailable();
+    if (!runtime.available) return blocked(runtime.code, runtime.reason);
   } catch {
     return blocked(
       'CODEX_UNAVAILABLE',

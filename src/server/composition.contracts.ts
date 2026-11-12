@@ -563,7 +563,9 @@ async function createUnauthorizedProductionApp(root: string, dataDir: string) {
   });
 }
 
-async function orgPlanActivationFixture() {
+async function orgPlanActivationFixture(
+  installedCodexVersion: string | null = 'codex-cli 0.144.3',
+) {
   const root = await mkdtemp(join(tmpdir(), 'gestalt-plan-activation-root-'));
   const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-plan-activation-state-'));
   ownTemporaryPaths(root, dataDir);
@@ -594,7 +596,7 @@ async function orgPlanActivationFixture() {
       root,
       dataDir,
       relyingParty,
-      installedCodexVersion: 'codex-cli 0.144.3',
+      installedCodexVersion,
       startAppServers: true,
       sessionModelCatalog: { list: async () => ['gpt-6.1-sol', 'gpt-5.6-terra'] },
       profiles: {
@@ -7305,6 +7307,151 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('lifecycle', () => {
+    it('requires the prior session to stop, then fences it while a supervisor owns its workspace', async () => {
+      const f = await orgPlanActivationFixture('codex-cli 0.167.0');
+      const app = await f.open();
+      try {
+        const idleId = await createComposedSession(app);
+        const payload = await f.prepare(app);
+        const busy = (
+          await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+        ).json();
+        expect(busy).toMatchObject({
+          kind: 'blocked',
+          code: 'WORKSPACE_BUSY',
+          existingSessionId: idleId,
+        });
+        expect(
+          (await app.inject({ method: 'POST', url: `/api/sessions/${idleId}/stop` })).statusCode,
+        ).toBe(202);
+        const launched = (
+          await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+        ).json();
+        expect(launched).toMatchObject({ kind: 'started' });
+        expect(launched.session.id).not.toBe(idleId);
+        const otherTurn = await app.inject({
+          method: 'POST',
+          url: `/api/sessions/${idleId}/turns`,
+          payload: { text: 'Continue work' },
+        });
+        expect(otherTurn.statusCode).toBe(409);
+        expect(otherTurn.json()).toMatchObject({ code: 'SESSION_WORKSPACE_LOCKED' });
+        expect(f.requests('turn/start')).toHaveLength(1);
+        expect(
+          (await app.inject({ method: 'DELETE', url: `/api/sessions/${launched.session.id}` }))
+            .statusCode,
+        ).toBe(204);
+        expect(await createComposedSession(app)).toEqual(expect.any(String));
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('blocks Execute while another session has accepted work in the workspace', async () => {
+      const f = await orgPlanActivationFixture('codex-cli 0.167.0');
+      const app = await f.open();
+      try {
+        const id = await createComposedSession(app);
+        const payload = await f.prepare(app);
+        expect(
+          (
+            await app.inject({
+              method: 'POST',
+              url: `/api/sessions/${id}/turns`,
+              payload: { text: 'Work' },
+            })
+          ).statusCode,
+        ).toBe(202);
+        const launch = (
+          await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+        ).json();
+        expect(launch).toMatchObject({
+          kind: 'blocked',
+          code: 'ACTIVE_SUPERVISION',
+          existingSessionId: id,
+        });
+        expect(launch.reason).toContain('Stop its work');
+        expect((await app.inject('/api/sessions')).json()).toHaveLength(1);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('executes a validated plan on Codex 0.167.0 with supervision instructions and exclusive workspace ownership', async () => {
+      const f = await orgPlanActivationFixture('codex-cli 0.167.0');
+      const app = await f.open();
+      try {
+        const payload = await f.prepare(app);
+        const launched = (
+          await app.inject({ method: 'POST', url: '/api/plans/execute', payload })
+        ).json();
+        expect(launched).toMatchObject({ kind: 'started', bootstrap: { kind: 'accepted' } });
+        const turns = f.requests('turn/start');
+        expect(turns).toHaveLength(1);
+        expect(JSON.stringify(turns[0].params)).toContain('Use $gestalt:org-plan');
+        expect(JSON.stringify(turns[0].params)).toContain('.gestalt/activation.org');
+        const prepare = (
+          await app.inject({
+            method: 'POST',
+            url: '/api/plans/prepare',
+            payload: payload.reference,
+          })
+        ).json();
+        expect(prepare).toMatchObject({
+          kind: 'blocked',
+          code: 'ACTIVE_SUPERVISION',
+          existingSessionId: launched.session.id,
+        });
+        const other = await app.inject({
+          method: 'POST',
+          url: '/api/sessions',
+          payload: {
+            workspaceId: payload.reference.workspaceId,
+            profile: 'default',
+            provider: 'codex',
+            model: 'gpt-6.1-sol',
+          },
+        });
+        expect(other.statusCode).toBe(409);
+        expect(other.json()).toMatchObject({ code: 'SESSION_WORKSPACE_LOCKED' });
+        expect((await app.inject('/api/sessions')).json()).toHaveLength(1);
+        expect(f.requests('thread/start')).toHaveLength(1);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it.each(['codex-cli 0.166.0', 'codex-cli 1.0.0', 'custom development build', null])(
+      'explains the exact Codex admission blocker for %s',
+      async (version) => {
+        const f = await orgPlanActivationFixture(version);
+        const app = await f.open();
+        try {
+          const workspace = (await app.inject('/api/bootstrap'))
+            .json()
+            .workspaces[0].children.find((item: { name: string }) => item.name === 'workspace');
+          const result = (
+            await app.inject({
+              method: 'POST',
+              url: '/api/plans/prepare',
+              payload: {
+                kind: 'workspace',
+                workspaceId: workspace.id,
+                planName: '.gestalt/activation.org',
+              },
+            })
+          ).json();
+          expect(result).toMatchObject(
+            version ? { kind: 'eligible' } : { kind: 'blocked', code: 'CODEX_NOT_FOUND' },
+          );
+          if (!version) expect(result.reason).toContain('not found');
+          expect(f.requests('thread/start')).toHaveLength(0);
+        } finally {
+          await app.close();
+        }
+      },
+    );
+
     it('recovers a published Org-plan supervisor after initial runtime failure without replacing its session', async () => {
       const f = await orgPlanActivationFixture();
       const app = await f.open();
@@ -8148,7 +8295,15 @@ describe('production composition', () => {
                 },
               })
             ).json();
-            expect(nextLaunch).toMatchObject(
+            expect(
+              nextLaunch,
+              JSON.stringify({
+                kind: nextLaunch.kind,
+                stage: nextLaunch.stage,
+                reason: nextLaunch.reason,
+                state: nextLaunch.session?.state,
+              }),
+            ).toMatchObject(
               recoveryScenario === 'uncertain-manual'
                 ? { kind: 'partial', stage: 'bootstrap', bootstrap: { kind: 'pending' } }
                 : { kind: 'started', bootstrap: { kind: 'accepted' } },

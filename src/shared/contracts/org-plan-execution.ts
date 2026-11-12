@@ -114,6 +114,7 @@ export type OrgPlanPreparation =
         | 'INVALID_PLAN'
         | 'NO_REMAINING_WORK'
         | 'CODEX_UNAVAILABLE'
+        | 'CODEX_NOT_FOUND'
         | 'MODEL_POLICY_UNAVAILABLE'
         | 'WORKSPACE_UNAVAILABLE'
         | 'CONTEXT_CHANGED'
