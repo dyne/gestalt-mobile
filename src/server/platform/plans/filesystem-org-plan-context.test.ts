@@ -49,7 +49,7 @@ async function fixture() {
         resolveReference: (ref) => context.resolveReference(ref),
         read: (path, name) => plans.readExecution(path, name),
         workspace: (path, revision) => context.workspace(path, revision),
-        runtimeAvailable: async () => true,
+        runtimeAvailable: async () => ({ available: true }),
         owner: async () => null,
         policy: assessModelPolicyAdmission,
         settings: async () => ({

@@ -203,7 +203,6 @@ import type { ComponentVersion } from '../shared/contracts/component-version.js'
 import type { LlmProvider, ProviderAvailability } from '../shared/contracts/llm-provider.js';
 import { pwaIconUrl, type PwaIcon } from './features/pwa/register-routes.js';
 
-const generatedProtocolVersion = 'codex-cli 0.144.3';
 const checkpointDiagnostic = debuglog('gestalt-mobile:checkpoint');
 const attentionDiagnostic = debuglog('gestalt-mobile:attention');
 
@@ -316,6 +315,37 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const interactions = new SqlitePendingInteractionStore(database);
   const idempotency = new SqliteIdempotencyStore(database);
   const orgPlanLaunches = new SqliteOrgPlanLaunchStore(database);
+  // Admission spans asynchronous provider calls so Execute cannot reserve a workspace mid-start.
+  const workspaceAdmissions = new Map<string, number>();
+  const assertWorkspaceOwner = (session: Pick<RelaySessionSnapshot, 'id' | 'workspacePath'>) => {
+    let owner = orgPlanLaunches.workspaceOwner(session.workspacePath);
+    while (
+      owner &&
+      forgetOperations.find(owner.sessionId)?.phase === 'completed' &&
+      !sessions.find(owner.sessionId) &&
+      !runtime?.ownsWriter(owner.sessionId)
+    ) {
+      orgPlanLaunches.releaseOwner(owner);
+      owner = orgPlanLaunches.workspaceOwner(session.workspacePath);
+    }
+    if (owner && owner.sessionId !== session.id)
+      throw new WriterAcquisitionError('workspaceLocked');
+  };
+  const withWorkspaceAdmission = async <T>(
+    sessionId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    const session = sessions.find(sessionId);
+    if (session) assertWorkspaceOwner(session);
+    workspaceAdmissions.set(sessionId, (workspaceAdmissions.get(sessionId) ?? 0) + 1);
+    try {
+      return await operation();
+    } finally {
+      const count = (workspaceAdmissions.get(sessionId) ?? 1) - 1;
+      if (count) workspaceAdmissions.set(sessionId, count);
+      else workspaceAdmissions.delete(sessionId);
+    }
+  };
   const reconcileOrgPlanReceipt = (sessionId: string) => {
     const record = orgPlanLaunches.forSession(sessionId);
     if (record?.phase !== 'submitting' || !record.bootstrapFingerprint) return;
@@ -564,131 +594,138 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     nextControlId: (sessionId, generation) =>
       `autopilot-${generation}-${createHash('sha256').update(`${sessionId}:${randomUUID()}`).digest('hex').slice(0, 16)}`,
     turnStarter: {
-      start: async (sessionId, controlId, generation, launchIdentity) => {
-        if (supervisorOwnership(sessionId) !== 'owned')
-          throw new Error('AUTOPILOT_START_UNAVAILABLE');
-        const current = () => {
-          const state = autopilotStore.find(sessionId);
-          return Boolean(
-            state &&
-            !pendingRootTurn(sessionId) &&
-            state.requestedEnabled &&
-            state.generation === generation &&
-            state.lastControlId === controlId,
+      start: async (sessionId, controlId, generation, launchIdentity) =>
+        withWorkspaceAdmission(sessionId, async () => {
+          if (supervisorOwnership(sessionId) !== 'owned')
+            throw new Error('AUTOPILOT_START_UNAVAILABLE');
+          const current = () => {
+            const state = autopilotStore.find(sessionId);
+            return Boolean(
+              state &&
+              !pendingRootTurn(sessionId) &&
+              state.requestedEnabled &&
+              state.generation === generation &&
+              state.lastControlId === controlId,
+            );
+          };
+          if (!current()) throw new Error('AUTOPILOT_START_UNAVAILABLE');
+          const session = sessions.find(sessionId);
+          if (
+            !session ||
+            !runtime ||
+            session.activeTurnId ||
+            blockingInteractions(sessionId).length
+          )
+            throw new Error('AUTOPILOT_START_UNAVAILABLE');
+          requireOrgExecutionAdmission(sessionId);
+          if (
+            !current() ||
+            sessions.find(sessionId)?.activeTurnId ||
+            blockingInteractions(sessionId).length
+          )
+            throw new Error('AUTOPILOT_START_UNAVAILABLE');
+          // A relay restart can leave a durable, otherwise eligible session without this
+          // process's writer. Reacquire through the normal ownership boundary before a
+          // synthetic start; never bypass its single-writer and replacement semantics.
+          const writer = await runtime.ensureWriter(session, new Date().toISOString());
+          if (!current() || writer.session.activeTurnId || blockingInteractions(sessionId).length)
+            throw new Error('AUTOPILOT_START_UNAVAILABLE');
+          const selectedPlan = supervisedPlans.find(sessionId);
+          const selectedPlanFence = JSON.stringify(selectedPlan);
+          const selectedPolicy =
+            selectedPlan?.modelPolicyVersion === 1
+              ? selectedPlan.steps[currentExecutableL1Index(selectedPlan)]?.modelPolicy
+              : undefined;
+          if (selectedPolicy) await runtime.validateExecutorPolicy(sessionId, selectedPolicy);
+          await options.autopilotBeforeTurnAccepted?.({ sessionId, controlId });
+          requireOrgExecutionAdmission(sessionId);
+          if (
+            !current() ||
+            JSON.stringify(supervisedPlans.find(sessionId)) !== selectedPlanFence ||
+            sessions.find(sessionId)?.activeTurnId ||
+            blockingInteractions(sessionId).length
+          )
+            throw new Error('AUTOPILOT_START_UNAVAILABLE');
+          const recovery = autopilotStore.find(sessionId);
+          const continuationPrompt = recovery?.providerRetry?.resumeRoot
+            ? providerContinuationPrompt
+            : launchIdentity
+              ? autopilotExecutorLaunchPrompt(launchIdentity, supervisedPlans.find(sessionId))
+              : AUTOPILOT_CONTINUATION_PROMPT;
+          const executorRecovery =
+            recovery?.supervision?.outcome === 'probeRequired' &&
+            recovery.executor?.commands?.some(
+              (command) => command.status === 'issued' && !command.processAction,
+            );
+          const recoveryInstruction = executorRecovery
+            ? ' The previous executor resume has an unconfirmed outcome. Inspect the existing canonical executor and its latest turn before continuing. Preserve its physical identity; do not replay an active turn or replace the executor merely because the resume reply failed. Resolve this probe with verified actionable work, a valid wait lease, or genuine structured attention.'
+            : '';
+          const started = await runtime.startTurn(
+            writer.session,
+            continuationPrompt + recoveryInstruction,
+            controlId,
+            new Date().toISOString(),
           );
-        };
-        if (!current()) throw new Error('AUTOPILOT_START_UNAVAILABLE');
-        const session = sessions.find(sessionId);
-        if (!session || !runtime || session.activeTurnId || blockingInteractions(sessionId).length)
-          throw new Error('AUTOPILOT_START_UNAVAILABLE');
-        requireOrgExecutionAdmission(sessionId);
-        if (
-          !current() ||
-          sessions.find(sessionId)?.activeTurnId ||
-          blockingInteractions(sessionId).length
-        )
-          throw new Error('AUTOPILOT_START_UNAVAILABLE');
-        // A relay restart can leave a durable, otherwise eligible session without this
-        // process's writer. Reacquire through the normal ownership boundary before a
-        // synthetic start; never bypass its single-writer and replacement semantics.
-        const writer = await runtime.ensureWriter(session, new Date().toISOString());
-        if (!current() || writer.session.activeTurnId || blockingInteractions(sessionId).length)
-          throw new Error('AUTOPILOT_START_UNAVAILABLE');
-        const selectedPlan = supervisedPlans.find(sessionId);
-        const selectedPlanFence = JSON.stringify(selectedPlan);
-        const selectedPolicy =
-          selectedPlan?.modelPolicyVersion === 1
-            ? selectedPlan.steps[currentExecutableL1Index(selectedPlan)]?.modelPolicy
-            : undefined;
-        if (selectedPolicy) await runtime.validateExecutorPolicy(sessionId, selectedPolicy);
-        await options.autopilotBeforeTurnAccepted?.({ sessionId, controlId });
-        requireOrgExecutionAdmission(sessionId);
-        if (
-          !current() ||
-          JSON.stringify(supervisedPlans.find(sessionId)) !== selectedPlanFence ||
-          sessions.find(sessionId)?.activeTurnId ||
-          blockingInteractions(sessionId).length
-        )
-          throw new Error('AUTOPILOT_START_UNAVAILABLE');
-        const recovery = autopilotStore.find(sessionId);
-        const continuationPrompt = recovery?.providerRetry?.resumeRoot
-          ? providerContinuationPrompt
-          : launchIdentity
-            ? autopilotExecutorLaunchPrompt(launchIdentity, supervisedPlans.find(sessionId))
-            : AUTOPILOT_CONTINUATION_PROMPT;
-        const executorRecovery =
-          recovery?.supervision?.outcome === 'probeRequired' &&
-          recovery.executor?.commands?.some(
-            (command) => command.status === 'issued' && !command.processAction,
-          );
-        const recoveryInstruction = executorRecovery
-          ? ' The previous executor resume has an unconfirmed outcome. Inspect the existing canonical executor and its latest turn before continuing. Preserve its physical identity; do not replay an active turn or replace the executor merely because the resume reply failed. Resolve this probe with verified actionable work, a valid wait lease, or genuine structured attention.'
-          : '';
-        const started = await runtime.startTurn(
-          writer.session,
-          continuationPrompt + recoveryInstruction,
-          controlId,
-          new Date().toISOString(),
-        );
-        if (!started.activeTurnId) throw new Error('AUTOPILOT_START_UNAVAILABLE');
-        sessions.save(started);
-        await options.autopilotAfterTurnAccepted?.({
-          sessionId,
-          controlId,
-          turnId: started.activeTurnId,
-        });
-        activity.observe({
-          sessionId,
-          occurredAt: started.updatedAt,
-          kind: 'turnStarted',
-          ...(started.threadId ? { threadId: started.threadId } : {}),
-          ...(started.activeTurnId ? { turnId: started.activeTurnId } : {}),
-        });
-      },
+          if (!started.activeTurnId) throw new Error('AUTOPILOT_START_UNAVAILABLE');
+          sessions.save(started);
+          await options.autopilotAfterTurnAccepted?.({
+            sessionId,
+            controlId,
+            turnId: started.activeTurnId,
+          });
+          activity.observe({
+            sessionId,
+            occurredAt: started.updatedAt,
+            kind: 'turnStarted',
+            ...(started.threadId ? { threadId: started.threadId } : {}),
+            ...(started.activeTurnId ? { turnId: started.activeTurnId } : {}),
+          });
+        }),
     },
     executorController: {
-      resume: async (sessionId, threadId, generation, trigger) => {
-        if (supervisorOwnership(sessionId) !== 'owned')
-          throw new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE');
-        const session = sessions.find(sessionId);
-        if (!session || !runtime || blockingInteractions(sessionId).length)
-          throw new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE');
-        requireOrgExecutionAdmission(sessionId);
-        const writer = await runtime.ensureWriter(session, new Date().toISOString());
-        if (blockingInteractions(sessionId).length)
-          throw new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE');
-        const context =
-          trigger.kind === 'processExited'
-            ? ` Process result ${trigger.resultArtifact} exited and is ready in this executor history.`
-            : trigger.kind === 'processResourceLimit'
-              ? ` Process ${trigger.processId} exceeded its explicit resource budget and was terminated; diagnose before retrying.`
-              : '';
-        const clientId = `autopilot-executor-${generation}-${createHash('sha256')
-          .update(`${sessionId}:${threadId}:${generation}:${randomUUID()}`)
-          .digest('hex')
-          .slice(0, 16)}`;
-        let turnId: string;
-        try {
-          turnId = await runtime.startExecutorTurn(
-            writer.session,
+      resume: async (sessionId, threadId, generation, trigger) =>
+        withWorkspaceAdmission(sessionId, async () => {
+          if (supervisorOwnership(sessionId) !== 'owned')
+            throw new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE');
+          const session = sessions.find(sessionId);
+          if (!session || !runtime || blockingInteractions(sessionId).length)
+            throw new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE');
+          requireOrgExecutionAdmission(sessionId);
+          const writer = await runtime.ensureWriter(session, new Date().toISOString());
+          if (blockingInteractions(sessionId).length)
+            throw new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE');
+          const context =
+            trigger.kind === 'processExited'
+              ? ` Process result ${trigger.resultArtifact} exited and is ready in this executor history.`
+              : trigger.kind === 'processResourceLimit'
+                ? ` Process ${trigger.processId} exceeded its explicit resource budget and was terminated; diagnose before retrying.`
+                : '';
+          const clientId = `autopilot-executor-${generation}-${createHash('sha256')
+            .update(`${sessionId}:${threadId}:${generation}:${randomUUID()}`)
+            .digest('hex')
+            .slice(0, 16)}`;
+          let turnId: string;
+          try {
+            turnId = await runtime.startExecutorTurn(
+              writer.session,
+              threadId,
+              `${AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT}${context}`,
+              clientId,
+            );
+          } catch (error) {
+            // A confirmed app-server missing-rollout response is a rejection;
+            // transport loss remains ambiguous and must retain the issued fence.
+            if (isMissingCodexThreadRollout(error)) throw new Error('AUTOPILOT_EXECUTOR_REJECTED');
+            throw error;
+          }
+          activity.observe({
+            sessionId,
+            occurredAt: new Date().toISOString(),
+            kind: 'turnStarted',
             threadId,
-            `${AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT}${context}`,
-            clientId,
-          );
-        } catch (error) {
-          // A confirmed app-server missing-rollout response is a rejection;
-          // transport loss remains ambiguous and must retain the issued fence.
-          if (isMissingCodexThreadRollout(error)) throw new Error('AUTOPILOT_EXECUTOR_REJECTED');
-          throw error;
-        }
-        activity.observe({
-          sessionId,
-          occurredAt: new Date().toISOString(),
-          kind: 'turnStarted',
-          threadId,
-          turnId,
-        });
-      },
+            turnId,
+          });
+        }),
       refresh: (sessionId) => activity.refresh(sessionId),
       interrupt: async (sessionId, threadId) => {
         const session = sessions.find(sessionId);
@@ -918,7 +955,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       ? { ...session, executionPolicy, updatedAt: new Date().toISOString() }
       : session;
   };
-  const protocol = protocolCompatibility(options.installedCodexVersion, generatedProtocolVersion);
+  const protocol = protocolCompatibility(options.installedCodexVersion);
   const providerAvailability: ProviderAvailability = {
     codex: {
       available: options.installedCodexVersion !== null && protocol.compatible,
@@ -1197,24 +1234,25 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         const timer = setTimeout(callback, delay);
         return () => clearTimeout(timer);
       }),
-    start: async (session, current) => {
-      if (!runtime || !current()) throw new Error('PROVIDER_RETRY_CANCELLED');
-      const started = await runtime.startTurn(
-        session,
-        providerContinuationPrompt,
-        `provider-retry-${randomUUID()}`,
-        new Date().toISOString(),
-        current,
-      );
-      saveSession(started);
-      activity.observe({
-        sessionId: started.id,
-        occurredAt: started.updatedAt,
-        kind: 'turnStarted',
-        threadId: started.threadId!,
-        turnId: started.activeTurnId!,
-      });
-    },
+    start: async (session, current) =>
+      withWorkspaceAdmission(session.id, async () => {
+        if (!runtime || !current()) throw new Error('PROVIDER_RETRY_CANCELLED');
+        const started = await runtime.startTurn(
+          session,
+          providerContinuationPrompt,
+          `provider-retry-${randomUUID()}`,
+          new Date().toISOString(),
+          current,
+        );
+        saveSession(started);
+        activity.observe({
+          sessionId: started.id,
+          occurredAt: started.updatedAt,
+          kind: 'turnStarted',
+          threadId: started.threadId!,
+          turnId: started.activeTurnId!,
+        });
+      }),
     publish: (id, type, payload) => {
       events.publish(journal.append(id, type, payload, new Date().toISOString()));
     },
@@ -2063,6 +2101,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     commit?: () => void,
   ) =>
     withScratchContainment(session.workspacePath, () => {
+      assertWorkspaceOwner(session);
       beforeCommit?.();
       if (commit) commit();
       else saveSession(session);
@@ -2219,32 +2258,33 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       guidance: (sessionId) => {
         const session = sessions.find(sessionId);
         if (!runtime || !session) return null;
-        return async (text, operationKey) => {
-          const writer = await runtime!.ensureWriter(session, new Date().toISOString());
-          if (writer.session.activeTurnId)
-            await runtime!.queueTurnInput(
-              writer.session,
-              writer.session.activeTurnId,
-              text,
-              operationKey,
-            );
-          else {
-            const started = await runtime!.startTurn(
-              writer.session,
-              text,
-              operationKey,
-              new Date().toISOString(),
-            );
-            sessions.save(started);
-            activity.observe({
-              sessionId,
-              occurredAt: started.updatedAt,
-              kind: 'turnStarted',
-              threadId: started.threadId!,
-              turnId: started.activeTurnId!,
-            });
-          }
-        };
+        return async (text, operationKey) =>
+          withWorkspaceAdmission(sessionId, async () => {
+            const writer = await runtime!.ensureWriter(session, new Date().toISOString());
+            if (writer.session.activeTurnId)
+              await runtime!.queueTurnInput(
+                writer.session,
+                writer.session.activeTurnId,
+                text,
+                operationKey,
+              );
+            else {
+              const started = await runtime!.startTurn(
+                writer.session,
+                text,
+                operationKey,
+                new Date().toISOString(),
+              );
+              sessions.save(started);
+              activity.observe({
+                sessionId,
+                occurredAt: started.updatedAt,
+                kind: 'turnStarted',
+                threadId: started.threadId!,
+                turnId: started.activeTurnId!,
+              });
+            }
+          });
       },
     },
     policy: {
@@ -2285,11 +2325,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     activate:
       runtime || kimiRuntime
         ? async (session) => {
+            assertWorkspaceOwner(session);
             const now = new Date().toISOString();
             dismissPendingInteractions(session.id, now);
             const owner = ownerRuntime(session);
             if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
-            return owner.start(session, now);
+            return withWorkspaceAdmission(session.id, () => owner.start(session, now));
           }
         : undefined,
   };
@@ -2311,47 +2352,49 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           record.phase,
         );
     },
-    start: async (session, text, clientUserMessageId) => {
-      providerRecovery.cancel(session.id);
-      autopilot.manualSend(session.id);
-      const owner = ownerRuntime(session);
-      if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
-      if (session.provider === 'codex' && runtime)
-        return runtime.startTurn(
-          session,
-          text,
-          clientUserMessageId,
-          new Date().toISOString(),
-          () => {
-            const current = sessions.find(session.id);
-            return Boolean(
-              current?.desiredState === 'active' &&
-              current.threadId === session.threadId &&
-              !forgetOperations.find(session.id),
-            );
-          },
-        );
-      return owner.startTurn(session, text, clientUserMessageId, new Date().toISOString());
-    },
+    start: async (session, text, clientUserMessageId) =>
+      withWorkspaceAdmission(session.id, async () => {
+        providerRecovery.cancel(session.id);
+        autopilot.manualSend(session.id);
+        const owner = ownerRuntime(session);
+        if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
+        if (session.provider === 'codex' && runtime)
+          return runtime.startTurn(
+            session,
+            text,
+            clientUserMessageId,
+            new Date().toISOString(),
+            () => {
+              const current = sessions.find(session.id);
+              return Boolean(
+                current?.desiredState === 'active' &&
+                current.threadId === session.threadId &&
+                !forgetOperations.find(session.id),
+              );
+            },
+          );
+        return owner.startTurn(session, text, clientUserMessageId, new Date().toISOString());
+      }),
     ensureWriter:
       runtime || kimiRuntime
-        ? async (session) => {
-            if (supervisorOwnership(session.id) === 'replaced')
-              throw new WriterAcquisitionError('supervisorReplaced');
-            dismissPendingInteractions(session.id, new Date().toISOString());
-            const owner = ownerRuntime(session);
-            if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
-            if (!session.threadId && orgPlanLaunches.forSession(session.id))
-              return {
-                session: await activateInitialPlanSession(session),
-                replacementCreated: false,
-                persisted: true,
-              };
-            return owner.ensureWriter(
-              await recoverExecutionPolicy(session),
-              new Date().toISOString(),
-            );
-          }
+        ? async (session) =>
+            withWorkspaceAdmission(session.id, async () => {
+              if (supervisorOwnership(session.id) === 'replaced')
+                throw new WriterAcquisitionError('supervisorReplaced');
+              dismissPendingInteractions(session.id, new Date().toISOString());
+              const owner = ownerRuntime(session);
+              if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
+              if (!session.threadId && orgPlanLaunches.forSession(session.id))
+                return {
+                  session: await activateInitialPlanSession(session),
+                  replacementCreated: false,
+                  persisted: true,
+                };
+              return owner.ensureWriter(
+                await recoverExecutionPolicy(session),
+                new Date().toISOString(),
+              );
+            })
         : undefined,
     releaseWriter:
       runtime || kimiRuntime
@@ -2418,6 +2461,36 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     forgetOperations.find(record.sessionId)?.phase === 'completed' &&
     !sessions.find(record.sessionId) &&
     !runtime?.ownsWriter(record.sessionId);
+  const workspaceBusy = (workspacePath: string) => {
+    const session = sessions.list().find((session) => {
+      if (
+        !within(workspacePath, session.workspacePath) &&
+        !within(session.workspacePath, workspacePath)
+      )
+        return false;
+      const snapshot = activity.snapshot(session.id, new Date().toISOString());
+      return Boolean(
+        session.activeTurnId ||
+        pendingRootTurn(session.id) ||
+        workspaceAdmissions.has(session.id) ||
+        orgPlanStarting.has(session.id) ||
+        snapshot.subagents.some(
+          (agent) =>
+            ['working', 'awaitingAgent'].includes(agent.state) ||
+            agent.ownedProcesses?.some((process) =>
+              ['running', 'detached-active'].includes(process.state),
+            ),
+        ),
+      );
+    });
+    return session
+      ? {
+          sessionId: session.id,
+          reason:
+            'Another session is working in this workspace. Stop its work before starting a supervisor.',
+        }
+      : null;
+  };
   const prepareOrgPlan = (
     reference: import('../shared/contracts/org-plan-execution.js').OrgPlanReference,
     expectedRevision?: string,
@@ -2431,7 +2504,15 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         workspace: (path, revision) => orgPlanContext.workspace(path, revision),
         read: (workspacePath, planName) =>
           workspacePlanCatalog.readExecution(workspacePath, planName),
-        runtimeAvailable: async () => providerAvailability.codex.available,
+        runtimeAvailable: async () =>
+          protocol.compatible
+            ? { available: true }
+            : {
+                available: false,
+                code: protocol.code!,
+                reason:
+                  'Codex CLI was not found when Mobile started. Install Codex and restart Mobile.',
+              },
         policy: assessModelPolicyAdmission,
         settings: (workspacePath, selectedProfile) =>
           prepareOrgPlanSettings(
@@ -2446,8 +2527,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             },
             selectedProfile,
           ),
-        owner: async (canonicalPath) => {
-          const pending = orgPlanLaunches.owner(canonicalPath);
+        owner: async (canonicalPath, workspacePath) => {
+          const pending =
+            orgPlanLaunches.owner(canonicalPath) ?? orgPlanLaunches.workspaceOwner(workspacePath);
           const ownUnpublished =
             pending &&
             ownUnpublishedLaunchId &&
@@ -2456,7 +2538,13 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             !runtime?.ownsWriter(pending.sessionId) &&
             ['reserved', 'creating'].includes(pending.phase);
           if (pending && !reclaimableLaunchOwner(pending) && !ownUnpublished)
-            return sessions.find(pending.sessionId) ? { sessionId: pending.sessionId } : {};
+            return {
+              ...(sessions.find(pending.sessionId) ? { sessionId: pending.sessionId } : {}),
+              reason:
+                'This plan or an overlapping workspace is reserved by another supervisor. Open its session to continue, or forget it to release the reservation.',
+            };
+          const busy = workspaceBusy(workspacePath);
+          if (busy && busy.sessionId !== pending?.sessionId) return busy;
           const identity = createHash('sha256').update(canonicalPath).digest('hex');
           const owner = sessions.list().find((session) => {
             if (!session.lastOrgPlan?.attached || session.lastOrgPlan.path !== canonicalPath)
@@ -2481,9 +2569,13 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       prepare: prepareOrgPlan,
       createId: randomUUID,
       launches: orgPlanLaunches,
-      reclaimForgottenOwner: (path) => {
+      workspaceBusy,
+      reclaimForgottenOwner: (path, workspacePath) => {
         const record = orgPlanLaunches.owner(path);
         if (record && reclaimableLaunchOwner(record)) orgPlanLaunches.releaseOwner(record);
+        const workspaceOwner = orgPlanLaunches.workspaceOwner(workspacePath);
+        if (workspaceOwner && reclaimableLaunchOwner(workspaceOwner))
+          orgPlanLaunches.releaseOwner(workspaceOwner);
       },
       authorizeReplay: async (record) => {
         try {
@@ -2647,7 +2739,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             version: '0.1.0',
             codex: {
               installedVersion: options.installedCodexVersion,
-              protocolVersion: generatedProtocolVersion,
+              protocolVersion: null,
               compatible: protocol.compatible,
             },
             providers: providerAvailability,

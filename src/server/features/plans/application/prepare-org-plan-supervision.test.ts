@@ -47,7 +47,7 @@ function dependencies(text = source()): PrepareOrgPlanDependencies {
         ? { ...parsed, canonicalPath: '/workspace/.gestalt/plan.org', revision: 'revision' }
         : { kind: 'invalid' as const, reason: parsed.reason },
     ),
-    runtimeAvailable: vi.fn(async () => true),
+    runtimeAvailable: vi.fn(async () => ({ available: true as const })),
     workspace: vi.fn(async () => ({
       workspace: { id: 'project', name: 'Project', path: '/workspace' },
       revision: 'revision',
@@ -70,6 +70,17 @@ function dependencies(text = source()): PrepareOrgPlanDependencies {
 }
 
 describe('prepareOrgPlanSupervision', () => {
+  it('distinguishes an ownership lookup failure from a Codex runtime failure', async () => {
+    const deps = dependencies();
+    deps.owner = async () => {
+      throw new Error('ownership unavailable');
+    };
+    expect(await prepareOrgPlanSupervision(reference, deps)).toMatchObject({
+      code: 'WORKSPACE_UNAVAILABLE',
+      reason: expect.stringContaining('ownership could not be verified'),
+    });
+    expect(deps.runtimeAvailable).not.toHaveBeenCalled();
+  });
   it.each([
     ['TODO', 'UNREVIEWED'],
     ['WIP', 'UNREVIEWED'],
@@ -126,9 +137,14 @@ describe('prepareOrgPlanSupervision', () => {
       code: 'REFERENCE_UNAVAILABLE',
     });
     const runtime = dependencies();
-    runtime.runtimeAvailable = async () => false;
+    runtime.runtimeAvailable = async () => ({
+      available: false,
+      code: 'CODEX_NOT_FOUND',
+      reason: 'Codex CLI was not found when Mobile started.',
+    });
     expect(await prepareOrgPlanSupervision(reference, runtime)).toMatchObject({
-      code: 'CODEX_UNAVAILABLE',
+      code: 'CODEX_NOT_FOUND',
+      reason: 'Codex CLI was not found when Mobile started.',
     });
     const owned = dependencies();
     owned.owner = async () => ({ sessionId: 'existing' });

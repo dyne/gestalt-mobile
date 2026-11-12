@@ -37,6 +37,44 @@ function record(): OrgPlanLaunchRecord {
   };
 }
 
+it('reserves overlapping workspaces across distinct plans and releases them with plan ownership', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    migrate(db);
+    const first = new SqliteOrgPlanLaunchStore(db);
+    const second = new SqliteOrgPlanLaunchStore(db);
+    const initial = record();
+    first.reserve(initial);
+    for (const path of ['/project', '/project/child', '/']) {
+      const next = record();
+      next.launchId = `other-${path}`;
+      next.sessionId = `other-${path}`;
+      next.canonicalPath = `${path}/other.org`;
+      next.context = { ...next.context, workspace: { ...next.context.workspace, path } };
+      expect(second.reserve(next)).toMatchObject({
+        kind: 'owned',
+        record: { sessionId: initial.sessionId },
+      });
+    }
+    const sibling = record();
+    sibling.launchId = 'sibling';
+    sibling.sessionId = 'sibling';
+    sibling.canonicalPath = '/project-other/plan.org';
+    sibling.context = {
+      ...sibling.context,
+      workspace: { ...sibling.context.workspace, path: '/project-other' },
+    };
+    expect(second.reserve(sibling).kind).toBe('reserved');
+    first.releaseOwner(initial);
+    expect(second.workspaceOwner('/project')).toBeNull();
+    const replacement = { ...record(), launchId: 'replacement', sessionId: 'replacement' };
+    expect(second.reserve(replacement).kind).toBe('reserved');
+    expect(first.acquireOwner(initial)).toBe(false);
+  } finally {
+    db.close();
+  }
+});
+
 it('fences canonical owners and conditional stages across independent application store instances', () => {
   const db = new DatabaseSync(':memory:');
   try {

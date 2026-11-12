@@ -10,6 +10,10 @@ import { parseStartSessionRequest } from './request.js';
 import { startSession } from './use-case.js';
 import { SkillProfileError } from '../../skills/model/errors.js';
 import { problem } from '../../../platform/http/problem.js';
+import {
+  WriterAcquisitionError,
+  writerAcquisitionProblem,
+} from '../application/writer-acquisition.js';
 
 export function registerStartSession(
   app: FastifyInstance,
@@ -40,6 +44,13 @@ export function registerStartSession(
       started = await startSession(body, deps);
     } catch (error) {
       deps.reportFailure?.('start-session', error);
+      if (error instanceof WriterAcquisitionError) {
+        const failure = writerAcquisitionProblem(error.kind);
+        return reply
+          .code(failure.status)
+          .type('application/problem+json')
+          .send(problem(failure.code, failure.status, failure.detail, failure.retryable));
+      }
       if (error instanceof Error && error.message === 'CODEX_EXECUTOR_MODEL_UNAVAILABLE')
         return reply
           .code(400)

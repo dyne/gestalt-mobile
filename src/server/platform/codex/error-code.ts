@@ -4,10 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-export function protocolErrorCode(
-  installed: string | null,
-  expected: string | null,
-): 'CODEX_NOT_FOUND' | 'CODEX_PROTOCOL_MISMATCH' | null {
+export function protocolErrorCode(installed: string | null): 'CODEX_NOT_FOUND' | null {
   if (!installed) return 'CODEX_NOT_FOUND';
-  return installed === expected ? null : 'CODEX_PROTOCOL_MISMATCH';
+  return null;
 }

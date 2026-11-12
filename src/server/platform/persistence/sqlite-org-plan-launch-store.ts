@@ -5,6 +5,7 @@
  */
 
 import type { DatabaseSync } from 'node:sqlite';
+import { relative, isAbsolute } from 'node:path';
 import type {
   OrgPlanLaunchPhase,
   OrgPlanLaunchRecord,
@@ -36,24 +37,46 @@ export class SqliteOrgPlanLaunchStore implements OrgPlanLaunchStore {
         .get(sessionId),
     );
   }
-  reserve(record: OrgPlanLaunchRecord): ReturnType<OrgPlanLaunchStore['reserve']> {
-    const inserted = this.db
-      .prepare(
-        'INSERT OR IGNORE INTO org_plan_launches (launch_id,canonical_path,session_id,phase,record_json) VALUES (?,?,?,?,?)',
+  workspaceOwner(workspacePath: string): OrgPlanLaunchRecord | null {
+    const records = this.db
+      .prepare('SELECT record_json FROM org_plan_launches WHERE canonical_path IS NOT NULL')
+      .all();
+    for (const row of records) {
+      const record = decode(row)!;
+      const overlaps = (parent: string, child: string) => {
+        const path = relative(parent, child);
+        return path === '' || (path !== '..' && !path.startsWith('../') && !isAbsolute(path));
+      };
+      if (
+        overlaps(record.context.workspace.path, workspacePath) ||
+        overlaps(workspacePath, record.context.workspace.path)
       )
-      .run(
-        record.launchId,
-        record.canonicalPath,
-        record.sessionId,
-        record.phase,
-        JSON.stringify(record),
-      );
-    if (inserted.changes === 1) return { kind: 'reserved', record };
-    const existing = this.find(record.launchId);
-    if (existing) return { kind: 'existing', record: existing };
-    const owner = this.owner(record.canonicalPath);
-    if (!owner) throw new Error('ORG_PLAN_RESERVATION_CONFLICT');
-    return { kind: 'owned', record: owner };
+        return record;
+    }
+    return null;
+  }
+  reserve(record: OrgPlanLaunchRecord): ReturnType<OrgPlanLaunchStore['reserve']> {
+    return this.activationTransaction(() => {
+      const existing = this.find(record.launchId);
+      if (existing) return { kind: 'existing', record: existing };
+      const workspaceOwner = this.workspaceOwner(record.context.workspace.path);
+      if (workspaceOwner) return { kind: 'owned', record: workspaceOwner };
+      const inserted = this.db
+        .prepare(
+          'INSERT OR IGNORE INTO org_plan_launches (launch_id,canonical_path,session_id,phase,record_json) VALUES (?,?,?,?,?)',
+        )
+        .run(
+          record.launchId,
+          record.canonicalPath,
+          record.sessionId,
+          record.phase,
+          JSON.stringify(record),
+        );
+      if (inserted.changes === 1) return { kind: 'reserved', record };
+      const owner = this.owner(record.canonicalPath);
+      if (!owner) throw new Error('ORG_PLAN_RESERVATION_CONFLICT');
+      return { kind: 'owned', record: owner };
+    });
   }
   save(record: OrgPlanLaunchRecord, expected: OrgPlanLaunchPhase): boolean {
     return (
@@ -79,12 +102,16 @@ export class SqliteOrgPlanLaunchStore implements OrgPlanLaunchStore {
       .run(record.launchId, record.sessionId, record.canonicalPath);
   }
   acquireOwner(record: OrgPlanLaunchRecord): boolean {
-    this.db
-      .prepare(
-        'UPDATE OR IGNORE org_plan_launches SET canonical_path=? WHERE launch_id=? AND session_id=? AND canonical_path IS NULL',
-      )
-      .run(record.canonicalPath, record.launchId, record.sessionId);
-    return this.owner(record.canonicalPath)?.launchId === record.launchId;
+    return this.activationTransaction(() => {
+      const owner = this.workspaceOwner(record.context.workspace.path);
+      if (owner && owner.launchId !== record.launchId) return false;
+      this.db
+        .prepare(
+          'UPDATE OR IGNORE org_plan_launches SET canonical_path=? WHERE launch_id=? AND session_id=? AND canonical_path IS NULL',
+        )
+        .run(record.canonicalPath, record.launchId, record.sessionId);
+      return this.owner(record.canonicalPath)?.launchId === record.launchId;
+    });
   }
   publishSession(
     record: OrgPlanLaunchRecord,

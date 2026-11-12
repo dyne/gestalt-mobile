@@ -8,6 +8,7 @@ import type { RelaySessionSnapshot } from '../model/relay-session.js';
 
 /** Neutral failures exposed by the writer-acquisition port, never raw Codex errors. */
 export type WriterAcquisitionFailureKind =
+  | 'workspaceLocked'
   | 'writerBusy'
   | 'supervisorReplaced'
   | 'rolloutMissing'
@@ -37,6 +38,14 @@ export function writerAcquisitionProblem(kind: WriterAcquisitionFailureKind): {
   detail: string;
 } {
   switch (kind) {
+    case 'workspaceLocked':
+      return {
+        status: 409,
+        code: 'SESSION_WORKSPACE_LOCKED',
+        retryable: false,
+        detail:
+          'An Org-plan supervisor owns this workspace. Continue in its session, or forget that session to release the reservation.',
+      };
     case 'supervisorReplaced':
       return {
         status: 409,

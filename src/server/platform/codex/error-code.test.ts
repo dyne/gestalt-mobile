@@ -8,5 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { protocolErrorCode } from './error-code.js';
 describe('protocolErrorCode', () => {
   it('uses a stable missing-Codex code', () =>
-    expect(protocolErrorCode(null, 'v')).toBe('CODEX_NOT_FOUND'));
+    expect(protocolErrorCode(null)).toBe('CODEX_NOT_FOUND'));
+  it('does not reject an installed CLI based on version text', () =>
+    expect(protocolErrorCode('codex-cli 999.0.0')).toBeNull());
 });

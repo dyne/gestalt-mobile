@@ -29,7 +29,7 @@ or filesystem state.
 
 ## Codex compatibility
 
-The relay uses a narrow handwritten Codex app-server adapter rather than checked-in generated protocol bindings. Runtime startup reports incompatible Codex CLI versions.
+The relay uses a narrow handwritten Codex app-server adapter rather than checked-in generated protocol bindings. Use any installed Codex CLI without version pinning or a version admission policy. Report actual runtime handshake, operation, and capability failures.
 
 ## Kimi compatibility
 

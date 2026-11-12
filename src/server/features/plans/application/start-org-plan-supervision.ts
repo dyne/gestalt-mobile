@@ -34,7 +34,8 @@ export type StartOrgPlanSupervisionDependencies = {
   captureSkills(
     context: Extract<OrgPlanPreparation, { kind: 'eligible' }>,
   ): Promise<EffectiveSkillSelection>;
-  reclaimForgottenOwner?(canonicalPath: string): void;
+  reclaimForgottenOwner?(canonicalPath: string, workspacePath: string): void;
+  workspaceBusy?(workspacePath: string): { sessionId: string; reason: string } | null;
   createId(): string;
   launches: OrgPlanLaunchStore;
   sessions: {
@@ -106,7 +107,15 @@ export async function startOrgPlanSupervision(
         code: 'GESTALT_CAPABILITIES_UNAVAILABLE',
         reason: 'The Org-plan skill changed before launch. Refresh and confirm again.',
       };
-    deps.reclaimForgottenOwner?.(context.sourcePath);
+    deps.reclaimForgottenOwner?.(context.sourcePath, context.workspace.path);
+    const busy = deps.workspaceBusy?.(context.workspace.path);
+    if (busy)
+      return {
+        kind: 'blocked',
+        code: 'ACTIVE_SUPERVISION',
+        reason: busy.reason,
+        existingSessionId: busy.sessionId,
+      };
     const reservation = deps.launches.reserve({
       launchId: input.launchId,
       requestFingerprint: fingerprint,
@@ -124,7 +133,7 @@ export async function startOrgPlanSupervision(
         kind: 'blocked',
         code: 'ACTIVE_SUPERVISION',
         reason:
-          'This plan already has a supervisor launch. Open its session to continue or recover it.',
+          'This plan or an overlapping workspace already has a supervisor launch. Open its session to continue or recover it.',
         ...(deps.sessions.find(record.sessionId) ? { existingSessionId: record.sessionId } : {}),
       };
     if (record.requestFingerprint !== fingerprint) return conflict();
@@ -185,11 +194,13 @@ async function continueLaunch(
   }
   if ((record.phase === 'reserved' || record.phase === 'creating') && !session) {
     if (record.notPersisted && !deps.launches.acquireOwner(record)) {
-      const owner = deps.launches.owner(record.canonicalPath);
+      const owner =
+        deps.launches.owner(record.canonicalPath) ??
+        deps.launches.workspaceOwner(record.context.workspace.path);
       return {
         kind: 'blocked',
         code: 'ACTIVE_SUPERVISION',
-        reason: 'Another launch now owns this plan.',
+        reason: 'Another supervisor launch now owns this plan or an overlapping workspace.',
         ...(owner && deps.sessions.find(owner.sessionId)
           ? { existingSessionId: owner.sessionId }
           : {}),

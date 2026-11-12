@@ -158,7 +158,7 @@ async function fixture() {
             resolveReference: async () => ({ workspacePath: root, planName: '.gestalt/plan.org' }),
             read: (workspace, name) => catalog.readExecution(workspace, name),
             workspace: async (_path, revision) => ({ workspace: context.workspace, revision }),
-            runtimeAvailable: async () => true,
+            runtimeAvailable: async () => ({ available: true }),
             policy: assessModelPolicyAdmission,
             owner: async (path) => {
               const owner = launches.owner(path);
@@ -282,6 +282,30 @@ async function fixture() {
   };
   return { open, request, context, calls, faults, controls, planPath, source };
 }
+
+it('rechecks workspace work after asynchronous skill capture before reserving or creating a session', async () => {
+  const f = await fixture();
+  const run = f.open();
+  let busy = false;
+  const result = await startOrgPlanSupervision(f.request, {
+    ...run.deps,
+    captureSkills: async () => {
+      const skills = await run.deps.captureSkills();
+      busy = true;
+      return skills;
+    },
+    workspaceBusy: () =>
+      busy ? { sessionId: 'working-session', reason: 'Another session started work.' } : null,
+  });
+  expect(result).toMatchObject({
+    kind: 'blocked',
+    code: 'ACTIVE_SUPERVISION',
+    existingSessionId: 'working-session',
+  });
+  expect(run.launches.find(f.request.launchId)).toBeNull();
+  expect(f.calls.creates).toBe(0);
+  expect(run.sessions.list()).toHaveLength(0);
+});
 
 it.each(['publication', 'activation'] as const)(
   'recovers the persisted ordinary session after %s failure across file database reopen',
