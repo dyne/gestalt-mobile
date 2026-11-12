@@ -312,6 +312,7 @@ export class CodexSessionRuntime {
     void _legacyRequestTimeoutMs;
   }
   private readonly sessions = new Map<string, SessionResource>();
+  private readonly historyShutdown = new AbortController();
   private readonly historyReads = new Map<
     string,
     Promise<{ turns: HistoryTurn[]; activeTurnId: string | null }>
@@ -524,6 +525,7 @@ export class CodexSessionRuntime {
 
   /** Releases all relay-owned app-server children during graceful shutdown. */
   stopAll(): void {
+    this.cancelHistoryReads();
     // Exit delivery can already be queued when shutdown begins. Declare the
     // shared intent for every owner before closing any process.
     const resources = [...this.sessions.values()];
@@ -536,6 +538,8 @@ export class CodexSessionRuntime {
   }
 
   async drainReleases(): Promise<void> {
+    if (this.historyShutdown.signal.aborted)
+      await Promise.allSettled([...this.historyReads.values()]);
     await Promise.allSettled(
       [...this.liveResources.values()].flatMap((resources) =>
         [...resources].map((resource) => {
@@ -1081,13 +1085,37 @@ export class CodexSessionRuntime {
     }
   }
 
+  /** Unblock HTTP history requests before the server waits for them to drain. */
+  cancelHistoryReads(): void {
+    this.historyShutdown.abort(new Error('CODEX_APP_SERVER_CLOSED'));
+  }
+
+  private async historyUntilShutdown<T>(read: () => Promise<T>): Promise<T> {
+    const signal = this.historyShutdown.signal;
+    signal.throwIfAborted();
+    let cancel!: () => void;
+    const cancelled = new Promise<never>((_, reject) => {
+      cancel = () => reject(signal.reason);
+      signal.addEventListener('abort', cancel, { once: true });
+    });
+    try {
+      return await Promise.race([read(), cancelled]);
+    } finally {
+      signal.removeEventListener('abort', cancel);
+    }
+  }
+
   async readHistory(session: RelaySessionSnapshot): Promise<{
     turns: HistoryTurn[];
     activeTurnId: string | null;
   }> {
     if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
+    this.historyShutdown.signal.throwIfAborted();
     const owned = this.sessions.get(session.id);
-    if (owned) return this.decodeHistory(owned.process, session.threadId, owned);
+    if (owned)
+      return this.historyUntilShutdown(() =>
+        this.decodeHistory(owned.process, session.threadId!, owned),
+      );
     const existing = this.historyReads.get(session.id);
     if (existing) return existing;
     const read = this.readDetachedHistory(session);
@@ -1560,13 +1588,16 @@ export class CodexSessionRuntime {
       cwd: this.readerCwd ?? session.workspacePath,
     });
     try {
-      await process.rpc.request('initialize', {
-        clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
-        capabilities: { experimentalApi: true },
+      return await this.historyUntilShutdown(async () => {
+        await process.rpc.request('initialize', {
+          clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
+          capabilities: { experimentalApi: true },
+        });
+        return this.decodeHistory(process, session.threadId!);
       });
-      return await this.decodeHistory(process, session.threadId!);
     } finally {
-      process.close();
+      if (this.historyShutdown.signal.aborted && process.closeAndWait) await process.closeAndWait();
+      else process.close();
     }
   }
 
