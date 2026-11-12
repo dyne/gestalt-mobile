@@ -16,6 +16,7 @@ import { registerOpenPlan } from './open-plan/endpoint.js';
 import { registerArchiveWorkspacePlan } from './archive-workspace-plan/endpoint.js';
 import { registerPrepareOrgPlanSupervision } from './prepare-supervision/endpoint.js';
 import { registerExecuteOrgPlan } from './execute-plan/endpoint.js';
+import { registerDownloadOrgPlan } from './download-plan/endpoint.js';
 
 export function registerPlanRoutes(
   app: FastifyInstance,
@@ -26,10 +27,12 @@ export function registerPlanRoutes(
     | 'planMeasurementRoutes'
     | 'prepareOrgPlanRoutes'
     | 'executeOrgPlanRoutes'
+    | 'downloadOrgPlanRoutes'
   >,
 ): void {
   if (deps.prepareOrgPlanRoutes) registerPrepareOrgPlanSupervision(app, deps.prepareOrgPlanRoutes);
   if (deps.executeOrgPlanRoutes) registerExecuteOrgPlan(app, deps.executeOrgPlanRoutes);
+  if (deps.downloadOrgPlanRoutes) registerDownloadOrgPlan(app, deps.downloadOrgPlanRoutes);
   if (deps.planRoutes) {
     registerGetPlan(app, deps.planRoutes);
     registerClosePlan(app, deps.planRoutes);

@@ -36,13 +36,13 @@ describe('Composer', () => {
     const file = new File(['contents'], 'note.txt');
     const dataTransfer = { types: ['Files'], files: [file], dropEffect: 'none' };
     await fireEvent.dragEnter(prompt, { dataTransfer });
-    expect(screen.getByText(/Drop files to upload to workspace root/)).toBeTruthy();
+    expect(screen.getByText(/Drop files to upload/)).toBeTruthy();
     await fireEvent.dragOver(prompt, { dataTransfer });
     expect(dataTransfer.dropEffect).toBe('copy');
     await fireEvent.drop(prompt, { dataTransfer });
     expect(onuploadfiles).toHaveBeenCalledWith([file]);
     expect(onchange).not.toHaveBeenCalled();
-    expect(screen.getByText('Uploading files to workspace root…')).toBeTruthy();
+    expect(screen.getByText('Uploading files…')).toBeTruthy();
     expect(
       (screen.getByRole('button', { name: 'Send prompt' }) as HTMLButtonElement).disabled,
     ).toBe(true);
@@ -157,7 +157,7 @@ describe('Composer', () => {
     const dataTransfer = { types: ['Files'], files: [] };
     await fireEvent.dragEnter(prompt, { dataTransfer });
     await fireEvent.dragLeave(prompt, { dataTransfer });
-    expect(screen.queryByText(/Drop files to upload to workspace root/)).toBeNull();
+    expect(screen.queryByText(/Drop files to upload/)).toBeNull();
     await fireEvent.drop(prompt, { dataTransfer });
     expect(onuploadfiles).not.toHaveBeenCalled();
   });

@@ -1394,14 +1394,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         continue;
       }
       try {
+        const directory = /\.org$/i.test(outcome.file.name) ? '.gestalt' : '';
         const result = await relay.uploadWorkspaceFile(
           workspaceId,
-          { directory: '', filename: outcome.file.name, conflict: 'keep-both', file: outcome.file },
+          { directory, filename: outcome.file.name, conflict: 'keep-both', file: outcome.file },
           createIdempotencyKey(),
         );
         toastQueue.enqueue({
           kind: 'success',
-          message: `Uploaded ${result.path} to workspace root.`,
+          message: directory
+            ? `Uploaded ${result.path}.`
+            : `Uploaded ${result.path} to workspace root.`,
         });
         scheduleFileBrowserGitRefresh();
       } catch (error) {
@@ -2344,6 +2347,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               ? { kind: 'retained-session', sessionId }
               : undefined}
           executeTransport={relay}
+          downloadTransport={relay}
+          ondownloaderror={(message) => toastQueue.enqueue({ kind: 'error', message })}
           onexecuteerror={(message) => toastQueue.enqueue({ kind: 'error', message })}
           onexecuteresult={(result) => void acceptPlanLaunch(result)}
           sourcePath={passivePlan ? undefined : selectedSession?.lastOrgPlan?.path}

@@ -547,6 +547,20 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       if (!response.ok) throw await failure(response);
       return response.json() as Promise<RelayHistory>;
     },
+    downloadOrgPlan: async (reference: OrgPlanReference, signal?: AbortSignal) => {
+      const response = await fetcher('/api/plans/download', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(reference),
+        signal,
+      });
+      if (!response.ok) throw await failure(response);
+      const filename = response.headers
+        .get('content-disposition')
+        ?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+      if (!filename) throw new Error('The Org file download did not include a filename.');
+      return { filename: decodeURIComponent(filename), blob: await response.blob() };
+    },
     getPlan: (sessionId: string, signal: AbortSignal) =>
       getOptional<SupervisedPlan>(`/api/sessions/${encodeURIComponent(sessionId)}/plan`, signal),
     closePlan: (sessionId: string) => remove(`/api/sessions/${encodeURIComponent(sessionId)}/plan`),

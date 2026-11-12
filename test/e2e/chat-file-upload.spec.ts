@@ -38,10 +38,13 @@ for (const width of [390, 1280]) {
     const uploads: string[] = [];
     await page.route('**/api/workspaces/w/files/upload?**', async (route) => {
       const query = new URL(route.request().url()).searchParams;
-      expect(query.get('directory')).toBe('');
       const name = query.get('filename')!;
+      const directory = name.endsWith('.org') ? '.gestalt' : '';
+      expect(query.get('directory')).toBe(directory);
       uploads.push(name);
-      await route.fulfill({ json: { path: name, kind: 'file' } });
+      await route.fulfill({
+        json: { path: directory ? `${directory}/${name}` : name, kind: 'file' },
+      });
     });
     const button = page.getByRole('button', { name: 'Upload files', exact: true });
     await expect(button).toBeVisible();
@@ -53,15 +56,17 @@ for (const width of [390, 1280]) {
     await chooser.setFiles([
       { name: 'one.txt', mimeType: 'text/plain', buffer: Buffer.from('one') },
       { name: 'two.txt', mimeType: 'text/plain', buffer: Buffer.from('two') },
+      { name: 'roadmap.org', mimeType: 'text/plain', buffer: Buffer.from('#+TITLE: Roadmap') },
     ]);
-    await expect.poll(() => uploads).toEqual(['one.txt', 'two.txt']);
+    await expect.poll(() => uploads).toEqual(['one.txt', 'two.txt', 'roadmap.org']);
+    await expect(page.getByText('Uploaded .gestalt/roadmap.org.')).toBeVisible();
     await expect(button).toBeEnabled();
     const repeatChooser = page.waitForEvent('filechooser');
     await button.click();
     await (
       await repeatChooser
     ).setFiles({ name: 'one.txt', mimeType: 'text/plain', buffer: Buffer.from('one') });
-    await expect.poll(() => uploads).toEqual(['one.txt', 'two.txt', 'one.txt']);
+    await expect.poll(() => uploads).toEqual(['one.txt', 'two.txt', 'roadmap.org', 'one.txt']);
     await expect(page.getByRole('textbox', { name: 'Prompt' })).toHaveValue('');
   });
 
@@ -116,7 +121,7 @@ for (const width of [390, 1280]) {
     await expect.poll(() => interrupts).toBe(1);
   });
 
-  test(`dropping files on the chat input uploads to the session workspace root at ${width}px`, async ({
+  test(`dropping files routes Org plans to .gestalt and other files to the session workspace root at ${width}px`, async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({ width, height: 844 });
@@ -127,31 +132,37 @@ for (const width of [390, 1280]) {
       const request = route.request();
       const query = new URL(request.url()).searchParams;
       expect(request.method()).toBe('PUT');
-      expect(query.get('directory')).toBe('');
+      const name = query.get('filename')!;
+      const directory = name.endsWith('.org') ? '.gestalt' : '';
+      expect(query.get('directory')).toBe(directory);
       expect(query.get('conflict')).toBe('keep-both');
       expect(request.headers()['content-type']).toBe('application/octet-stream');
       expect(request.postDataBuffer()?.toString()).toBe(query.get('filename'));
       keys.push(request.headers()['idempotency-key']);
       uploads.push(query.get('filename')!);
-      await route.fulfill({ json: { path: query.get('filename'), kind: 'file' } });
+      await route.fulfill({
+        json: { path: directory ? `${directory}/${name}` : name, kind: 'file' },
+      });
     });
     const prompt = page.getByRole('textbox', { name: 'Prompt' });
     await prompt.fill('Keep this draft');
     const dataTransfer = await page.evaluateHandle(() => {
       const data = new DataTransfer();
-      for (const name of ['one.txt', 'two.txt']) data.items.add(new File([name], name));
+      for (const name of ['one.txt', 'two.txt', 'roadmap.org'])
+        data.items.add(new File([name], name));
       return data;
     });
     await prompt.dispatchEvent('dragenter', { dataTransfer });
-    await expect(page.getByText(/Drop files to upload to workspace root/)).toBeVisible();
+    await expect(page.getByText(/Drop files to upload/)).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('drop-target.png') });
     await prompt.dispatchEvent('drop', { dataTransfer });
-    await expect.poll(() => uploads).toEqual(['one.txt', 'two.txt']);
+    await expect.poll(() => uploads).toEqual(['one.txt', 'two.txt', 'roadmap.org']);
+    await expect(page.getByText('Uploaded .gestalt/roadmap.org.')).toBeVisible();
     await expect(page.getByText('Uploaded two.txt to workspace root.')).toBeVisible();
     await expect(prompt).toHaveValue('Keep this draft');
     await expect(page.getByRole('button', { name: 'Send prompt' })).toBeEnabled();
     expect(keys.every(Boolean)).toBe(true);
-    expect(new Set(keys).size).toBe(2);
+    expect(new Set(keys).size).toBe(3);
     await dataTransfer.dispose();
   });
 }

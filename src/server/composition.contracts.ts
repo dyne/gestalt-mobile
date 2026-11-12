@@ -9404,6 +9404,7 @@ describe('production composition', () => {
           'protected',
         ],
         ['POST', '/api/plans/prepare', '/api/plans/prepare', 'protected'],
+        ['POST', '/api/plans/download', '/api/plans/download', 'protected'],
         ['POST', '/api/plans/execute', '/api/plans/execute', 'protected'],
         [
           'HEAD',

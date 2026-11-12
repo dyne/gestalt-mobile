@@ -9,6 +9,33 @@ import { describe, expect, it } from 'vitest';
 import { createRelayClient, type RelayAvailableSkill } from './relay-client.js';
 
 describe('relay client', () => {
+  it('downloads original Org content and decodes the attachment filename', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const source = '#+TITLE: Original\r\n# Comment and Ω\r\n';
+    const client = createRelayClient(async (url, init) => {
+      requests.push({ url: String(url), init });
+      return new Response(source, {
+        headers: { 'Content-Disposition': "attachment; filename*=UTF-8''Plan%20%C3%A9%27s.org" },
+      });
+    });
+    const reference = { kind: 'retained-session' as const, sessionId: 's' };
+    const result = await client.downloadOrgPlan(reference);
+    expect(result.filename).toBe("Plan é's.org");
+    expect(await result.blob.text()).toBe(source);
+    expect(requests[0]).toMatchObject({
+      url: '/api/plans/download',
+      init: { method: 'POST', body: JSON.stringify(reference) },
+    });
+  });
+
+  it('propagates failed plan downloads instead of downloading an error document', async () => {
+    const client = createRelayClient(
+      async () => new Response('{"code":"PLAN_NOT_FOUND"}', { status: 404 }),
+    );
+    await expect(
+      client.downloadOrgPlan({ kind: 'retained-session', sessionId: 's' }),
+    ).rejects.toMatchObject({ code: 'PLAN_NOT_FOUND', status: 404 });
+  });
   it('preserves the occupied-workspace Execute conflict and existing session', async () => {
     const blocked = {
       kind: 'blocked',
