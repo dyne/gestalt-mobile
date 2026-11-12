@@ -25,7 +25,17 @@ test('configuration stays compact and wraps long messages and paths at normal an
         profiles: [],
         sessions: [],
         xerj: status,
-        versions: [{ id: 'xerj', label: 'XERJ', version: '1.0.0' }],
+        versions: [
+          { id: 'xerj', label: 'XERJ', version: '1.0.0' },
+          {
+            id: 'playwright',
+            label: 'Playwright MCP',
+            version: '0.0.85',
+            status: 'working',
+            detail:
+              'Playwright 1.66.0-alpha-2026-11-09; Chrome 157.0.8103.78; browser page check passed at startup.',
+          },
+        ],
       },
     }),
   );
@@ -41,6 +51,9 @@ test('configuration stays compact and wraps long messages and paths at normal an
       await page.getByRole('button', { name: 'Open configuration' }).click();
       const panel = page.locator('#configuration-panel');
       await expect(panel).toBeVisible();
+      const playwright = panel.getByText('Playwright MCP', { exact: true });
+      await expect(playwright.locator('..')).toContainText('0.0.85');
+      await expect(playwright.locator('..')).toContainText('Working');
       const longMessage = panel.getByText(message, { exact: true });
       await longMessage.scrollIntoViewIfNeeded();
       await expect(longMessage).toBeVisible();
@@ -52,7 +65,7 @@ test('configuration stays compact and wraps long messages and paths at normal an
           width: bounds.width,
           fits: element.scrollWidth <= element.clientWidth,
           documentFits: document.documentElement.scrollWidth <= innerWidth,
-          textFits: [...element.querySelectorAll('p, dt, .xerj-root')].every(
+          textFits: [...element.querySelectorAll('p, dt, dd.with-status, .xerj-root')].every(
             (text) => text.scrollWidth <= text.clientWidth,
           ),
         };
@@ -63,6 +76,8 @@ test('configuration stays compact and wraps long messages and paths at normal an
       expect(metrics.documentFits).toBe(true);
       expect(metrics.textFits).toBe(true);
       if (width === 1440) expect(metrics.width).toBeLessThanOrEqual(fontScale === 100 ? 400 : 800);
+      await playwright.scrollIntoViewIfNeeded();
+      await expect(playwright).toBeInViewport();
       await page.screenshot({
         path: testInfo.outputPath(`configuration-${width}-font${fontScale}.png`),
       });
