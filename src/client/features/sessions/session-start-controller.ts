@@ -25,6 +25,7 @@ export class SessionStartController {
     private readonly transport: SessionStartTransport,
     private readonly key: () => string,
     private readonly onChange: (state: SessionStartState) => void,
+    private readonly onFailure?: (error: unknown) => void,
   ) {}
   get state(): SessionStartState {
     return this.#state;
@@ -39,7 +40,7 @@ export class SessionStartController {
       if (this.#current(generation)) this.#retryKey = null;
       return this.#current(generation) ? session : null;
     } catch (error) {
-      if (this.#current(generation))
+      if (this.#current(generation)) {
         this.#publish({
           starting: false,
           error: error instanceof Error ? error.message : 'Could not start session.',
@@ -51,6 +52,8 @@ export class SessionStartController {
             ? { conflict: { workspaceId, sessionId: error.sessionId } }
             : {}),
         });
+        this.onFailure?.(error);
+      }
       return null;
     } finally {
       if (this.#current(generation)) this.#publish({ ...this.#state, starting: false });

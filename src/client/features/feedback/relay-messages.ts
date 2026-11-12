@@ -34,6 +34,18 @@ const relayMessages = {
   SESSION_ROLLOUT_MISSING: 'This stored thread is no longer available.',
   SESSION_RUNTIME_UNAVAILABLE: 'The Codex runtime is unavailable. Retry shortly.',
   SESSION_START_FAILED: 'The session could not be started. Try again.',
+  CODEX_MODEL_UNAVAILABLE:
+    'The selected Codex model is unavailable. Choose an available model in New session settings and retry.',
+  KIMI_MODEL_UNAVAILABLE:
+    'The selected Kimi model is unavailable. Choose an available model in New session settings and retry.',
+  CODEX_EXECUTOR_MODEL_UNAVAILABLE:
+    'The executor model is unavailable. Choose an available executor model in New session settings and retry.',
+  WORKSPACE_NOT_FOUND:
+    'The selected workspace is no longer available. Select an existing workspace and retry.',
+  PROFILE_NOT_FOUND:
+    'The selected launcher profile is unavailable. Refresh New session settings and retry.',
+  LLM_RUNTIME_UNAVAILABLE:
+    'The selected provider runtime is unavailable. Check the provider installation and authentication, then retry.',
   ORG_EXECUTOR_PROFILE_UNAVAILABLE:
     'The Org-plan executor profile could not be read. Restore the installed Gestalt agent profile and try again.',
   ORG_EXECUTOR_PROFILE_INVALID:
@@ -101,5 +113,9 @@ export function relayFeedback(
     typeof error === 'object' && error !== null && 'retryable' in error
       ? error.retryable === true
       : true;
-  return { code, message: relayMessages[code], retryable };
+  const message =
+    fallbackCode === 'SESSION_START_FAILED' && code === 'SESSION_WORKSPACE_UNAVAILABLE'
+      ? 'The selected workspace is busy or its temporary ownership could not be confirmed. Retry shortly; if this persists, use Self DEBUG to inspect workspace ownership.'
+      : relayMessages[code];
+  return { code, message, retryable };
 }

@@ -590,6 +590,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       sessionStartState = next;
       workspaceConflictSessionId = next.conflict?.sessionId;
     },
+    (error) => (shellStatus = reportRelayError(error, 'SESSION_START_FAILED')),
   );
   const gitController = new GitController(
     { getSummary: relay.getGitSummary, pull: relay.pullGit, checkout: relay.checkoutGitBranch },
@@ -936,17 +937,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         : {}),
       skillProfile: selectedSessionSkillProfile || undefined,
     });
-    if (!session) {
-      if (sessionStartState.error)
-        shellStatus = reportRelayError(
-          Object.assign(
-            new Error(sessionStartState.error),
-            sessionStartState.conflict ? { code: 'SESSION_WORKSPACE_BUSY' } : {},
-          ),
-          'SESSION_START_FAILED',
-        );
-      return;
-    }
+    if (!session) return;
     try {
       await presentStartedSession(session, 'empty', isCurrent);
     } catch (error) {
