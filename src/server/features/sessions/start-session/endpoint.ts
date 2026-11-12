@@ -51,6 +51,9 @@ export function registerStartSession(
           .type('application/problem+json')
           .send(problem(failure.code, failure.status, failure.detail, failure.retryable));
       }
+      const knownFailure = error instanceof Error ? sessionStartProblem(error.message) : null;
+      if (knownFailure)
+        return reply.code(knownFailure.status).type('application/problem+json').send(knownFailure);
       if (error instanceof Error && error.message === 'CODEX_EXECUTOR_MODEL_UNAVAILABLE')
         return reply
           .code(400)
@@ -111,4 +114,41 @@ export function registerStartSession(
     if (key) deps.idempotency?.put('start-session', key, 202, JSON.stringify(started));
     return reply.code(202).send(started);
   });
+}
+
+/** Public guidance is allowlisted; runtime messages can contain private paths or credentials. */
+function sessionStartProblem(code: string) {
+  switch (code) {
+    case 'CODEX_MODEL_UNAVAILABLE':
+    case 'KIMI_MODEL_UNAVAILABLE':
+      return problem(
+        code,
+        400,
+        'The selected model is unavailable. Choose an available model in New session settings and retry.',
+        true,
+      );
+    case 'WORKSPACE_NOT_FOUND':
+      return problem(
+        code,
+        404,
+        'The selected workspace is no longer available. Select an existing workspace and retry.',
+        true,
+      );
+    case 'PROFILE_NOT_FOUND':
+      return problem(
+        code,
+        400,
+        'The selected launcher profile is unavailable. Refresh New session settings and retry.',
+        true,
+      );
+    case 'LLM_RUNTIME_UNAVAILABLE':
+      return problem(
+        code,
+        503,
+        'The selected provider runtime is unavailable. Check the provider installation and authentication, then retry.',
+        true,
+      );
+    default:
+      return null;
+  }
 }

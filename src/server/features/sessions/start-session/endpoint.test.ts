@@ -7,6 +7,7 @@
 import fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { registerStartSession } from './endpoint.js';
+import { registerProblemHandler } from '../../../platform/http/problem-handler.js';
 
 const skills = {
   skillProfiles: {
@@ -22,6 +23,93 @@ const skills = {
 };
 
 describe('POST /api/sessions', () => {
+  it.each([
+    ['CODEX_MODEL_UNAVAILABLE', 400, 'Choose an available model'],
+    ['KIMI_MODEL_UNAVAILABLE', 400, 'Choose an available model'],
+    ['WORKSPACE_NOT_FOUND', 404, 'Select an existing workspace'],
+    ['PROFILE_NOT_FOUND', 400, 'Refresh New session settings'],
+    ['LLM_RUNTIME_UNAVAILABLE', 503, 'provider runtime is unavailable'],
+  ])('explains %s instead of returning a generic server error', async (code, status, guidance) => {
+    const app = fastify();
+    registerProblemHandler(app);
+    const save = vi.fn();
+    registerStartSession(app, {
+      createId: () => 's',
+      now: () => 't',
+      save,
+      workspaces: {
+        resolve: async () => {
+          if (code === 'WORKSPACE_NOT_FOUND') throw new Error(code);
+          return { id: 'w', name: 'workspace', realPath: '/w' };
+        },
+      },
+      profiles: {
+        require: async () => {
+          if (code === 'PROFILE_NOT_FOUND') throw new Error(code);
+          return { name: 'default', state: 'ok', status: 'ready' };
+        },
+      },
+      models: { list: async () => ['available'] },
+      activate: async (session) => {
+        if (code === 'LLM_RUNTIME_UNAVAILABLE') throw new Error(code);
+        return session;
+      },
+      ...skills,
+    });
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/sessions',
+        payload: {
+          workspaceId: 'w',
+          profile: 'default',
+          provider: code === 'KIMI_MODEL_UNAVAILABLE' ? 'kimi' : 'codex',
+          model: code.endsWith('MODEL_UNAVAILABLE') ? 'removed' : 'available',
+        },
+      });
+      expect(response.statusCode).toBe(status);
+      expect(response.json()).toMatchObject({ code, detail: expect.stringContaining(guidance) });
+      if (code !== 'LLM_RUNTIME_UNAVAILABLE') expect(save).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('allows a fresh session in the workspace of a released session', async () => {
+    const app = fastify();
+    const sessions = new Map<string, unknown>([
+      ['released', { id: 'released', workspaceId: 'w', state: 'released' }],
+    ]);
+    registerStartSession(app, {
+      createId: () => 'fresh',
+      now: () => 't',
+      save: (session) => {
+        sessions.set(session.id, session);
+      },
+      workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
+      profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      activate: async (session) => session,
+      ...skills,
+    });
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/sessions',
+        payload: {
+          workspaceId: 'w',
+          profile: 'default',
+          provider: 'codex',
+        },
+      });
+      expect(response.statusCode).toBe(202);
+      expect(response.json()).toMatchObject({ id: 'fresh', workspaceId: 'w' });
+      expect(sessions.get('released')).toMatchObject({ state: 'released' });
+      expect(sessions.has('fresh')).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('reports an unavailable executor model as a recoverable settings problem before persistence', async () => {
     const app = fastify();
     const save = vi.fn();

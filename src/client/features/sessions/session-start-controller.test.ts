@@ -6,6 +6,8 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { SessionStartController } from './session-start-controller.js';
+import { createRelayClient } from './relay-client.js';
+import { relayFeedback } from '../feedback/relay-messages.js';
 
 describe('SessionStartController', () => {
   it('preserves the conflicting session identity for an explicit Open action', async () => {
@@ -20,6 +22,49 @@ describe('SessionStartController', () => {
     );
     expect(await controller.start('workspace', {})).toBeNull();
     expect(controller.state.conflict).toEqual({ workspaceId: 'workspace', sessionId: 'existing' });
+  });
+  it.each([
+    ['CODEX_EXECUTOR_MODEL_UNAVAILABLE', 'executor model is unavailable'],
+    ['CODEX_MODEL_UNAVAILABLE', 'Codex model is unavailable'],
+    ['SESSION_WORKSPACE_UNAVAILABLE', 'temporary ownership could not be confirmed'],
+  ])('preserves %s from the API through the start controller to feedback', async (code, reason) => {
+    const relay = createRelayClient(
+      async () =>
+        new Response(JSON.stringify({ code, detail: 'private runtime detail' }), { status: 503 }),
+    );
+    const feedback = vi.fn();
+    const controller = new SessionStartController(
+      { start: relay.startSession },
+      () => 'key',
+      vi.fn(),
+      (error) => feedback(relayFeedback(error, 'SESSION_START_FAILED')),
+    );
+    expect(await controller.start('workspace', {})).toBeNull();
+    expect(feedback).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ code, message: expect.stringContaining(reason) }),
+    );
+    expect(JSON.stringify(feedback.mock.calls)).not.toContain('private runtime detail');
+  });
+
+  it('does not report a late failure after disposal', async () => {
+    let reject!: (reason: Error) => void;
+    const onFailure = vi.fn();
+    const controller = new SessionStartController(
+      {
+        start: () =>
+          new Promise((_resolve, fail) => {
+            reject = fail;
+          }),
+      },
+      () => 'key',
+      vi.fn(),
+      onFailure,
+    );
+    const pending = controller.start('workspace', {});
+    controller.dispose();
+    reject(new Error('late failure'));
+    expect(await pending).toBeNull();
+    expect(onFailure).not.toHaveBeenCalled();
   });
   it('uses one key for a request and suppresses duplicate starts', async () => {
     let resolve!: (value: { id: string; state: string }) => void;
