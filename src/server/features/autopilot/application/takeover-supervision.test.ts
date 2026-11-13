@@ -127,10 +127,11 @@ function fixture() {
       localExecutor,
       admission,
     }),
-    predecessors: () => [
-      { session: sessions.find('old')!, state: states.find('old')! },
-      { session: sessions.find('other')!, state: states.find('other')! },
-    ],
+    predecessors: () =>
+      sessions.list().flatMap((session) => {
+        const state = states.find(session.id);
+        return state ? [{ session, state }] : [];
+      }),
     fence: (id) => {
       order.push(`fence:${id}`);
     },
@@ -162,6 +163,127 @@ function fixture() {
 }
 
 describe('user-directed supervision takeover', () => {
+  it('recovers after confirmed release and Forget across store reconstruction, preserving checkpoints and one replacement', async () => {
+    const f = fixture();
+    const old = f.states.find('old')!;
+    f.states.save({
+      ...old,
+      checkpoints: { ...old.checkpoints!, pendingTurnId: 'old-turn', pendingKind: 'l2Completed' },
+    });
+    f.owners.claim('plan', 'old');
+    f.sessions.save(RelaySession.rehydrate(f.sessions.find('old')!).release(now).snapshot);
+    f.owners.releaseSession('old');
+    f.sessions.remove('old');
+    expect(f.states.find('old')).toBeNull();
+    const recovered = new SqliteSupervisionTakeoverStore(f.db, f.states).recovery('plan', '/w', [
+      'new',
+    ]);
+    expect(recovered.verified).toBe(true);
+    expect(recovered.states[0]?.checkpoints?.acceptedKeys).toEqual(['first']);
+    expect(await f.takeover.takeOver('new', 'new-root', 'new-turn')).toMatchObject({
+      accepted: true,
+      identity: { taskName: 'l1_g2', generation: 2 },
+      previousSessionIds: ['old'],
+      boundaryFinalRequired: true,
+    });
+    expect(f.states.find('new')).toMatchObject({
+      checkpoints: {
+        acceptedKeys: ['first'],
+        pendingTurnId: 'new-turn',
+        reportedL2Ids: [JSON.stringify(['l1', 'first'])],
+      },
+      executor: { replacement: { taskName: 'l1_g2' } },
+    });
+    expect(await f.takeover.takeOver('new', 'new-root', 'new-turn')).toMatchObject({
+      accepted: true,
+      alreadyOwner: true,
+      identity: { taskName: 'l1_g2' },
+    });
+    expect(f.stop).not.toHaveBeenCalled();
+    expect(f.owners.stopped('plan', 'old')).toBe(true);
+    expect(f.states.drainOutbox('new')).toHaveLength(1);
+    expect(f.plan.steps[0]!.children.map((child) => child.state)).toEqual(['DONE', 'WIP']);
+  });
+
+  it('recovers a legacy released owner without a snapshot and keeps the returned initial identity idempotent', async () => {
+    const f = fixture();
+    f.owners.claim('plan', 'old');
+    f.sessions.remove('old');
+    // Older releases retained only the epoch tombstone.
+    f.owners.releaseSession('old');
+    expect(await f.takeover.takeOver('new', 'new-root', 'new-turn')).toMatchObject({
+      accepted: true,
+      identity: { taskName: 'l1', generation: 1 },
+    });
+    expect(await f.takeover.takeOver('new', 'new-root', 'new-turn')).toMatchObject({
+      accepted: true,
+      alreadyOwner: true,
+      identity: { taskName: 'l1', generation: 1 },
+    });
+    expect(f.stop).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing', 'running', 'wrong-workspace', 'retired-unknown'] as const)(
+    'withholds ownership when the %s writer has no valid stop evidence',
+    async (kind) => {
+      const f = fixture();
+      f.owners.claim('plan', 'old');
+      if (kind === 'retired-unknown') {
+        f.owners.retire(f.owners.owner('plan')!, ['lost-root']);
+      }
+      f.sessions.remove('old');
+      if (kind !== 'missing') f.owners.releaseSession('old');
+      if (kind === 'running' || kind === 'wrong-workspace') {
+        f.sessions.save({
+          ...f.sessions.find('other')!,
+          id: 'old',
+          workspacePath: kind === 'wrong-workspace' ? '/elsewhere' : '/w',
+        });
+      }
+      expect(await f.takeover.takeOver('new', 'new-root', 'new-turn')).toEqual({
+        accepted: false,
+        code: 'PREVIOUS_WRITER_STATUS_UNKNOWN',
+      });
+      expect(f.states.find('new')!.executor).toBeUndefined();
+      expect(f.states.drainOutbox('new')).toHaveLength(0);
+      expect(f.stop).not.toHaveBeenCalled();
+    },
+  );
+
+  it('uses completed Forget evidence for a legacy missing retired writer, while quiescing a surviving predecessor', async () => {
+    const f = fixture();
+    const claim = f.owners.claim('plan', 'lost-root')!;
+    f.owners.retire(claim, ['forgotten']);
+    f.owners.releaseSession('lost-root');
+    f.db
+      .prepare(
+        "INSERT INTO session_forget_operations(session_id,operation_id,phase,updated_at) VALUES(?,?,'completed',?)",
+      )
+      .run('forgotten', '00000000-0000-4000-8000-000000000001', now);
+    expect(await f.takeover.takeOver('new', 'new-root', 'new-turn')).toMatchObject({
+      accepted: true,
+      identity: { taskName: 'l1_g2' },
+    });
+    expect(f.stop).toHaveBeenCalledOnce();
+    expect(f.owners.stopped('plan', 'forgotten')).toBe(true);
+  });
+
+  it('does not overwrite a newer ownership epoch observed between recovery and reservation', async () => {
+    const f = fixture();
+    const recovery = f.owners.recovery.bind(f.owners);
+    vi.spyOn(f.owners, 'recovery').mockImplementation((...args) => {
+      const result = recovery(...args);
+      f.owners.claim('plan', 'other');
+      return result;
+    });
+    expect(await f.takeover.takeOver('new', 'new-root', 'new-turn')).toEqual({
+      accepted: false,
+      code: 'TAKEOVER_IN_PROGRESS',
+    });
+    expect(f.owners.owner('plan')?.sessionId).toBe('other');
+    expect(f.stop).not.toHaveBeenCalled();
+  });
+
   it('identifies the failed boundary without exposing the runtime error or authorizing a writer', async () => {
     const f = fixture();
     f.stop.mockRejectedValueOnce(new Error('private runtime diagnostic'));
