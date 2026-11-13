@@ -50,7 +50,7 @@ type Context = Readonly<{
 }>;
 type Predecessor = Readonly<{ session: RelaySessionSnapshot; state: AutopilotSession }>;
 type Result =
-  | { accepted: false; code: string }
+  | { accepted: false; code: string; boundary?: string }
   | { accepted: true; alreadyOwner: true }
   | {
       accepted: true;
@@ -72,16 +72,24 @@ export class SupervisionTakeover {
       fence(sessionId: string): void;
       stop(previous: Predecessor): Promise<boolean>;
       changed(sessionId: string): void;
+      failed?(sessionId: string, boundary: string): void;
     },
   ) {}
 
   takeOver(sessionId: string, threadId: string, turnId: string): Promise<Result> {
     const prior = this.running.get(sessionId);
     if (prior) return prior;
-    const run = this.run(sessionId, threadId, turnId).catch((): Result => ({
-      accepted: false,
-      code: 'TAKEOVER_RUNTIME_UNAVAILABLE',
-    }));
+    let boundary = 'context';
+    const run = this.run(sessionId, threadId, turnId, (value) => {
+      boundary = value;
+    }).catch((): Result => {
+      try {
+        this.deps.failed?.(sessionId, boundary);
+      } catch {
+        /* diagnostics must not change the takeover result */
+      }
+      return { accepted: false, code: 'TAKEOVER_RUNTIME_UNAVAILABLE', boundary };
+    });
     this.running.set(sessionId, run);
     void run.finally(() => {
       if (this.running.get(sessionId) === run) this.running.delete(sessionId);
@@ -89,7 +97,12 @@ export class SupervisionTakeover {
     return run;
   }
 
-  private async run(sessionId: string, threadId: string, turnId: string): Promise<Result> {
+  private async run(
+    sessionId: string,
+    threadId: string,
+    turnId: string,
+    boundary: (value: string) => void,
+  ): Promise<Result> {
     const before = this.deps.context(sessionId);
     if (
       !before ||
@@ -144,6 +157,7 @@ export class SupervisionTakeover {
       return { accepted: false, code: 'PREVIOUS_SUPERVISOR_NOT_FOUND' };
     const fingerprint = planFingerprint(before.plan);
     const generation = before.state?.generation ?? 0;
+    boundary('ownershipReservation');
     const claim = this.deps.store.claim(before.identity, sessionId);
     if (!claim) return { accepted: false, code: 'TAKEOVER_IN_PROGRESS' };
     if (
@@ -154,15 +168,18 @@ export class SupervisionTakeover {
     )
       return { accepted: false, code: 'TAKEOVER_CONTEXT_CHANGED' };
     // Fence every predecessor before the first asynchronous process operation.
+    boundary('fencePreviousSupervisor');
     for (const p of previous)
       if (!this.deps.store.stopped(before.identity, p.session.id)) this.deps.fence(p.session.id);
     for (const p of previous) {
       if (this.deps.store.stopped(before.identity, p.session.id)) continue;
+      boundary('quiescePreviousWriter');
       if (!(await this.deps.stop(p)))
         return { accepted: false, code: 'PREVIOUS_WRITER_NOT_STOPPED' };
       if (!this.deps.store.markStopped(claim, p.session.id))
         return { accepted: false, code: 'TAKEOVER_CONTEXT_CHANGED' };
     }
+    boundary('revalidateContext');
     const current = this.deps.context(sessionId);
     if (
       !current ||
@@ -243,6 +260,7 @@ export class SupervisionTakeover {
       updatedAt: now,
     };
     const previousSessionIds = previous.map((p) => p.session.id);
+    boundary('commitOwnership');
     if (
       !this.deps.store.complete(
         claim,

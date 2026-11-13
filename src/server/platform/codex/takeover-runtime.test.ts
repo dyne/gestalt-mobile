@@ -12,6 +12,9 @@ import { migrate } from '../persistence/migrate.js';
 import { SqliteSessionRepository } from '../persistence/sqlite-session-repository.js';
 import { SqliteAutopilotStore } from '../persistence/sqlite-autopilot-store.js';
 import { SqliteSupervisionTakeoverStore } from '../persistence/sqlite-supervision-takeover-store.js';
+import { SqliteRuntimeReleaseStore } from '../persistence/sqlite-runtime-release-store.js';
+import type { RuntimeReleaseStore } from '../../features/sessions/application/runtime-release-store.js';
+import { SqliteWorkspaceLifecycle } from '../persistence/sqlite-workspace-lifecycle.js';
 import { SupervisionTakeover } from '../../features/autopilot/application/takeover-supervision.js';
 import { disabledAutopilot } from '../../features/autopilot/domain/autopilot-session.js';
 import type { SupervisedPlan } from '../../features/plans/domain/supervised-plan.js';
@@ -26,6 +29,9 @@ describe('takeover writer quiescence', () => {
       holdTermination?: boolean;
       recordedResult?: Record<string, unknown>;
       resultThreadId?: string;
+      runtimeReleases?: RuntimeReleaseStore;
+      closeFails?: boolean;
+      missingOnResume?: boolean;
     } = {},
   ) {
     const active = new Set(options.unloaded ? [] : ['root', 'child', 'nested']);
@@ -34,11 +40,13 @@ describe('takeover writer quiescence', () => {
     const held = Promise.withResolvers<unknown>();
     const calls: Array<{ method: string; threadId?: string }> = [];
     let closed = false;
-    const runtime = new CodexSessionRuntime(() => ({
+    const launch: ConstructorParameters<typeof CodexSessionRuntime>[0] = () => ({
       rpc: {
         request: async (method, raw) => {
           const p = raw as { threadId?: string; parentThreadId?: string; includeTurns?: boolean };
           calls.push({ method, threadId: p?.threadId });
+          if (method === 'thread/resume' && options.missingOnResume)
+            throw new CodexJsonRpcError(-32600, 'no rollout found for thread');
           if (method === 'thread/start') return { thread: { id: 'root' } };
           if (method === 'thread/read')
             return {
@@ -146,7 +154,14 @@ describe('takeover writer quiescence', () => {
       close: () => {
         closed = true;
       },
-    }));
+      closeAndWait: async () => {
+        if (options.closeFails) throw new Error('SESSION_RELEASE_UNCONFIRMED');
+        closed = true;
+      },
+    });
+    const args: ConstructorParameters<typeof CodexSessionRuntime> = [launch];
+    args[16] = options.runtimeReleases;
+    const runtime = new CodexSessionRuntime(...args);
     const session = await runtime.start(
       RelaySession.create({
         id: 's',
@@ -162,6 +177,7 @@ describe('takeover writer quiescence', () => {
     onTestFinished(() => runtime.stopAll());
     return {
       runtime,
+      launch,
       session,
       calls,
       closed: () => closed,
@@ -184,6 +200,83 @@ describe('takeover writer quiescence', () => {
     ]);
     expect(f.calls.some((c) => c.method === 'thread/backgroundTerminals/terminate')).toBe(true);
     expect(f.closed()).toBe(true);
+  });
+  it.each([false, true])(
+    'takes over after Close and relay replacement with durable receipt=%s',
+    async (receipt) => {
+      const db = new DatabaseSync(':memory:');
+      migrate(db);
+      onTestFinished(() => db.close());
+      const sessions = new SqliteSessionRepository(db, new SqliteWorkspaceLifecycle(db));
+      const releases = new SqliteRuntimeReleaseStore(db);
+      const f = await fixture({ unloaded: true, runtimeReleases: releases });
+      sessions.save(f.session);
+      const closed = RelaySession.rehydrate(f.session).release('t').snapshot;
+      sessions.save(closed);
+      if (receipt) await f.runtime.releaseForForget(closed);
+      else f.runtime.stop(closed.id);
+      expect(releases.confirmed(closed)).toBe(receipt);
+      sessions.save({ ...f.session, id: 'incoming', threadId: 'new-root' });
+
+      const launch = vi.fn(f.launch);
+      const reserveRuntime = vi.fn(({ id }: { id: string }) => {
+        sessions.save(RelaySession.rehydrate(sessions.find(id)!).beginRecovery('t').snapshot, true);
+      });
+      const args: ConstructorParameters<typeof CodexSessionRuntime> = [launch];
+      args[15] = {
+        reserveRuntime,
+        allocate: async () => ({
+          workspacePath: '/w',
+          ownerId: 's',
+          directory: '/tmp/s',
+          environment: {},
+        }),
+        associateProviderThread: async () => {},
+      };
+      args[16] = new SqliteRuntimeReleaseStore(db);
+      const restarted = new CodexSessionRuntime(...args);
+      onTestFinished(() => restarted.stopAll());
+      expect(await restarted.quiesceForTakeover(sessions.find('s')!)).toBe(true);
+      expect(launch).toHaveBeenCalledTimes(receipt ? 0 : 1);
+      expect(sessions.find('incoming')?.threadId).toBe('new-root');
+      expect(sessions.find('s')?.desiredState).toBe('stopped');
+
+      // A durable receipt cannot override an outstanding process claim.
+      expect(
+        await restarted.quiesceForTakeover(closed, [
+          { ownerThreadId: 'child', processId: 'live', state: 'running' },
+        ]),
+      ).toBe(false);
+      expect(releases.confirmed(closed)).toBe(false);
+
+      // Missing or mismatched evidence requires actor reconciliation, never execution admission.
+      releases.confirm(closed);
+      expect(releases.confirmed({ ...closed, threadId: 'other-thread' })).toBe(false);
+      releases.invalidate('s');
+      expect(await restarted.quiesceForTakeover(closed)).toBe(true);
+      expect(reserveRuntime).not.toHaveBeenCalled();
+      expect(f.calls.filter((c) => c.method === 'thread/start')).toHaveLength(1);
+      expect(f.calls.some((c) => c.method === 'turn/start')).toBe(false);
+    },
+  );
+  it('does not persist shutdown evidence when Close fails to confirm process exit', async () => {
+    const confirm = vi.fn();
+    const f = await fixture({
+      unloaded: true,
+      closeFails: true,
+      runtimeReleases: { confirm, confirmed: () => false, invalidate: vi.fn() },
+    });
+    await expect(f.runtime.releaseForForget(f.session)).rejects.toThrow(
+      'SESSION_RELEASE_UNCONFIRMED',
+    );
+    expect(confirm).not.toHaveBeenCalled();
+  });
+  it('never creates a replacement old root when its rollout cannot be resumed for takeover', async () => {
+    const f = await fixture({ unloaded: true, missingOnResume: true });
+    f.runtime.stop(f.session.id);
+    await expect(f.runtime.quiesceForTakeover(f.session)).rejects.toThrow('no rollout found');
+    expect(f.calls.filter((c) => c.method === 'thread/start')).toHaveLength(1);
+    expect(f.calls.some((c) => c.method === 'turn/start')).toBe(false);
   });
   it.each([{ refusesInterrupt: true }, { refusesTermination: true }])(
     'withholds takeover when a live writer cannot be stopped: %j',
@@ -277,7 +370,7 @@ describe('takeover writer quiescence', () => {
     const db = new DatabaseSync(':memory:');
     migrate(db);
     onTestFinished(() => db.close());
-    const sessions = new SqliteSessionRepository(db);
+    const sessions = new SqliteSessionRepository(db, new SqliteWorkspaceLifecycle(db));
     const states = new SqliteAutopilotStore(db);
     const store = new SqliteSupervisionTakeoverStore(db, states);
     const plan: SupervisedPlan = {
@@ -353,6 +446,25 @@ describe('takeover writer quiescence', () => {
       },
     });
     states.save({ ...disabledAutopilot('new', now), planIdentity: 'plan' });
+    const reserveRuntime = vi.fn(({ id }: { id: string }) => {
+      sessions.save(RelaySession.rehydrate(sessions.find(id)!).beginRecovery(now).snapshot, true);
+    });
+    const args: ConstructorParameters<typeof CodexSessionRuntime> = [f.launch];
+    args[12] = async () => {
+      throw new Error('old execution configuration is unavailable');
+    };
+    args[15] = {
+      reserveRuntime,
+      allocate: async () => ({
+        workspacePath: '/w',
+        ownerId: 's',
+        directory: '/tmp/s',
+        environment: {},
+      }),
+      associateProviderThread: async () => {},
+    };
+    const restarted = new CodexSessionRuntime(...args);
+    onTestFinished(() => restarted.stopAll());
     const coordinator = new SupervisionTakeover({
       store,
       now: () => now,
@@ -369,7 +481,7 @@ describe('takeover writer quiescence', () => {
       fence: vi.fn(),
       changed: vi.fn(),
       stop: ({ session, state }) =>
-        f.runtime.quiesceForTakeover(session, state.executor!.ownedProcesses, state.executor),
+        restarted.quiesceForTakeover(session, state.executor!.ownedProcesses, state.executor),
     });
     expect(await coordinator.takeOver('new', 'new-root', 'new-turn')).toMatchObject({
       accepted: true,
@@ -377,6 +489,9 @@ describe('takeover writer quiescence', () => {
     });
     expect(store.owner('plan')).toMatchObject({ sessionId: 'new', phase: 'ready' });
     expect(store.stopped('plan', 's')).toBe(true);
+    expect(reserveRuntime).not.toHaveBeenCalled();
+    expect(sessions.find('s')?.desiredState).toBe('stopped');
+    expect(sessions.find('new')?.activeTurnId).toBe('new-turn');
     expect(states.find('new')).toMatchObject({
       checkpoints: {
         acceptedKeys: ['evidence'],

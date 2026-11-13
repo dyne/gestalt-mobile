@@ -344,6 +344,18 @@ late callback cannot reclaim a reservation. Stopped plan attachments are display
 history rather than workspace ownership; another session or Execute can use the
 workspace without Forget, including after relay restart.
 
+Confirmed Codex Close records process shutdown durably, bound to the session,
+workspace and provider thread. Every new runtime invalidates that receipt before
+startup. Takeover can reuse it after a relay restart only when no recorded process
+is still running. Without a receipt, takeover uses a stop-only connection to the
+fenced predecessor: it loads the existing thread, verifies and stops its actors,
+and never starts a model turn or creates a replacement old root. This control
+connection does not reclaim the workspace's execution slot or prepare execution
+capabilities. The incoming supervisor retains the slot throughout reconciliation.
+Ownership transfer still requires verified quiescence and preserves checkpoints
+and a single idempotent replacement identity. Runtime exceptions report the
+failed takeover boundary in both the tool result and redacted trace telemetry.
+
 Every Forget claims a durable workspace operation fence. A second Forget in that
 folder must retry, so concurrent requests cannot both classify themselves as
 intermediate. New sessions and runtime activations for the folder, and new known

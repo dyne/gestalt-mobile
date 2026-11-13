@@ -6,6 +6,7 @@
 
 import { ORG_PLAN_CAPABILITIES } from '../plans/org-plan-capabilities.js';
 import { WorkspaceSessionConflict } from '../../features/sessions/application/workspace-conflict.js';
+import type { RuntimeReleaseStore } from '../../features/sessions/application/runtime-release-store.js';
 import { readExecutorConfiguration } from './executor-configuration.js';
 import type {
   SessionScratch,
@@ -307,6 +308,7 @@ export class CodexSessionRuntime {
       threadId: string,
     ) => void | Promise<void | { model: string; reasoningEffort: string; assertCurrent(): void }>,
     private readonly scratch?: SessionScratch,
+    private readonly runtimeReleases?: RuntimeReleaseStore,
   ) {
     void _legacyProcesses;
     void _legacyRequestTimeoutMs;
@@ -468,8 +470,10 @@ export class CodexSessionRuntime {
       await this.confirmResourceRelease(resource, true);
     }
     this.retrieval?.release?.(session.id);
-    if (observedResource && !this.liveResources.get(session.id)?.size)
+    if (observedResource && !this.liveResources.get(session.id)?.size) {
+      this.runtimeReleases?.confirm(session);
       this.confirmedWorkspaceReleases.add(session.id);
+    }
   }
 
   private confirmResourceRelease(resource: SessionResource, strict = false): Promise<void> {
@@ -830,7 +834,8 @@ export class CodexSessionRuntime {
     // for takeover would conflict with the incoming workspace's running slot.
     if (
       session.desiredState === 'stopped' &&
-      this.confirmedWorkspaceReleases.has(session.id) &&
+      (this.confirmedWorkspaceReleases.has(session.id) ||
+        this.runtimeReleases?.confirmed(session)) &&
       !this.liveResources.get(session.id)?.size &&
       !recordedProcesses.some((claim) => ['running', 'detached-active'].includes(claim.state))
     )
@@ -864,7 +869,7 @@ export class CodexSessionRuntime {
     executor: { threadId: string; taskPath: string } | undefined,
     allowed: () => boolean,
   ): Promise<boolean> {
-    const writer = await this.ensureWriter(session, new Date().toISOString());
+    const writer = await this.acquireTakeoverControl(session, allowed);
     if (!allowed()) {
       await this.release(session.id);
       return false;
@@ -1016,6 +1021,39 @@ export class CodexSessionRuntime {
     resource.beginExplicitShutdown();
     resource.dispose();
     return true;
+  }
+
+  /** A fenced predecessor needs a stop-only connection, never execution admission.
+   * thread/resume loads its existing identity without starting a model turn.
+   * No missing-rollout replacement, capability preparation or plan watcher is allowed here.
+   */
+  private async acquireTakeoverControl(
+    session: RelaySessionSnapshot,
+    allowed: () => boolean,
+  ): Promise<WriterAcquisition> {
+    if (this.ownsWriter(session.id)) return { session, replacementCreated: false };
+    if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
+    const resource = await this.createResource(session, 'takeover');
+    try {
+      if (!allowed()) throw new Error('TAKEOVER_CANCELLED');
+      await resource.process.rpc.request('initialize', {
+        clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
+        capabilities: { experimentalApi: true },
+      });
+      if (!allowed()) throw new Error('TAKEOVER_CANCELLED');
+      await resource.process.rpc.request('thread/resume', {
+        threadId: session.threadId,
+        cwd: session.workspacePath,
+        ...this.permissionParams(session),
+      });
+      if (!allowed()) throw new Error('TAKEOVER_CANCELLED');
+      resource.threadId = session.threadId;
+      this.sessions.set(session.id, resource);
+      return { session, replacementCreated: false };
+    } catch (error) {
+      resource.dispose();
+      throw error;
+    }
   }
 
   async queueTurnInput(
@@ -1822,9 +1860,12 @@ export class CodexSessionRuntime {
       : { sandbox: selection };
   }
 
-  private createResource(session: RelaySessionSnapshot): Promise<SessionResource> {
+  private createResource(
+    session: RelaySessionSnapshot,
+    purpose: 'execution' | 'takeover' = 'execution',
+  ): Promise<SessionResource> {
     this.scratch?.assertAvailable?.(session.id);
-    const task = this.createResourceInner(session);
+    const task = this.createResourceInner(session, purpose);
     const pending = this.resourceCreations.get(session.id) ?? new Set();
     pending.add(task);
     this.resourceCreations.set(session.id, pending);
@@ -1837,22 +1878,29 @@ export class CodexSessionRuntime {
     return task;
   }
 
-  private async createResourceInner(session: RelaySessionSnapshot): Promise<SessionResource> {
-    this.scratch?.reserveRuntime?.(session);
+  private async createResourceInner(
+    session: RelaySessionSnapshot,
+    purpose: 'execution' | 'takeover',
+  ): Promise<SessionResource> {
+    this.runtimeReleases?.invalidate(session.id);
+    if (purpose === 'execution') this.scratch?.reserveRuntime?.(session);
     this.confirmedWorkspaceReleases.delete(session.id);
     const deadline = xerjDeadline();
-    const lease = this.planStatusSource
-      ? await this.planStatusSource.open(
-          { id: session.id, workspacePath: session.workspacePath },
-          (update) => this.onPlanStatus?.(session.id, update),
-        )
-      : undefined;
+    const lease =
+      purpose === 'execution' && this.planStatusSource
+        ? await this.planStatusSource.open(
+            { id: session.id, workspacePath: session.workspacePath },
+            (update) => this.onPlanStatus?.(session.id, update),
+          )
+        : undefined;
     let borrowed: ServiceScratchLease | undefined;
     let launched = false;
     try {
       const token = randomUUID();
-      const skillsConfig = await this.resolveSkills?.(session);
-      const modelConfig = (await this.resolveModelConfig?.(session)) ?? {};
+      const skillsConfig =
+        purpose === 'execution' ? await this.resolveSkills?.(session) : undefined;
+      const modelConfig =
+        purpose === 'execution' ? ((await this.resolveModelConfig?.(session)) ?? {}) : {};
       const scratch = await this.scratch?.allocate(session);
       const scratchLease = (borrowed = await this.scratch?.borrow?.(session));
       this.scratch?.assertAvailable?.(session.id);
