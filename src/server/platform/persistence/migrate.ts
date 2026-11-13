@@ -99,6 +99,10 @@ export function migrate(database: DatabaseSync): void {
   database.exec(
     'CREATE TABLE IF NOT EXISTS org_plan_takeovers (plan_identity TEXT PRIMARY KEY, session_id TEXT NOT NULL, epoch INTEGER NOT NULL, phase TEXT NOT NULL)',
   );
+  // Recovery metadata outlives Forget; it contains no chat, prompts or model output.
+  database.exec(
+    'CREATE TABLE IF NOT EXISTS org_plan_supervision_recovery (plan_identity TEXT NOT NULL, session_id TEXT NOT NULL, workspace_path TEXT NOT NULL, state_json TEXT NOT NULL, PRIMARY KEY(plan_identity, session_id))',
+  );
   database.exec(
     'CREATE TABLE IF NOT EXISTS tool_efficiency (session_id TEXT PRIMARY KEY REFERENCES relay_sessions(id) ON DELETE CASCADE, state_json TEXT NOT NULL)',
   );

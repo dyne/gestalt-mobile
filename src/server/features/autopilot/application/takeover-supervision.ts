@@ -26,9 +26,28 @@ export type TakeoverClaim = Readonly<{
   epoch: number;
   phase: 'stopping' | 'ready';
 }>;
+export type TakeoverRecoveryState = Pick<
+  AutopilotSession,
+  'sessionId' | 'updatedAt' | 'executor' | 'checkpoints'
+>;
+export type TakeoverRecovery = Readonly<{
+  epoch: number | null;
+  verified: boolean;
+  sessionIds: readonly string[];
+  states: readonly TakeoverRecoveryState[];
+}>;
 export interface SupervisionTakeoverStore {
   owner(planIdentity: string): TakeoverClaim | null;
-  claim(planIdentity: string, sessionId: string): TakeoverClaim | null;
+  recovery(
+    planIdentity: string,
+    workspacePath: string,
+    knownSessionIds: readonly string[],
+  ): TakeoverRecovery;
+  claim(
+    planIdentity: string,
+    sessionId: string,
+    expectedEpoch?: number | null,
+  ): TakeoverClaim | null;
   retire(claim: TakeoverClaim, sessionIds: readonly string[]): boolean;
   stopped(planIdentity: string, sessionId: string): boolean;
   markStopped(claim: TakeoverClaim, sessionId: string): boolean;
@@ -148,23 +167,20 @@ export class SupervisionTakeover {
           p.session.workspacePath === before.session.workspacePath &&
           p.state.planIdentity === before.identity,
       );
-    if (!previous.length) return { accepted: false, code: 'PREVIOUS_SUPERVISOR_NOT_FOUND' };
-    if (
-      existing &&
-      existing.sessionId !== sessionId &&
-      !previous.some((p) => p.session.id === existing.sessionId)
-    )
-      return { accepted: false, code: 'PREVIOUS_SUPERVISOR_NOT_FOUND' };
+    const recovery = this.deps.store.recovery(before.identity, before.session.workspacePath, [
+      sessionId,
+      ...previous.map((p) => p.session.id),
+    ]);
+    if (!recovery.verified) return { accepted: false, code: 'PREVIOUS_WRITER_STATUS_UNKNOWN' };
     const fingerprint = planFingerprint(before.plan);
     const generation = before.state?.generation ?? 0;
     boundary('ownershipReservation');
-    const claim = this.deps.store.claim(before.identity, sessionId);
+    const claim = this.deps.store.claim(before.identity, sessionId, recovery.epoch);
     if (!claim) return { accepted: false, code: 'TAKEOVER_IN_PROGRESS' };
     if (
-      !this.deps.store.retire(
-        claim,
-        previous.map((p) => p.session.id),
-      )
+      !this.deps.store.retire(claim, [
+        ...new Set([...previous.map((p) => p.session.id), ...recovery.sessionIds]),
+      ])
     )
       return { accepted: false, code: 'TAKEOVER_CONTEXT_CHANGED' };
     // Fence every predecessor before the first asynchronous process operation.
@@ -179,6 +195,9 @@ export class SupervisionTakeover {
       if (!this.deps.store.markStopped(claim, p.session.id))
         return { accepted: false, code: 'TAKEOVER_CONTEXT_CHANGED' };
     }
+    for (const id of recovery.sessionIds)
+      if (!this.deps.store.markStopped(claim, id))
+        return { accepted: false, code: 'TAKEOVER_CONTEXT_CHANGED' };
     boundary('revalidateContext');
     const current = this.deps.context(sessionId);
     if (
@@ -194,8 +213,9 @@ export class SupervisionTakeover {
     )
       return { accepted: false, code: 'TAKEOVER_CONTEXT_CHANGED' };
     const canonicalTaskName = `l${index + 1}`;
-    const executors = previous
-      .map((p) => p.state.executor)
+    const recoveredStates = [...previous.map((p) => p.state), ...recovery.states];
+    const executors = recoveredStates
+      .map((state) => state.executor)
       .filter((e) => e?.canonicalTaskName === canonicalTaskName);
     const source = executors.sort(
       (a, b) =>
@@ -209,9 +229,9 @@ export class SupervisionTakeover {
     const identity = executorIdentity(canonicalTaskName, nextGeneration);
     const history =
       current.state?.checkpoints ??
-      [...previous]
-        .filter((p) => p.state.checkpoints?.planIdentity === before.identity)
-        .sort((a, b) => b.state.updatedAt.localeCompare(a.state.updatedAt))[0]?.state.checkpoints;
+      recoveredStates
+        .filter((state) => state.checkpoints?.planIdentity === before.identity)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]?.checkpoints;
     const now = this.deps.now();
     const state: AutopilotSession = {
       ...(current.state ?? disabledAutopilot(sessionId, now)),
@@ -259,7 +279,9 @@ export class SupervisionTakeover {
         : undefined,
       updatedAt: now,
     };
-    const previousSessionIds = previous.map((p) => p.session.id);
+    const previousSessionIds = [
+      ...new Set([...previous.map((p) => p.session.id), ...recovery.sessionIds]),
+    ];
     boundary('commitOwnership');
     if (
       !this.deps.store.complete(

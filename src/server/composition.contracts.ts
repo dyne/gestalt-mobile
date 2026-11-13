@@ -3055,184 +3055,206 @@ describe('production composition', () => {
       await accepted.app.close();
     });
 
-    it('lets a user-directed new session take over the unfinished plan without an approval or an unreachable old-root executor', async () => {
-      const handles: LiveServerHandle[] = [];
-      let previousRoot = '';
-      const launch = liveAppServer(handles);
-      let coordinator:
-        import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
-      const fixture = {
-        ...(await createProductionAutopilotFixture({
-          activitySchedule: () => () => {},
-          autopilotSchedule: () => () => {},
-          onAutopilotCoordinator: (value) => {
-            coordinator = value;
+    it.each(['Close', 'Forget'] as const)(
+      'lets a user-directed new session take over after %s without an approval or an unreachable old-root executor',
+      async (operation) => {
+        const handles: LiveServerHandle[] = [];
+        let previousRoot = '';
+        const launch = liveAppServer(handles);
+        let coordinator:
+          import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
+        const fixture = {
+          ...(await createProductionAutopilotFixture({
+            activitySchedule: () => () => {},
+            autopilotSchedule: () => () => {},
+            onAutopilotCoordinator: (value) => {
+              coordinator = value;
+            },
+            launchAppServer: () => {
+              const server = launch(),
+                request = server.rpc.request;
+              server.rpc.request = async (method, params) =>
+                method === 'thread/read' &&
+                (params as { threadId: string }).threadId === 'previous-child'
+                  ? {
+                      thread: {
+                        id: 'previous-child',
+                        parentThreadId: previousRoot,
+                        status: { type: 'idle' },
+                        turns: [],
+                      },
+                    }
+                  : method === 'thread/resume'
+                    ? { thread: { id: (params as { threadId: string }).threadId } }
+                    : request(method, params);
+              return server;
+            },
+          })),
+          handles,
+        };
+        onTestFinished(() => fixture.app.close());
+        const { SqliteAutopilotStore } =
+          await import('./platform/persistence/sqlite-autopilot-store.js');
+        previousRoot = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()
+          .threadId;
+        const db = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+        onTestFinished(() => db.close());
+        const store = new SqliteAutopilotStore(db);
+        const old = store.find(fixture.sessionId)!;
+        store.save({
+          ...old,
+          checkpoints: {
+            protocolVersion: 1,
+            planIdentity: old.planIdentity!,
+            acceptedKeys: ['retained-boundary'],
+            reportedL1Ids: [],
+            pendingTurnId: null,
+            terminalReviewAccepted: false,
           },
-          launchAppServer: () => {
-            const server = launch(),
-              request = server.rpc.request;
-            server.rpc.request = async (method, params) =>
-              method === 'thread/read' &&
-              (params as { threadId: string }).threadId === 'previous-child'
-                ? {
-                    thread: {
-                      id: 'previous-child',
-                      parentThreadId: previousRoot,
-                      status: { type: 'idle' },
-                      turns: [],
-                    },
-                  }
-                : method === 'thread/resume'
-                  ? { thread: { id: (params as { threadId: string }).threadId } }
-                  : request(method, params);
-            return server;
-          },
-        })),
-        handles,
-      };
-      onTestFinished(() => fixture.app.close());
-      const { SqliteAutopilotStore } =
-        await import('./platform/persistence/sqlite-autopilot-store.js');
-      previousRoot = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()
-        .threadId;
-      const db = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
-      onTestFinished(() => db.close());
-      const store = new SqliteAutopilotStore(db);
-      const old = store.find(fixture.sessionId)!;
-      store.save({
-        ...old,
-        executor: {
-          canonicalPosition: 'L1',
-          canonicalTaskName: 'l1',
-          threadId: 'previous-child',
-          taskPath: '/root/l1',
-          l1State: 'TODO',
-          lastActivityAt: new Date().toISOString(),
-          ownedProcesses: [],
-          outcome: 'partial',
-          continuationGeneration: 1,
-          continuationCount: 2,
-        },
-      });
-      await fixture.app.inject({
-        method: 'POST',
-        url: `/api/sessions/${fixture.sessionId}/release`,
-      });
-      const incoming = await createComposedSession(fixture.app);
-      await installAutopilotPlan(fixture.app, incoming, fixture.workspacePath, 'autopilot');
-      const started = await fixture.app.inject({
-        method: 'POST',
-        url: `/api/sessions/${incoming}/turns`,
-        payload: {
-          text: 'Take over the unfinished plan here.',
-          clientUserMessageId: 'takeover-test',
-        },
-      });
-      expect(started.statusCode).toBe(202);
-      const current = (await fixture.app.inject(`/api/sessions/${incoming}`)).json();
-      const handle = handles.find((h) =>
-        h.requests.some(
-          (r) =>
-            r.method === 'turn/start' &&
-            (r.params as { threadId: string }).threadId === current.threadId,
-        ),
-      )!;
-      const request = (id: number) =>
-        handle.request!({
-          id,
-          method: 'item/tool/call',
-          params: {
-            threadId: current.threadId,
-            turnId: current.activeTurnId,
-            tool: 'gestalt_org_plan_takeover',
-            arguments: { version: 1, reason: 'userDirectedTakeover' },
+          executor: {
+            canonicalPosition: 'L1',
+            canonicalTaskName: 'l1',
+            threadId: 'previous-child',
+            taskPath: '/root/l1',
+            l1State: 'TODO',
+            lastActivityAt: new Date().toISOString(),
+            ownedProcesses: [],
+            outcome: 'partial',
+            continuationGeneration: 1,
+            continuationCount: 2,
           },
         });
-      const result = (await request(9910)) as {
-        success: boolean;
-        contentItems: Array<{ text: string }>;
-      };
-      const accepted = JSON.parse(result.contentItems[0]!.text);
-      expect(accepted).toMatchObject({
-        accepted: true,
-        alreadyOwner: false,
-        identity: { canonicalTaskName: 'l1', taskName: 'l1_g2', generation: 2 },
-      });
-      expect(store.find(incoming)).toMatchObject({
-        requestedEnabled: true,
-        executor: { replacement: { reason: 'userDirectedTakeover', taskName: 'l1_g2' } },
-      });
-      expect(
-        db
-          .prepare("SELECT count(*) AS n FROM pending_interactions WHERE kind='orgPlanAttention'")
-          .get(),
-      ).toEqual({ n: 0 });
-      expect(
-        db
-          .prepare(
-            "SELECT count(*) AS n FROM session_events WHERE type='autopilot.supervisor-taken-over'",
-          )
-          .get(),
-      ).toEqual({ n: 1 });
-      expect(
-        JSON.parse(((await request(9911)) as typeof result).contentItems[0]!.text),
-      ).toMatchObject({
-        accepted: true,
-        alreadyOwner: true,
-        identity: { taskName: 'l1_g2', generation: 2 },
-      });
-      expect(
-        (
-          await fixture.app.inject({
-            method: 'POST',
-            url: `/api/sessions/${fixture.sessionId}/turns`,
-            payload: { text: 'stale supervisor' },
-          })
-        ).statusCode,
-      ).toBe(409);
-      handle.respond = (method, params) => {
-        if (method === 'thread/list')
-          return {
-            data:
-              (params as { parentThreadId: string }).parentThreadId === current.threadId
-                ? [
-                    {
-                      id: 'new-child',
-                      parentThreadId: current.threadId,
-                      status: { type: 'idle' },
-                      source: { subAgent: { thread_spawn: { agent_path: '/root/l1_g2' } } },
-                    },
-                  ]
-                : [],
-          };
-        if (method === 'thread/read')
-          return {
-            thread: {
-              id: (params as { threadId: string }).threadId,
-              parentThreadId: current.threadId,
-              status: {
-                type:
-                  (params as { threadId: string }).threadId === current.threadId
-                    ? 'active'
-                    : 'idle',
-              },
-              turns: [],
+        const closed = await fixture.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${fixture.sessionId}/release`,
+        });
+        expect(closed.statusCode).toBe(202);
+        if (operation === 'Forget') {
+          const forgotten = await fixture.app.inject({
+            method: 'DELETE',
+            url: `/api/sessions/${fixture.sessionId}`,
+          });
+          expect(forgotten.statusCode).toBe(204);
+          expect(store.find(fixture.sessionId)).toBeNull();
+        }
+        const incoming = await createComposedSession(fixture.app);
+        await installAutopilotPlan(fixture.app, incoming, fixture.workspacePath, 'autopilot');
+        const started = await fixture.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${incoming}/turns`,
+          payload: {
+            text: 'Take over the unfinished plan here.',
+            clientUserMessageId: 'takeover-test',
+          },
+        });
+        expect(started.statusCode).toBe(202);
+        const current = (await fixture.app.inject(`/api/sessions/${incoming}`)).json();
+        const handle = handles.find((h) =>
+          h.requests.some(
+            (r) =>
+              r.method === 'turn/start' &&
+              (r.params as { threadId: string }).threadId === current.threadId,
+          ),
+        )!;
+        const request = (id: number) =>
+          handle.request!({
+            id,
+            method: 'item/tool/call',
+            params: {
+              threadId: current.threadId,
+              turnId: current.activeTurnId,
+              tool: 'gestalt_org_plan_takeover',
+              arguments: { version: 1, reason: 'userDirectedTakeover' },
             },
-          };
-        return undefined;
-      };
-      await fixture.app.inject({
-        method: 'POST',
-        url: `/api/sessions/${incoming}/activity/refresh`,
-      });
-      expect(coordinator!.reconcileExecutorBinding(incoming)).toMatchObject({ status: 'ready' });
-      expect(store.find(incoming)!.executor).toMatchObject({
-        threadId: 'new-child',
-        taskPath: '/root/l1_g2',
-        continuationGeneration: 2,
-      });
-      expect(store.find(fixture.sessionId)!.requestedEnabled).toBe(false);
-    });
+          });
+        const result = (await request(9910)) as {
+          success: boolean;
+          contentItems: Array<{ text: string }>;
+        };
+        const accepted = JSON.parse(result.contentItems[0]!.text);
+        expect(accepted).toMatchObject({
+          accepted: true,
+          alreadyOwner: false,
+          identity: { canonicalTaskName: 'l1', taskName: 'l1_g2', generation: 2 },
+        });
+        expect(store.find(incoming)).toMatchObject({
+          requestedEnabled: true,
+          executor: { replacement: { reason: 'userDirectedTakeover', taskName: 'l1_g2' } },
+          checkpoints: { acceptedKeys: ['retained-boundary'] },
+        });
+        expect(
+          db
+            .prepare("SELECT count(*) AS n FROM pending_interactions WHERE kind='orgPlanAttention'")
+            .get(),
+        ).toEqual({ n: 0 });
+        expect(
+          db
+            .prepare(
+              "SELECT count(*) AS n FROM session_events WHERE type='autopilot.supervisor-taken-over'",
+            )
+            .get(),
+        ).toEqual({ n: 1 });
+        expect(
+          JSON.parse(((await request(9911)) as typeof result).contentItems[0]!.text),
+        ).toMatchObject({
+          accepted: true,
+          alreadyOwner: true,
+          identity: { taskName: 'l1_g2', generation: 2 },
+        });
+        expect(
+          (
+            await fixture.app.inject({
+              method: 'POST',
+              url: `/api/sessions/${fixture.sessionId}/turns`,
+              payload: { text: 'stale supervisor' },
+            })
+          ).statusCode,
+        ).toBe(409);
+        handle.respond = (method, params) => {
+          if (method === 'thread/list')
+            return {
+              data:
+                (params as { parentThreadId: string }).parentThreadId === current.threadId
+                  ? [
+                      {
+                        id: 'new-child',
+                        parentThreadId: current.threadId,
+                        status: { type: 'idle' },
+                        source: { subAgent: { thread_spawn: { agent_path: '/root/l1_g2' } } },
+                      },
+                    ]
+                  : [],
+            };
+          if (method === 'thread/read')
+            return {
+              thread: {
+                id: (params as { threadId: string }).threadId,
+                parentThreadId: current.threadId,
+                status: {
+                  type:
+                    (params as { threadId: string }).threadId === current.threadId
+                      ? 'active'
+                      : 'idle',
+                },
+                turns: [],
+              },
+            };
+          return undefined;
+        };
+        await fixture.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${incoming}/activity/refresh`,
+        });
+        expect(coordinator!.reconcileExecutorBinding(incoming)).toMatchObject({ status: 'ready' });
+        expect(store.find(incoming)!.executor).toMatchObject({
+          threadId: 'new-child',
+          taskPath: '/root/l1_g2',
+          continuationGeneration: 2,
+        });
+        if (operation === 'Close')
+          expect(store.find(fixture.sessionId)!.requestedEnabled).toBe(false);
+      },
+    );
 
     it.each(['checkpoint', 'wait expiry'] as const)(
       'continues the durable root after %s when startup observed a provisional disconnected thread',
