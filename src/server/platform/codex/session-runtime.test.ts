@@ -90,6 +90,7 @@ describe('CodexSessionRuntime', () => {
       rpc: {
         request: async (method, params) => {
           if (method === 'thread/start') return { thread: { id: 'fresh' } };
+          if (method === 'turn/start') return { turn: { id: 'first-turn' } };
           if (method === 'thread/read') {
             calls.push(params);
             if ((params as { includeTurns: boolean }).includeTurns) throw failure;
@@ -121,6 +122,7 @@ describe('CodexSessionRuntime', () => {
       await expect(runtime.readActivity(session)).rejects.toThrow(
         'CODEX_ACTIVITY_STATUS_UNAVAILABLE',
       );
+    await runtime.startTurn(session, 'first message', undefined, 't');
     await expect(runtime.readHistory(session)).rejects.toBe(failure);
     expect(calls).toEqual([
       ...Array.from({ length: 5 }, () => ({ threadId: 'fresh', includeTurns: false })),
