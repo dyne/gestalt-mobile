@@ -25,6 +25,7 @@ export type AgentActivitySnapshot = Readonly<{
     canonicalPosition?: string;
     continuationGeneration?: number;
     outcome?: 'partial' | 'cancelled' | 'failed';
+    latestProgress?: Readonly<{ text: string; occurredAt: string }>;
     contextUsedPercent?: number;
     ownedProcesses?: readonly {
       state:
@@ -92,6 +93,15 @@ export function isAgentActivitySnapshot(
       !Number.isNaN(Date.parse(actor.observedAt as string)) &&
       !Number.isNaN(Date.parse(actor.lastActivityAt as string)) &&
       (actor.reason === undefined || validText(actor.reason, 64)) &&
+      (actor.latestProgress === undefined ||
+        (actor.latestProgress !== null &&
+          typeof actor.latestProgress === 'object' &&
+          validText((actor.latestProgress as Record<string, unknown>).text, 512) &&
+          Boolean(((actor.latestProgress as Record<string, unknown>).text as string).trim()) &&
+          validText((actor.latestProgress as Record<string, unknown>).occurredAt, 64) &&
+          !Number.isNaN(
+            Date.parse((actor.latestProgress as Record<string, unknown>).occurredAt as string),
+          ))) &&
       (actor.contextUsedPercent === undefined ||
         (Number.isInteger(actor.contextUsedPercent) &&
           (actor.contextUsedPercent as number) >= 0 &&

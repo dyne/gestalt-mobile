@@ -45,6 +45,7 @@ export type SubagentActivity = Readonly<{
   outcome?: 'partial' | 'cancelled' | 'failed';
   contextUsedPercent?: number;
   ownedProcesses?: readonly AgentOwnedProcess[];
+  latestProgress?: Readonly<{ text: string; occurredAt: string }>;
   state: AgentActivityState;
   reason: AgentActivityReason;
   observedAt: string;
@@ -92,6 +93,7 @@ export type AgentActivityFact = Readonly<{
     | 'interactionResolved'
     | 'collaboration'
     | 'contextUsage'
+    | 'progress'
     | 'processExited'
     | 'observed';
   threadId?: string;
@@ -107,6 +109,7 @@ export type AgentActivityFact = Readonly<{
   childStatus?: string;
   collaborationAction?: string;
   contextUsedPercent?: number;
+  progressText?: string;
   attentionReason?: Extract<
     AgentActivityReason,
     | 'planChange'
@@ -152,6 +155,34 @@ export function projectAgentActivity(
   fact: AgentActivityFact,
 ): AgentActivitySnapshot {
   if (fact.sessionId !== current.sessionId || !validTimestamp(fact.occurredAt)) return current;
+  if (fact.kind === 'progress') {
+    const child = current.subagents.find(
+      (candidate) => fact.threadId && candidate.threadId === fact.threadId,
+    );
+    const text = fact.progressText?.trim();
+    if (!child || !text || text.length > 512) return current;
+    if (
+      child.latestProgress &&
+      (Date.parse(fact.occurredAt) < Date.parse(child.latestProgress.occurredAt) ||
+        (fact.occurredAt === child.latestProgress.occurredAt && text === child.latestProgress.text))
+    )
+      return current;
+    // Progress is display evidence, never a lifecycle or freshness signal.
+    return Object.freeze({
+      ...current,
+      subagents: Object.freeze(
+        current.subagents.map((candidate) =>
+          candidate === child
+            ? Object.freeze({
+                ...child,
+                latestProgress: Object.freeze({ text, occurredAt: fact.occurredAt }),
+                lastActivityAt: later(child.lastActivityAt, fact.occurredAt),
+              })
+            : candidate,
+        ),
+      ),
+    });
+  }
   // Notifications can replay or arrive out of order. Never let an older fact
   // regress an actor's authoritative state.
   if (Date.parse(fact.occurredAt) < Date.parse(current.root.observedAt)) return current;
@@ -262,6 +293,7 @@ export function projectAgentActivity(
           : before?.ownedProcesses
             ? { ownedProcesses: before.ownedProcesses }
             : {}),
+        ...(before?.latestProgress ? { latestProgress: before.latestProgress } : {}),
         state: childState(fact.childStatus, fact.collaborationAction, before?.state),
         reason: childReason(fact.childStatus, fact.collaborationAction),
         observedAt: fact.occurredAt,

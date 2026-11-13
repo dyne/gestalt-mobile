@@ -7,6 +7,26 @@ import { describe, expect, it, vi } from 'vitest';
 import { AgentActivityRegistry } from './registry.js';
 const at = '2026-01-01T00:00:00.000Z';
 describe('agent activity registry', () => {
+  it('publishes progress as display-only without rearming reconciliation or invalidating observations', () => {
+    const publish = vi.fn();
+    const schedule = vi.fn(() => () => {});
+    const registry = new AgentActivityRegistry(publish, { schedule, reconcile: async () => true });
+    registry.childrenReconciled('s', at, [{ id: 'child', status: 'working' }]);
+    const revision = registry.observationRevision('s');
+    publish.mockClear();
+    registry.observe({
+      sessionId: 's',
+      kind: 'progress',
+      threadId: 'child',
+      occurredAt: '2026-01-01T00:00:01.000Z',
+      progressText: 'Checking focused tests.',
+    });
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish.mock.calls[0]?.[2]).toBe('progress');
+    expect(schedule).not.toHaveBeenCalled();
+    expect(registry.observationRevision('s')).toBe(revision);
+    registry.dispose('s');
+  });
   it('uses the durable root binding after startup replaces a provisional thread', () => {
     let threadId: string | null = null;
     const registry = new AgentActivityRegistry(() => {}, { rootThreadId: () => threadId });

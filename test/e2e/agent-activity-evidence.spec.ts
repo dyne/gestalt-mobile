@@ -48,6 +48,17 @@ for (const viewport of [
         await expect(page.locator('summary').first()).toBeFocused();
         await page.keyboard.press('Enter');
         await expect(page.getByText('α worker').first()).toBeVisible();
+        await expect(
+          page
+            .getByText(
+              'Checking the focused tests and reviewing the changed files before the next milestone report.',
+            )
+            .first(),
+        ).toBeVisible();
+        await expect(page.locator('li time').first()).toHaveAttribute(
+          'datetime',
+          '2026-01-01T00:00:00.000Z',
+        );
         expect(
           await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
         ).toBe(true);

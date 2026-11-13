@@ -25,6 +25,7 @@ export function toAgentActivityDto(snapshot: AgentActivitySnapshot): Record<stri
       ...(child.contextUsedPercent !== undefined
         ? { contextUsedPercent: child.contextUsedPercent }
         : {}),
+      ...(child.latestProgress ? { latestProgress: child.latestProgress } : {}),
       ownedProcesses: (child.ownedProcesses ?? []).slice(0, 64).map((process) => ({
         state: process.state,
         ownership: process.ownership,

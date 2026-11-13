@@ -17,6 +17,43 @@ const fact = (kind: Parameters<typeof projectAgentActivity>[1]['kind'], more = {
   ...more,
 });
 describe('agent activity projector', () => {
+  it('retains the newest known-child preview without changing lifecycle or root activity', () => {
+    const initial = projectAgentActivity(
+      createAgentActivitySnapshot('s', at),
+      fact('collaboration', {
+        childId: 'child',
+        childThreadId: 'child',
+        childStatus: 'working',
+      }),
+    );
+    const progress = {
+      ...fact('progress'),
+      threadId: 'child',
+      occurredAt: '2026-01-01T00:00:02.000Z',
+      progressText: 'Checking focused tests.',
+    };
+    const next = projectAgentActivity(initial, progress);
+    expect(next.root).toBe(initial.root);
+    expect(next.confidence).toBe(initial.confidence);
+    expect(next.subagents[0]).toMatchObject({
+      state: 'working',
+      lastActivityAt: progress.occurredAt,
+      latestProgress: { text: progress.progressText, occurredAt: progress.occurredAt },
+    });
+    expect(projectAgentActivity(next, progress)).toBe(next);
+    expect(
+      projectAgentActivity(next, { ...progress, occurredAt: at, progressText: 'Older.' }),
+    ).toBe(next);
+    expect(projectAgentActivity(next, { ...progress, threadId: 'unknown' })).toBe(next);
+    expect(projectAgentActivity(next, { ...progress, threadId: 'root' })).toBe(next);
+    const reconciled = projectAgentActivity(next, {
+      ...fact('collaboration'),
+      childId: 'child',
+      occurredAt: '2026-01-01T00:00:03.000Z',
+      childStatus: 'idle',
+    });
+    expect(reconciled.subagents[0]?.latestProgress).toEqual(next.subagents[0]?.latestProgress);
+  });
   it('updates context percentages without changing root or child activity state', () => {
     let snapshot = projectAgentActivity(
       createAgentActivitySnapshot('s', at),

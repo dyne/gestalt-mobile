@@ -564,6 +564,7 @@ describe('control-plane trace export', () => {
     const payload = {
       ...toAgentActivityDto(snapshot),
       prompt: 'private-prompt',
+      latestProgress: { text: 'private-progress', occurredAt: at },
       ownedProcesses: [
         {
           state: 'running',

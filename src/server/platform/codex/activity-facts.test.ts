@@ -7,6 +7,32 @@ import { describe, expect, it } from 'vitest';
 import { decodeAgentActivityFact, decodeAgentActivityFacts } from './activity-facts.js';
 const at = '2026-01-01T00:00:00.000Z';
 describe('agent activity app-server characterization', () => {
+  it('extracts only completed commentary as a bounded progress preview', () => {
+    const notification = {
+      method: 'item/completed',
+      params: {
+        threadId: 'child',
+        item: { type: 'agentMessage', phase: 'commentary', text: `Checking\n  ${'x'.repeat(600)}` },
+      },
+    };
+    const [fact] = decodeAgentActivityFacts('s', at, notification);
+    expect(fact).toMatchObject({ kind: 'progress', threadId: 'child', occurredAt: at });
+    expect(fact?.progressText).toHaveLength(512);
+    expect(fact?.progressText).toMatch(/^Checking x+…$/);
+    for (const phase of ['final_answer', undefined])
+      expect(
+        decodeAgentActivityFacts('s', at, {
+          ...notification,
+          params: {
+            ...notification.params,
+            item: { ...notification.params.item, phase },
+          },
+        }),
+      ).toEqual([]);
+    expect(decodeAgentActivityFacts('s', at, { ...notification, method: 'item/started' })).toEqual(
+      [],
+    );
+  });
   it('derives bounded context use from the app-server thread usage update', () => {
     expect(
       decodeAgentActivityFact('s', at, {
