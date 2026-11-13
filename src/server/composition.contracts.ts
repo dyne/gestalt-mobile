@@ -591,7 +591,8 @@ async function orgPlanActivationFixture(
     failThread: false,
     initializationGate: null as Promise<void> | null,
     threadGate: null as Promise<void> | null,
-    held: null as 'initialization' | 'thread' | null,
+    catalogGate: null as Promise<void> | null,
+    held: null as 'initialization' | 'thread' | 'catalog' | null,
   };
   const open = () =>
     composeAuthorizedApp({
@@ -646,7 +647,17 @@ async function orgPlanActivationFixture(
               throw new Error('INJECTED_THREAD_RECEIPT_LOSS');
             }
           }
-          if (method === 'skills/list')
+          if (method === 'skills/list') {
+            const gate = !runtime && controls.catalogGate;
+            if (gate) {
+              controls.catalogGate = null;
+              controls.held = 'catalog';
+              try {
+                await gate;
+              } finally {
+                controls.held = null;
+              }
+            }
             return {
               data: [
                 {
@@ -663,6 +674,7 @@ async function orgPlanActivationFixture(
                 },
               ],
             };
+          }
           return undefined;
         };
         return server;
@@ -682,7 +694,15 @@ async function orgPlanActivationFixture(
     const prepared = (
       await app.inject({ method: 'POST', url: '/api/plans/prepare', payload: reference })
     ).json();
-    expect(prepared).toMatchObject({ kind: 'eligible' });
+    expect(
+      prepared,
+      JSON.stringify({
+        kind: prepared.kind,
+        code: prepared.code,
+        reason: prepared.reason,
+        existingSessionId: prepared.existingSessionId,
+      }),
+    ).toMatchObject({ kind: 'eligible' });
     return {
       reference,
       expectedRevision: prepared.revision,
@@ -8832,6 +8852,7 @@ describe('production composition', () => {
       'executes a draft retained through %s in one new supervisor, including after restart',
       async (reason) => {
         const f = await orgPlanActivationFixture();
+        let settleWarmup: (() => Promise<void>) | undefined;
         let app = await f.open();
         try {
           const authorId = await createComposedSession(app);
@@ -8860,7 +8881,29 @@ describe('production composition', () => {
           );
           await app.close();
           app = await f.open();
+          const warmup = Promise.withResolvers<void>();
+          f.controls.catalogGate = warmup.promise;
           await app.listen({ host: '127.0.0.1', port: 0 });
+          settleWarmup = async () => {
+            warmup.resolve();
+            await expect
+              .poll(async () => (await app.inject(`/api/sessions/${authorId}`)).json())
+              .toMatchObject({ state: 'stopped', lastOrgPlan: { supervision: false } });
+          };
+          // Fastify listen() does not await async onListen hooks. Hold catalog
+          // warmup so the retained legacy attachment is still unclassified.
+          await vi.waitFor(() => expect(f.controls.held).toBe('catalog'));
+          const early = await app.inject({
+            method: 'POST',
+            url: '/api/plans/prepare',
+            payload: {
+              kind: 'retained-session',
+              sessionId: authorId,
+            },
+          });
+          expect(early.json()).toMatchObject({ kind: 'blocked', code: 'ACTIVE_SUPERVISION' });
+          await settleWarmup();
+          settleWarmup = undefined;
           const payload = await f.prepare(app);
           expect((await app.inject(`/api/sessions/${authorId}`)).json()).toMatchObject({
             lastOrgPlan: { attached: true, supervision: false },
@@ -8963,7 +9006,11 @@ describe('production composition', () => {
             existingSessionId: started.session.id,
           });
         } finally {
-          await app.close();
+          try {
+            await settleWarmup?.();
+          } finally {
+            await app.close();
+          }
         }
       },
     );
