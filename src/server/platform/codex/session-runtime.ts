@@ -160,6 +160,8 @@ class SessionResource {
   private explicitShutdown = false;
   readonly pendingRequests = new Map<string, PendingRequest>();
   threadId: string | undefined;
+  /** Only locally created roots are known empty, until any root turn is attempted or observed. */
+  historyKnownEmpty = false;
   pendingThreadName: string | undefined;
   writtenThreadName: string | undefined;
   readonly capabilities = new Map<string, boolean>();
@@ -379,6 +381,7 @@ export class CodexSessionRuntime {
       resource.threadId = startedThreadId;
       if (resource.retrieval) this.retrieval?.bound?.(resource.retrieval, startedThreadId);
       await this.verifyRetrieval(resource, session, true, beforeThreadStart);
+      resource.historyKnownEmpty = true;
       await this.scratch?.associateProviderThread(session, 'codex', resource.threadId!);
       assertCurrent();
       this.sessions.set(session.id, resource);
@@ -638,6 +641,8 @@ export class CodexSessionRuntime {
     const resource = this.sessions.get(session.id);
     if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
     if (mayStart && !mayStart()) throw new Error('CODEX_TURN_START_CANCELLED');
+    // Fence before the RPC: an uncertain or failed response may still have started a turn.
+    resource.historyKnownEmpty = false;
     const result = decodeTurnStart(
       await resource.process.rpc.request('turn/start', {
         threadId: session.threadId,
@@ -1609,8 +1614,32 @@ export class CodexSessionRuntime {
     turns: HistoryTurn[];
     activeTurnId: string | null;
   }> {
-    const response = await process.rpc.request('thread/read', { threadId, includeTurns: true });
+    let response: unknown;
+    try {
+      response = await process.rpc.request('thread/read', { threadId, includeTurns: true });
+    } catch (error) {
+      // Untouched roots may not have a rollout yet. Never infer empty history
+      // from a generic provider failure, a restored thread, or a thread's age.
+      const unmaterialized =
+        error instanceof CodexJsonRpcError &&
+        ((error.code === -32601 && error.message === 'list_turns is not supported yet') ||
+          (error.code === -32600 &&
+            error.message ===
+              `thread ${threadId} is not materialized yet; includeTurns is unavailable before first user message`));
+      const knownEmpty = () =>
+        resource?.historyKnownEmpty === true &&
+        resource.active &&
+        resource.threadId === threadId &&
+        this.sessions.get(resource.sessionId) === resource;
+      if (!unmaterialized || !knownEmpty()) throw error;
+      const metadata = await process.rpc.request('thread/read', { threadId, includeTurns: false });
+      const thread = asRecord(asRecord(metadata)?.thread);
+      if (!knownEmpty() || thread?.id !== threadId || asRecord(thread.status)?.type !== 'idle')
+        throw error;
+      return { turns: [], activeTurnId: null };
+    }
     if (resource) {
+      resource.historyKnownEmpty = false;
       for (const [childId, model] of decodeSpawnedAgentModels(response))
         resource.spawnedAgentModels.set(childId, model);
     }
@@ -1691,6 +1720,7 @@ export class CodexSessionRuntime {
           resource.modelConfig,
         );
         result = rebindMissingRollout(session, error, replacementThreadId, now);
+        resource.historyKnownEmpty = true;
       }
       resource.threadId = result.session.threadId!;
       if (resource.retrieval) this.retrieval?.bound?.(resource.retrieval, resource.threadId);
@@ -1911,6 +1941,11 @@ export class CodexSessionRuntime {
       }
       const notificationUnsubscribe = process.rpc.onNotification((notification) => {
         if (!resource.active) return;
+        if (
+          notification.method === 'turn/started' &&
+          asRecord(notification.params)?.threadId === resource.threadId
+        )
+          resource.historyKnownEmpty = false;
         this.retrieval?.observe?.(session.id, notification);
         // Internal evidence may only be constructed by this resource's tracker.
         if (notification.method === 'gestalt/mcpStartup') return;
