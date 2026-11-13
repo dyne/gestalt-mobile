@@ -57,6 +57,7 @@
     "test:watch": "vitest",
     "test:package": "node scripts/smoke-packed-cli.mjs",
     "test:e2e": "playwright test",
+    "test:e2e:scratch": "node scripts/verify-chrome-scratch.mjs",
     "test:e2e:functional": "playwright test --config playwright.functional.config.ts",
     "test:e2e:smoke": "node scripts/run-browser-smoke.mjs",
     "test:e2e:shards": "node scripts/verify-browser-shards.mjs",
