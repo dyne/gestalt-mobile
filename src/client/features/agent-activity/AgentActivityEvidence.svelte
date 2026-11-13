@@ -23,6 +23,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         state: 'working' as const,
         observedAt: '2026-01-01T00:00:00.000Z',
         lastActivityAt: '2026-01-01T00:00:00.000Z',
+        latestProgress: {
+          text: 'Checking the focused tests and reviewing the changed files before the next milestone report.',
+          occurredAt: '2026-01-01T00:00:00.000Z',
+        },
       },
     ],
   };

@@ -703,6 +703,74 @@ async function orgPlanActivationFixture(
 
 describe('production composition', () => {
   describeCompositionConcern('autopilot', () => {
+    it('shows child progress without notifying Autopilot or starting a supervisor turn', async () => {
+      let coordinator!: AutopilotCoordinator;
+      const fixture = await createProductionAutopilotFixture({
+        autopilotSchedule: () => () => {},
+        onAutopilotCoordinator: (value) => {
+          coordinator = value;
+        },
+      });
+      onTestFinished(() => fixture.app.close());
+      const session = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+      const handle = fixture.handles.find((candidate) => candidate.calls.includes('thread/start'))!;
+      const notify = vi.spyOn(coordinator, 'activityChanged');
+      handle.notify!({
+        method: 'item/started',
+        params: {
+          threadId: session.threadId,
+          item: {
+            id: 'spawn',
+            type: 'collabAgentToolCall',
+            tool: 'spawnAgent',
+            senderThreadId: session.threadId,
+            receiverThreadIds: ['progress-child'],
+            agentsStates: { 'progress-child': { status: 'running' } },
+          },
+        },
+      });
+      expect(notify).toHaveBeenCalled();
+      notify.mockClear();
+      const before = fixture.handles.flatMap((candidate) => candidate.requests).length;
+      handle.notify!({
+        method: 'item/completed',
+        params: {
+          threadId: 'progress-child',
+          item: {
+            id: 'progress',
+            type: 'agentMessage',
+            phase: 'commentary',
+            text: 'Checking focused tests.',
+          },
+        },
+      });
+      const updated = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+      expect(updated.agentActivity.subagents).toContainEqual(
+        expect.objectContaining({
+          id: 'progress-child',
+          latestProgress: {
+            text: 'Checking focused tests.',
+            occurredAt: expect.any(String),
+          },
+        }),
+      );
+      expect(notify).not.toHaveBeenCalled();
+      expect(fixture.handles.flatMap((candidate) => candidate.requests)).toHaveLength(before);
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      onTestFinished(() => database.close());
+      const rows = database
+        .prepare(
+          'SELECT type, payload_json FROM session_events WHERE session_id = ? ORDER BY sequence DESC LIMIT 5',
+        )
+        .all(fixture.sessionId);
+      expect(rows[0]?.type).toBe('agent.activity.updated');
+      expect(rows.some((row) => row.type === 'agentMessageCompleted')).toBe(false);
+      expect(
+        JSON.stringify(
+          exportControlPlaneTrace(join(fixture.dataDir, 'relay.sqlite'), fixture.sessionId),
+        ),
+      ).not.toContain('Checking focused tests.');
+    });
     it('starts one root recovery after an executor wake encounters a superseded issued command', async () => {
       const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
       let coordinator!: AutopilotCoordinator;

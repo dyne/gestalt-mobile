@@ -29,7 +29,11 @@ export class AgentActivityRegistry {
   readonly #inFlight = new Map<string, Promise<void>>();
   readonly #disposed = new Set<string>();
   constructor(
-    private readonly publish: (snapshot: AgentActivitySnapshot, occurredAt: string) => void,
+    private readonly publish: (
+      snapshot: AgentActivitySnapshot,
+      occurredAt: string,
+      kind?: 'progress',
+    ) => void,
     private readonly options: {
       now?: () => string;
       schedule?: (callback: () => void, delayMs: number) => () => void;
@@ -63,6 +67,14 @@ export class AgentActivityRegistry {
       rootThreadId && rootThreadId !== snapshot.rootThreadId
         ? Object.freeze({ ...snapshot, rootThreadId })
         : snapshot;
+    if (fact.kind === 'progress') {
+      const next = projectAgentActivity(current, fact);
+      if (next !== current) {
+        this.#snapshots.set(fact.sessionId, next);
+        this.publish(next, fact.occurredAt, 'progress');
+      }
+      return next;
+    }
     const next = withActivityConfidence(
       projectAgentActivity(current, fact),
       fact.kind === 'collaboration' && !fact.childId ? 'stale' : 'fresh',

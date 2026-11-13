@@ -9,6 +9,37 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import AgentActivityIndicators from './AgentActivityIndicators.svelte';
 
 describe('AgentActivityIndicators', () => {
+  for (const compact of [false, true])
+    it(`shows escaped child progress and last activity (compact=${compact})`, () => {
+      const now = Date.now();
+      const at = new Date(now - 2 * 60_000).toISOString();
+      const text = 'Checking <img src=x onerror=alert(1)> in the focused tests.';
+      const { container } = render(AgentActivityIndicators, {
+        compact,
+        activity: {
+          sessionId: 's',
+          confidence: 'fresh',
+          aggregateSubagents: 'working',
+          root: { state: 'awaitingAgent', observedAt: at, lastActivityAt: at },
+          subagents: [
+            {
+              id: 'child',
+              canonicalTaskName: 'l1',
+              state: 'working',
+              observedAt: at,
+              lastActivityAt: at,
+              latestProgress: { text, occurredAt: at },
+            },
+          ],
+        },
+      });
+      expect(screen.getByText(text)).toBeTruthy();
+      expect(container.querySelector('img')).toBeNull();
+      const row = screen.getByText(text).closest('li')!;
+      expect(row.querySelector('time')?.getAttribute('datetime')).toBe(at);
+      expect(row.querySelector('time')?.getAttribute('title')).toBe(new Date(at).toLocaleString());
+      expect(row.querySelector('time')?.textContent).toContain('2m');
+    });
   it('does not churn polite announcements for timestamp-only rerenders', async () => {
     const activity = {
       sessionId: 's',

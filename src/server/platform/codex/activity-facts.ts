@@ -111,6 +111,26 @@ export function decodeAgentActivityFacts(
   }
   if (input.method === 'item/started' || input.method === 'item/completed') {
     const item = record(params.item);
+    if (
+      input.method === 'item/completed' &&
+      item?.type === 'agentMessage' &&
+      item.phase === 'commentary' &&
+      typeof item.text === 'string' &&
+      id(params.threadId)
+    ) {
+      const text = item.text.replace(/\s+/g, ' ').trim();
+      return text
+        ? [
+            {
+              sessionId,
+              occurredAt,
+              kind: 'progress',
+              threadId: id(params.threadId),
+              progressText: text.length > 512 ? `${text.slice(0, 511)}…` : text,
+            },
+          ]
+        : [];
+    }
     if (item?.type !== 'collabAgentToolCall' && item?.type !== 'collabToolCall') return [];
     const action = typeof item.tool === 'string' ? collaborationAction(item.tool) : undefined;
     const agentsStates = record(item.agentsStates);

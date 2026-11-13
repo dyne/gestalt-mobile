@@ -46,6 +46,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     model?: string;
     state: AgentActivityState;
     lastActivityAt: string;
+    latestProgress?: Readonly<{ text: string; occurredAt: string }>;
   }>;
   const stateOrder: Record<AgentActivityState, number> = {
     working: 0,
@@ -123,6 +124,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         ...(child.model ? { model: child.model } : {}),
         state: child.state,
         lastActivityAt: child.lastActivityAt,
+        ...(child.latestProgress ? { latestProgress: child.latestProgress } : {}),
       })),
     ].sort(
       (left, right) =>
@@ -229,7 +231,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                   .filter(Boolean)
                   .join(' · ')}</span
               >
-              <time datetime={agent.lastActivityAt}
+              {#if agent.latestProgress}
+                <p class="agent-progress">{agent.latestProgress.text}</p>
+              {/if}
+              <time
+                datetime={agent.lastActivityAt}
+                title={new Date(agent.lastActivityAt).toLocaleString()}
                 >{compactStatus(agent.state, agent.lastActivityAt)}</time
               >
             </li>
@@ -266,7 +273,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               )}{child.role ? ` · ${child.role}` : ''}{child.model
                 ? ` · Model: ${child.model}`
                 : ''} —
-              {labels[child.state]} <small>{child.lastActivityAt}</small>
+              {labels[child.state]}
+              {#if child.latestProgress}
+                <p class="agent-progress">{child.latestProgress.text}</p>
+              {/if}
+              <time
+                datetime={child.lastActivityAt}
+                title={new Date(child.lastActivityAt).toLocaleString()}
+              >
+                Last active {compactElapsedTime(child.lastActivityAt, now)} ago
+              </time>
             </li>
           {/each}
         </ul>
@@ -317,8 +333,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     padding-inline-start: 1.25rem;
     max-inline-size: min(38rem, 100%);
   }
-  .children small {
+  .children time {
     color: var(--theme-text-muted);
+    font-size: 0.78rem;
+  }
+  .agent-progress {
+    margin: 0.2rem 0;
+    font-size: 0.85rem;
+    white-space: pre-wrap;
   }
   .compact .agents {
     position: relative;

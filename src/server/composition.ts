@@ -455,7 +455,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   };
   options.onAttentionTransitions?.(attentionTransitions);
   const activity = new AgentActivityRegistry(
-    (snapshot, occurredAt) => {
+    (snapshot, occurredAt, kind) => {
       events.publish(
         journal.append(
           snapshot.sessionId,
@@ -471,8 +471,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           occurredAt,
         ),
       );
-      publishSessionStatus(snapshot.sessionId, occurredAt);
-      notifyAutopilotActivity(snapshot.sessionId);
+      if (kind !== 'progress') {
+        publishSessionStatus(snapshot.sessionId, occurredAt);
+        notifyAutopilotActivity(snapshot.sessionId);
+      }
     },
     {
       rootThreadId: (sessionId) => sessions.find(sessionId)?.threadId ?? null,
