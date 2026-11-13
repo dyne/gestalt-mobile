@@ -101,6 +101,7 @@ import {
 } from './features/agent-activity/registry.js';
 import { SupervisionTakeover } from './features/autopilot/application/takeover-supervision.js';
 import { SqliteSupervisionTakeoverStore } from './platform/persistence/sqlite-supervision-takeover-store.js';
+import { SqliteRuntimeReleaseStore } from './platform/persistence/sqlite-runtime-release-store.js';
 import { isOrgPlanTakeoverCall } from '../shared/contracts/org-plan-takeover.js';
 import { WriterAcquisitionError } from './features/sessions/application/writer-acquisition.js';
 import { toAgentActivityDto } from './features/agent-activity/activity-dto.js';
@@ -1201,6 +1202,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       autopilot.planStatusChanged(id);
       autopilot.restore(id);
     },
+    failed: (sessionId, boundary) => {
+      const now = new Date().toISOString();
+      events.publish(
+        journal.append(sessionId, 'autopilot.takeover-failed', { kind: boundary }, now),
+      );
+    },
   });
   const providerRecovery = new SessionProviderRecovery({
     find: (id) => sessions.find(id),
@@ -1973,6 +1980,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           return { ...report.requested, assertCurrent };
         },
         sessionScratch,
+        new SqliteRuntimeReleaseStore(database),
       )
     : null;
   const handleKimiNotification = (

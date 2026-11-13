@@ -114,6 +114,7 @@ function fixture() {
     return true;
   });
   const changed = vi.fn();
+  const failed = vi.fn();
   const takeover = new SupervisionTakeover({
     store: owners,
     now: () => now,
@@ -135,6 +136,7 @@ function fixture() {
     },
     stop,
     changed,
+    failed,
   });
   return {
     db,
@@ -144,6 +146,7 @@ function fixture() {
     takeover,
     stop,
     changed,
+    failed,
     order,
     plan,
     held: () => {
@@ -159,6 +162,18 @@ function fixture() {
 }
 
 describe('user-directed supervision takeover', () => {
+  it('identifies the failed boundary without exposing the runtime error or authorizing a writer', async () => {
+    const f = fixture();
+    f.stop.mockRejectedValueOnce(new Error('private runtime diagnostic'));
+    expect(await f.takeover.takeOver('new', 'new-root', 'new-turn')).toEqual({
+      accepted: false,
+      code: 'TAKEOVER_RUNTIME_UNAVAILABLE',
+      boundary: 'quiescePreviousWriter',
+    });
+    expect(f.failed).toHaveBeenCalledWith('new', 'quiescePreviousWriter');
+    expect(f.owners.owner('plan')?.phase).toBe('stopping');
+    expect(f.states.find('new')?.executor).toBeUndefined();
+  });
   it('preserves L1/L2 state and checkpoints, fences the old root, and authorizes one reachable replacement without an attention approval', async () => {
     const f = fixture();
     const result = await f.takeover.takeOver('new', 'new-root', 'new-turn');
