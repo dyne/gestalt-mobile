@@ -665,7 +665,7 @@ describe('CodexSessionRuntime', () => {
     ]);
   });
 
-  it('recovers the resolved model when a historical direct child is not loaded', async () => {
+  it('reads a historical child model without loading the child', async () => {
     const resumed: string[] = [];
     const runtime = new CodexSessionRuntime(() => ({
       rpc: {
@@ -674,8 +674,10 @@ describe('CodexSessionRuntime', () => {
           if (method === 'thread/resume') {
             const threadId = (params as { threadId: string }).threadId;
             resumed.push(threadId);
-            return threadId === 'child-1' ? { model: 'gpt-5.6-terra' } : {};
+            return {};
           }
+          if (method === 'thread/read')
+            return { thread: { id: 'child-1', model: 'gpt-5.6-terra' } };
           if (method === 'thread/list')
             return {
               data: [{ id: 'child-1', status: { type: 'notLoaded' }, agentRole: 'worker' }],
@@ -708,7 +710,7 @@ describe('CodexSessionRuntime', () => {
     await expect(runtime.listDirectChildren(session)).resolves.toMatchObject([
       { id: 'child-1', model: 'gpt-5.6-terra' },
     ]);
-    expect(resumed).toEqual(['root', 'child-1']);
+    expect(resumed).toEqual(['root']);
   });
 
   it('recovers the resolved model for an active inherited-model child', async () => {
@@ -720,8 +722,10 @@ describe('CodexSessionRuntime', () => {
           if (method === 'thread/resume') {
             const threadId = (params as { threadId: string }).threadId;
             resumed.push(threadId);
-            return threadId === 'child-1' ? { model: 'gpt-5.6-terra' } : {};
+            return {};
           }
+          if (method === 'thread/read')
+            return { thread: { id: 'child-1', model: 'gpt-5.6-terra' } };
           if (method === 'thread/list')
             return {
               data: [{ id: 'child-1', status: { type: 'active' }, agentRole: 'worker' }],
@@ -754,7 +758,7 @@ describe('CodexSessionRuntime', () => {
     await expect(runtime.listDirectChildren(session)).resolves.toMatchObject([
       { id: 'child-1', status: 'active', model: 'gpt-5.6-terra' },
     ]);
-    expect(resumed).toEqual(['root', 'child-1']);
+    expect(resumed).toEqual(['root']);
   });
 
   it('lists direct children across bounded pages with models recovered from history', async () => {
@@ -2285,6 +2289,64 @@ describe('CodexSessionRuntime', () => {
       params: { threadId: 'thread-1' },
     });
     expect(closed).toBe(1);
+  });
+
+  it('keeps capacity for the next executor after roster refresh and runtime recovery', async () => {
+    const children = ['l1', 'l2', 'l3'];
+    const loadedByProcess: Set<string>[] = [];
+    const runtime = new CodexSessionRuntime(() => {
+      const loaded = new Set<string>();
+      loadedByProcess.push(loaded);
+      return {
+        rpc: {
+          request: async (method, params) => {
+            const threadId = (params as { threadId?: string }).threadId;
+            if (method === 'thread/start') return { thread: { id: 'root' } };
+            if (method === 'thread/resume' && threadId !== 'root') loaded.add(threadId!);
+            if (method === 'thread/read') return { thread: { id: threadId, model: null } };
+            if (method === 'thread/list')
+              return {
+                data: children.map((id) => ({
+                  id,
+                  status: { type: loaded.has(id) ? 'idle' : 'notLoaded' },
+                })),
+              };
+            if (method === 'turn/start') {
+              if (loaded.size >= 3) throw new Error('agent thread limit reached');
+              loaded.add(threadId!);
+              return { turn: { id: 'l4-turn' } };
+            }
+            return {};
+          },
+          onNotification: () => () => {},
+          onServerRequest: () => () => {},
+        },
+        close: () => {},
+      };
+    });
+    let session = await runtime.start(
+      RelaySession.create({
+        id: 'capacity',
+        workspaceId: 'w',
+        workspacePath: '/workspace',
+        profile: 'default',
+        provider: 'codex',
+        effectiveSkillSelection: { skills: [] },
+        now: 't',
+      }).snapshot,
+      't',
+    );
+    await runtime.listDirectChildren(session);
+    session = await runtime.recycle(session, 'recovered');
+    // Neither metadata absence nor repeated health refreshes may resurrect old workers.
+    const rosters = [];
+    for (let i = 0; i < 2; i++) rosters.push(await runtime.listDirectChildren(session));
+    await expect(runtime.startExecutorTurn(session, 'l4', 'continue', 'request')).resolves.toBe(
+      'l4-turn',
+    );
+    expect(rosters).toEqual([0, 1].map(() => children.map((id) => ({ id, status: 'notLoaded' }))));
+    expect(loadedByProcess.every((loaded) => [...loaded].every((id) => id === 'l4'))).toBe(true);
+    runtime.stopAll();
   });
 
   it('recycles one app-server and resumes the same durable root thread', async () => {
