@@ -9158,7 +9158,27 @@ describe('production composition', () => {
         relyingParty,
         installedCodexVersion: 'codex-cli 0.144.3',
         startAppServers: true,
-        launchAppServer: liveAppServer(handles),
+        launchAppServer: () => {
+          const launched = liveAppServer(handles)();
+          handles.at(-1)!.respond = (method, params) => {
+            if (method === 'thread/list')
+              return {
+                data: ['l1', 'l2', 'l3'].map((id) => ({
+                  id,
+                  parentThreadId: (params as { parentThreadId: string }).parentThreadId,
+                  status: { type: 'notLoaded' },
+                  source: { subAgent: { thread_spawn: { agent_path: `/root/${id}` } } },
+                })),
+              };
+            if (method === 'thread/backgroundTerminals/list')
+              throw new CodexJsonRpcError(
+                -32600,
+                `thread not found: ${(params as { threadId: string }).threadId}`,
+              );
+            return undefined;
+          };
+          return launched;
+        },
         profiles: {
           list: async () => [],
           require: async () => ({
@@ -9238,6 +9258,27 @@ describe('production composition', () => {
         activeTurnId: null,
         desiredState: 'active',
       });
+      // Recovery's activity refresh must inspect old workers without loading them
+      // back into the replacement runtime and consuming its newly freed slots.
+      await expect
+        .poll(() =>
+          handles
+            .filter((candidate) => candidate !== first)
+            .flatMap((candidate) => candidate.requests),
+        )
+        .toContainEqual({
+          method: 'thread/read',
+          params: { threadId: 'l1', includeTurns: false },
+        });
+      expect(
+        handles
+          .flatMap((candidate) => candidate.requests)
+          .filter(
+            (request) =>
+              request.method === 'thread/resume' &&
+              ['l1', 'l2', 'l3'].includes((request.params as { threadId: string }).threadId),
+          ),
+      ).toEqual([]);
       await app.close();
     });
 

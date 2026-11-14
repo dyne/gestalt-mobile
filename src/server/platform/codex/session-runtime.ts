@@ -1386,19 +1386,22 @@ export class CodexSessionRuntime {
   ): Promise<readonly DirectChildThread[]> {
     for (const child of children) {
       if (
+        child.model ||
         resource.spawnedAgentModels.has(child.id) ||
         resource.attemptedAgentModelRecovery.has(child.id)
       )
         continue;
-      // thread/list omits the model for loaded and unloaded subagents alike.
-      // A spawn item can also contain null when an agent role selects or
-      // inherits the model, so thread/resume is the bounded authoritative read.
+      // Roster reconciliation must not load historical children. Resuming them
+      // just to read a model consumes agent slots (including pending_init slots
+      // after a runtime recycle). Read metadata and leave missing models unknown.
       resource.attemptedAgentModelRecovery.add(child.id);
       try {
-        const response = await resource.process.rpc.request('thread/resume', {
+        const response = await resource.process.rpc.request('thread/read', {
           threadId: child.id,
+          includeTurns: false,
         });
-        const model = boundedString(asRecord(response)?.model, 256);
+        const thread = asRecord(asRecord(response)?.thread);
+        const model = thread?.id === child.id ? boundedString(thread.model, 256) : undefined;
         if (model) resource.spawnedAgentModels.set(child.id, model);
       } catch {
         // A live settings notification can still provide the model later.
