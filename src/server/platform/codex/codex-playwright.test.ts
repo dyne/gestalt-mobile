@@ -15,7 +15,7 @@ import {
   playwrightTools,
   type PlaywrightReadiness,
 } from './managed-playwright.js';
-import type { CodexRetrievalState } from '../retrieval/codex-xerj.js';
+import type { CodexCapabilityState } from './capability-contracts.js';
 import type { RelaySessionSnapshot } from '../../features/sessions/model/relay-session.js';
 import { compileSkillOverride } from '../../features/skills/model/skill-profile.js';
 import { CodexCapabilities } from './codex-capabilities.js';
@@ -81,7 +81,7 @@ async function fixture() {
         : { data: [{ name: playwrightServerName, runtimeStatus: 'connected', tools }] },
     ),
   };
-  const base: CodexRetrievalState = {
+  const base: CodexCapabilityState = {
     ready: true,
     config: {
       mcp_servers: { unrelated: { command: 'keep' } },

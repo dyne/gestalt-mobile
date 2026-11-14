@@ -6,72 +6,26 @@
 
 import { readFile } from 'node:fs/promises';
 import { sessionScratchEnvironmentKeys } from '../scratch/child-environment.js';
-import {
-  parseXerjStartupReason,
-  type XerjStartupReason,
-} from '../../../shared/contracts/xerj-startup.js';
+import { parseXerjStartupReason } from '../../../shared/contracts/xerj-startup.js';
 import type { RetrievalCapabilityPort } from '../../features/skills/application/ports.js';
-import type { AvailableSkill } from '../../features/skills/model/skill-profile.js';
 import { ReadinessEvidence } from './readiness-evidence.js';
-import type { RetrievalReadiness } from '../../../shared/contracts/retrieval-readiness.js';
-import type { RepositoryReadiness } from './repository-readiness.js';
 import { withCapabilityInstructions } from '../codex/instruction-blocks.js';
-import type { StartupGuidance } from '../codex/startup-guidance.js';
+import { beforeDeadline } from '../codex/capability-deadline.js';
+import type { CodexCapabilityInput, CodexCapabilityState } from '../codex/capability-contracts.js';
 
 export const xerjServerName = 'gestalt-xerj';
 export const xerjTools = ['xerj_search', 'xerj_map', 'xerj_code_search'];
 const connectionTimeoutMs = 5_000;
 type Rpc = { request(method: string, params: unknown): Promise<unknown> };
 
-export type CodexRetrievalState = {
-  config: Record<string, unknown>;
-  skillsConfig: readonly { path: string; enabled: boolean }[];
-  ready: boolean;
-  diagnostic?: string;
-  instructionBlock?: string;
-  startup?: StartupGuidance;
-  /** Fresh replacement boundary only; no capability, provider or scratch preparation. */
-  prepareFreshStartup?(): Promise<void>;
-  backendPreparation?: { status: 'starting' | 'unavailable'; reason?: XerjStartupReason };
-  /** Verified optional capability guidance inserted only when starting a root turn. */
-  turnInstructions?: string;
-  evidence?: ReadinessEvidence;
-  readiness?: RetrievalReadiness;
-  repositories?: RepositoryReadiness;
-  capabilities?: readonly {
-    skillName: string;
-    serverName: string;
-    ready: boolean;
-    diagnostic?: string;
-    readiness?: RetrievalReadiness;
-  }[];
-  deadline: number;
-  /** Connection observation gets its own allowance after native thread startup. */
-  verificationTimeoutMs?: number;
-  fallback(): void;
-};
-
 /** Ephemeral native thread configuration; no installation or daemon ownership. */
 export class CodexXerj {
   constructor(private readonly capability: RetrievalCapabilityPort) {}
 
-  async prepare(input: {
-    cwd: string;
-    deadline: number;
-    rpc: Rpc;
-    skills: readonly AvailableSkill[];
-    skillsConfig: readonly { path: string; enabled: boolean }[];
-    config: Record<string, unknown>;
-    start: boolean;
-    approvalPolicy?: string;
-    /** Shared native readback for the combined adapter; null means unavailable. */
-    nativeConfig?: Record<string, unknown> | null;
-    /** Only fresh durable sessions install stable guidance; discovery probes omit it. */
-    startup?: boolean;
-  }): Promise<CodexRetrievalState> {
+  async prepare(input: CodexCapabilityInput): Promise<CodexCapabilityState> {
     const skill = input.skills.find((entry) => entry.name === 'gestalt:xerj');
     const evidence = new ReadinessEvidence();
-    const state: CodexRetrievalState = {
+    const state: CodexCapabilityState = {
       evidence,
       get readiness() {
         return evidence.snapshot();
@@ -213,7 +167,7 @@ export class CodexXerj {
     return state;
   }
 
-  async verify(rpc: Rpc, threadId: string, state: CodexRetrievalState): Promise<boolean> {
+  async verify(rpc: Rpc, threadId: string, state: CodexCapabilityState): Promise<boolean> {
     if (!state.ready) return false;
     // thread/start can consume the handshake allowance before this method runs.
     const deadline = state.verificationTimeoutMs
@@ -257,22 +211,5 @@ export class CodexXerj {
       state.evidence?.connection('unavailable');
       return false;
     }
-  }
-}
-
-export async function beforeDeadline<T>(promise: Promise<T>, deadline: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error('XERJ_READINESS_TIMEOUT')),
-          Math.max(0, deadline - Date.now()),
-        );
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
   }
 }

@@ -7,15 +7,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CodexSessionRuntime } from '../codex/session-runtime.js';
 import { RelaySession } from '../../features/sessions/model/relay-session.js';
-import type { CodexRetrievalState } from './codex-xerj.js';
+import type { CodexCapabilityState } from '../codex/capability-contracts.js';
 import { CodexJsonRpcError } from '../codex/json-rpc-client.js';
 
 function setup(connected = true, missingRollout = false) {
   const requests: Array<{ method: string; params: unknown }> = [];
   const closed = vi.fn();
   let started = 0;
-  const prepare = vi.fn(async (): Promise<CodexRetrievalState> => {
-    const state: CodexRetrievalState = {
+  const prepare = vi.fn(async (): Promise<CodexCapabilityState> => {
+    const state: CodexCapabilityState = {
       config: { mcp_servers: { 'gestalt-xerj': { enabled: true } } },
       skillsConfig: [
         { path: '/xerj/SKILL.md', enabled: true },

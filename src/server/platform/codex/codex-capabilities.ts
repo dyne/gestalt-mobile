@@ -4,25 +4,29 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { beforeDeadline, CodexXerj, type CodexRetrievalState } from '../retrieval/codex-xerj.js';
+import type { CodexXerj } from '../retrieval/codex-xerj.js';
+import { beforeDeadline } from './capability-deadline.js';
+import type {
+  CodexCapabilityInput as Input,
+  CodexCapabilityState,
+} from './capability-contracts.js';
 import { CodexSerena } from './codex-serena.js';
 import { RepositoryReadiness } from '../retrieval/repository-readiness.js';
 import { withCapabilityInstructions } from './instruction-blocks.js';
 import { prepareStartupGuidance, type StartupGuidance } from './startup-guidance.js';
 
-type Input = Parameters<CodexXerj['prepare']>[0];
 /** The two managed capabilities share lifecycle, but never share availability or approvals. */
 export class CodexCapabilities {
   private readonly states = new WeakMap<
-    CodexRetrievalState,
-    { xerj: CodexRetrievalState; serena: CodexRetrievalState }
+    CodexCapabilityState,
+    { xerj: CodexCapabilityState; serena: CodexCapabilityState }
   >();
   constructor(
     private readonly xerj: CodexXerj,
     private readonly serena: CodexSerena,
   ) {}
 
-  async prepare(input: Input): Promise<CodexRetrievalState> {
+  async prepare(input: Input): Promise<CodexCapabilityState> {
     let native: Record<string, unknown> | null = null;
     try {
       const read = (await beforeDeadline(
@@ -80,7 +84,7 @@ export class CodexCapabilities {
     ]);
     if (serena.ready) serena.deadline = Date.now() + serenaVerificationMs;
     const serenaPath = input.skills.find((skill) => skill.name === 'gestalt:serena')?.path;
-    const state: CodexRetrievalState = {
+    const state: CodexCapabilityState = {
       get startup() {
         return startup;
       },
@@ -155,7 +159,7 @@ export class CodexCapabilities {
     return state;
   }
 
-  async verify(rpc: Input['rpc'], threadId: string, state: CodexRetrievalState): Promise<boolean> {
+  async verify(rpc: Input['rpc'], threadId: string, state: CodexCapabilityState): Promise<boolean> {
     const pair = this.states.get(state);
     if (!pair) return false;
     const [xerj, serena] = await Promise.all([

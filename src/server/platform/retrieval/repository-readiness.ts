@@ -10,7 +10,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { beforeDeadline } from './codex-xerj.js';
+import { beforeDeadline } from '../codex/capability-deadline.js';
 import { ReadinessEvidence } from './readiness-evidence.js';
 import { hasUnrestrictedReadAuthority } from './read-authority.js';
 import type { RetrievalReadiness } from '../../../shared/contracts/retrieval-readiness.js';

@@ -54,8 +54,8 @@ import {
   isMissingCodexThreadRollout,
 } from './json-rpc-client.js';
 import { resolvedServerRequestId } from './server-request.js';
-import type { CodexRetrievalState } from '../retrieval/codex-xerj.js';
-import { xerjDeadline } from '../retrieval/managed-xerj.js';
+import type { CodexCapabilityState } from './capability-contracts.js';
+import { capabilityDeadline } from './capability-deadline.js';
 import { McpStartupTracker } from './mcp-startup-failure.js';
 import type { McpStartupStatus } from '../../../shared/contracts/mcp-startup-failure.js';
 
@@ -188,11 +188,11 @@ class SessionResource {
     private readonly onDisposed: () => void,
   ) {}
 
-  retrieval: CodexRetrievalState | undefined;
+  retrieval: CodexCapabilityState | undefined;
   retrievalFailureReported = false;
   readonly capabilityFailuresReported = new Set<string>();
   readonly readinessPublished = new Map<string, string>();
-  readinessDeadline = xerjDeadline();
+  readinessDeadline = capabilityDeadline();
 
   dispose(): boolean {
     if (this.disposed) return false;
@@ -298,12 +298,16 @@ export class CodexSessionRuntime {
         rpc: AppServer['rpc'],
         config: Record<string, unknown>,
         deadline: number,
-      ): Promise<CodexRetrievalState>;
-      verify(rpc: AppServer['rpc'], threadId: string, state: CodexRetrievalState): Promise<boolean>;
+      ): Promise<CodexCapabilityState>;
+      verify(
+        rpc: AppServer['rpc'],
+        threadId: string,
+        state: CodexCapabilityState,
+      ): Promise<boolean>;
       needsResume?(session: RelaySessionSnapshot): boolean | Promise<boolean>;
       release?(sessionId: string): void;
       observe?(sessionId: string, notification: { method: string; params: unknown }): void;
-      bound?(state: CodexRetrievalState, threadId: string): void;
+      bound?(state: CodexCapabilityState, threadId: string): void;
     },
     private readonly requireExecutorAdmission?: (
       sessionId: string,
@@ -1915,7 +1919,7 @@ export class CodexSessionRuntime {
     this.runtimeReleases?.invalidate(session.id);
     if (purpose === 'execution') this.scratch?.reserveRuntime?.(session);
     this.confirmedWorkspaceReleases.delete(session.id);
-    const deadline = xerjDeadline();
+    const deadline = capabilityDeadline();
     const lease =
       purpose === 'execution' && this.planStatusSource
         ? await this.planStatusSource.open(
