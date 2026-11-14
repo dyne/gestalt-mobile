@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-/** Shared startup budget; retain the existing environment contract during extraction. */
+/** Shared startup budget for retained optional capabilities. */
 export function capabilityDeadline(environment: NodeJS.ProcessEnv = process.env): number {
-  const configured = Number(environment.XERJ_READY_TIMEOUT_MS);
+  const configured = Number(environment.GESTALT_CAPABILITY_TIMEOUT_MS);
   return (
     Date.now() +
     (Number.isInteger(configured) && configured >= 100 && configured <= 60_000 ? configured : 5_000)
@@ -20,8 +20,7 @@ export async function beforeDeadline<T>(promise: Promise<T>, deadline: number): 
       promise,
       new Promise<never>((_, reject) => {
         timer = setTimeout(
-          // Preserve the established error code for existing capability consumers.
-          () => reject(new Error('XERJ_READINESS_TIMEOUT')),
+          () => reject(new Error('CAPABILITY_READINESS_TIMEOUT')),
           Math.max(0, deadline - Date.now()),
         );
       }),

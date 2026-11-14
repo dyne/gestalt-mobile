@@ -67,6 +67,7 @@ for (const viewport of [
       const versions = page.getByRole('region', { name: 'Versions' });
       await versions.scrollIntoViewIfNeeded();
       await expect(versions).toContainText('Serena');
+      await expect(versions).not.toContainText(/xerj/i);
       await expect(versions).toContainText('1.7.0');
       await expect(versions).toContainText('0.11.12');
       const unavailable = versions.locator('dd[title="Version unavailable"]');

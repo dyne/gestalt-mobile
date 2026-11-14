@@ -10,7 +10,6 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/sve
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AppHeader from './AppHeader.svelte';
-import { unknownReadiness } from '../../shared/contracts/retrieval-readiness.js';
 
 beforeEach(() => {
   HTMLDialogElement.prototype.showModal = function showModal() {
@@ -20,6 +19,18 @@ beforeEach(() => {
     this.removeAttribute('open');
     this.dispatchEvent(new Event('close'));
   };
+});
+
+it('ignores obsolete extra header state while retaining ordinary controls', () => {
+  const legacy = {
+    xerj: { state: 'error', mode: 'auto', root: '/old', message: 'Old XERJ failure' },
+  };
+  render(AppHeader, { ...legacy, theme: 'dyne-org', onthemechange: () => {} });
+  expect(screen.queryByRole('region', { name: 'Workspace discovery', hidden: true })).toBeNull();
+  expect(screen.queryByText(/XERJ/)).toBeNull();
+  const menu = within(document.getElementById('configuration-panel')!);
+  for (const name of ['Clean TMP', 'Upgrade', 'Quit', 'Notifications', 'Scratchpad'])
+    expect(menu.getByRole('button', { name, hidden: true })).toBeTruthy();
 });
 
 afterEach(cleanup);
@@ -89,27 +100,6 @@ describe('AppHeader', () => {
     action.click();
     expect(oncleantmp).toHaveBeenCalledOnce();
   });
-  it('keeps backend connection, failed indexer and stale coverage separate', async () => {
-    const readiness = unknownReadiness();
-    readiness.connection.state = 'ready';
-    readiness.coverage.state = 'stale';
-    const props = { theme: 'dyne-org' as const, onthemechange: () => {} };
-    const { rerender } = render(AppHeader, {
-      ...props,
-      xerj: { root: '/workspace', mode: 'auto', state: 'error', readiness },
-    });
-    const status = screen.getByRole('region', { name: 'Workspace discovery', hidden: true });
-    const value = (label: string) =>
-      within(status).getByText(label).nextElementSibling?.textContent;
-    expect(value('XERJ service')).toBe('Ready');
-    expect(value('Indexer')).toBe('error');
-    expect(value('Index coverage')).toBe('Stale');
-    await rerender({
-      ...props,
-      xerj: { root: '/workspace', mode: 'auto', state: 'error' },
-    });
-    expect(value('XERJ service')).toBe('Unverified');
-  });
   it('confirms upgrade, prevents duplicate requests, and allows retry after failure', async () => {
     let fail!: (error: Error) => void;
     const onupgrade = vi.fn(
@@ -139,69 +129,6 @@ describe('AppHeader', () => {
     expect((cancel as HTMLButtonElement).disabled).toBe(false);
     await fireEvent.click(cancel);
     expect(screen.getByRole('button', { name: 'Open configuration' })).toBe(document.activeElement);
-  });
-
-  it('hides workspace discovery when Xerj is absent or not supplied', async () => {
-    const props = { theme: 'dyne-org' as const, onthemechange: () => {} };
-    const { rerender } = render(AppHeader, props);
-    expect(screen.queryByRole('region', { name: 'Workspace discovery', hidden: true })).toBeNull();
-    await rerender({
-      ...props,
-      xerj: {
-        mode: 'manual',
-        state: 'absent',
-        root: '/workspace',
-        message: 'Install with gestalt xerj install.',
-      },
-    });
-    expect(screen.queryByRole('region', { name: 'Workspace discovery', hidden: true })).toBeNull();
-    expect(screen.queryByText(/gestalt xerj install/)).toBeNull();
-    await rerender({ ...props, xerj: { mode: 'manual', state: 'ready', root: '/workspace' } });
-    expect(screen.getByRole('region', { name: 'Workspace discovery', hidden: true })).toBeTruthy();
-    await rerender({ ...props, xerj: { mode: 'manual', state: 'absent', root: '/workspace' } });
-    expect(screen.queryByRole('region', { name: 'Workspace discovery', hidden: true })).toBeNull();
-  });
-
-  it('shows root-wide indexing progress and durable recovery guidance', async () => {
-    const props = { theme: 'dyne-org' as const, onthemechange: () => {} };
-    const { rerender } = render(AppHeader, {
-      ...props,
-      xerj: {
-        mode: 'auto',
-        state: 'indexing',
-        root: '/sources/engineering',
-        phase: 'index',
-        percent: 42,
-      },
-    });
-    const status = screen.getByRole('region', { name: 'Workspace discovery', hidden: true });
-    expect(status.textContent).toContain('engineering');
-    expect(status.textContent).not.toContain('/sources/');
-    expect(status.textContent).toContain('Unverified');
-    expect(status.textContent).toContain('42%');
-    await rerender({
-      ...props,
-      xerj: {
-        mode: 'auto',
-        state: 'watching',
-        root: '/sources/engineering',
-        files: 300,
-        records: 500,
-      },
-    });
-    expect(status.textContent).toContain('watching');
-    expect(status.textContent).toContain('300');
-    expect(status.textContent).not.toContain('42%');
-    await rerender({
-      ...props,
-      xerj: {
-        mode: 'auto',
-        state: 'error',
-        root: '/sources/engineering',
-        message: 'Run gestalt doctor.',
-      },
-    });
-    expect(status.textContent).toContain('Run gestalt doctor.');
   });
 
   it('adds and removes the contextual CLI copy action and closes the menu after copying', async () => {
@@ -344,7 +271,6 @@ describe('AppHeader', () => {
         { id: 'gestalt-agents', label: 'Gestalt Agents', version: '2.9.0' },
         { id: 'context-mode', label: 'Context Mode', version: '2.9.0' },
         { id: 'codex', label: 'Codex CLI', version: 'codex-cli 0.144.3' },
-        { id: 'xerj', label: 'xerj', version: 'v1.0.0-rc.87' },
         { id: 'serena', label: 'Serena', version: '1.7.0' },
         { id: 'uv', label: 'uv', version: '0.11.12' },
         { id: 'serena-python', label: 'Serena Python', version: null },
@@ -363,7 +289,6 @@ describe('AppHeader', () => {
       ['Gestalt Agents', '2.9.0'],
       ['Context Mode', '2.9.0'],
       ['Codex CLI', 'codex-cli 0.144.3'],
-      ['xerj', 'v1.0.0-rc.87'],
       ['Serena', '1.7.0'],
       ['uv', '0.11.12'],
       ['Serena Python', 'Unavailable'],

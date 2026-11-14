@@ -18,6 +18,19 @@ export type HistoryActivity = {
   mcpStartup?: McpStartupStatus;
 };
 
+/** Ignore owned legacy telemetry in memory; leave persisted history and user work intact. */
+export function isRetiredServiceActivity(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const activity = value as { id?: unknown; mcpStartup?: { serverName?: unknown } | null };
+  return (
+    activity.id === 'gestalt-xerj-availability' ||
+    activity.mcpStartup?.serverName === 'gestalt-xerj' ||
+    (typeof activity.id === 'string' &&
+      activity.id.startsWith('mcp-startup:') &&
+      activity.id.endsWith(':gestalt-xerj'))
+  );
+}
+
 /** Runtime health belongs in diagnostics and failure notifications, outside the conversation. */
 export function isServiceStatusActivity(activity: HistoryActivity): boolean {
   return (

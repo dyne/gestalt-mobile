@@ -51,7 +51,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import Composer from './features/chat/Composer.svelte';
   import { initialiseUploads } from './features/files/upload-state.js';
   import MessageList from './features/chat/MessageList.svelte';
-  import type { XerjStatus } from '../shared/contracts/xerj-status.js';
   import type { SessionRetrievalReadiness } from '../shared/contracts/retrieval-readiness.js';
   import { applyReadinessActivity } from './features/retrieval/readiness-activity.js';
   import { loadBootstrap, type WorkspaceOption } from './features/catalog/bootstrap-client.js';
@@ -186,7 +185,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     kimi: [],
   });
   let componentVersions = $state.raw<ComponentVersion[]>([]);
-  let xerjStatus = $state<XerjStatus>();
   let configurationOpen = $state(false);
   let retrievalStatus = $state.raw<SessionRetrievalReadiness | null>(null);
   let readinessLoading = $state(false);
@@ -235,45 +233,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
     void refreshToolReadiness();
     return () => readinessAbort?.abort();
-  });
-  let reportedXerjError: string | undefined;
-
-  function acceptXerjStatus(status: XerjStatus | undefined): void {
-    xerjStatus = status;
-    if (status?.state === 'error' && status.message !== reportedXerjError) {
-      reportedXerjError = status.message;
-      toastQueue.enqueue({
-        kind: 'warning',
-        message: status.message ?? 'XERJ is unavailable. Run gestalt doctor.',
-      });
-    } else if (status?.state !== 'error') reportedXerjError = undefined;
-  }
-
-  $effect(() => {
-    if (!configurationOpen || !untrack(() => xerjStatus)) return;
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const refresh = async () => {
-      try {
-        const response = await authorizedFetch('/api/xerj', { signal: controller.signal });
-        if (!response.ok) throw new Error('XERJ status unavailable');
-        const status = (await response.json()) as XerjStatus;
-        if (!controller.signal.aborted) acceptXerjStatus(status);
-      } catch {
-        if (!controller.signal.aborted)
-          toastQueue.enqueue({
-            kind: 'warning',
-            message: 'Could not refresh XERJ status. Reopen configuration to retry.',
-          });
-        return;
-      }
-      if (!controller.signal.aborted) timer = setTimeout(() => void refresh(), 5_000);
-    };
-    void refresh();
-    return () => {
-      controller.abort();
-      clearTimeout(timer);
-    };
   });
   let headerIconUrl = $state<string | null>(null);
   let sessionProvider = $state<LlmProvider>('codex');
@@ -520,11 +479,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       if (sessionId) mcpStartupFeedback(sessionId, event);
       const availabilityId = (event.payload as { id?: unknown } | null)?.id;
       const serviceName =
-        availabilityId === 'gestalt-serena-availability'
-          ? 'gestalt-serena'
-          : availabilityId === 'gestalt-xerj-availability'
-            ? 'gestalt-xerj'
-            : null;
+        availabilityId === 'gestalt-serena-availability' ? 'gestalt-serena' : null;
       const structuredServiceFailure = chatView?.activities.some(
         (activity) =>
           activity.mcpStartup?.serverName === serviceName &&
@@ -800,7 +755,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         reportRelayError(error, 'SESSION_DEFAULTS_READ_FAILED');
       }
       componentVersions = bootstrap.versions ?? [];
-      acceptXerjStatus(bootstrap.xerj);
       headerIconUrl = bootstrap.branding?.headerIconUrl ?? null;
       sessionWorkspaceId = readTreeSelection(workspaceTree, sessionWorkspaceId) ?? '';
       treeSelectionsLoaded = true;
@@ -2124,7 +2078,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         weeklyQuotaRemaining={weeklyQuotaRemainingValue}
         brandIconUrl={headerIconUrl}
         {componentVersions}
-        xerj={xerjStatus}
         retrieval={selectedSession && selectedSession.provider !== 'kimi'
           ? retrievalStatus
           : undefined}

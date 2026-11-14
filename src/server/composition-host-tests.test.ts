@@ -68,7 +68,6 @@ it.each([false, true])(
       homeDirectory: join(base, 'home'),
       ...(disabled ? { testRunnerEnabled: false } : {}),
       passkeyAuthEnabled: false,
-      xerj: 'off',
       relyingParty: {
         publicOrigin: 'http://localhost:3000',
         rpId: 'localhost',

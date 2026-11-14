@@ -11,35 +11,25 @@ test('configuration stays compact and wraps long messages and paths at normal an
   page,
 }, testInfo) => {
   await mockAuthenticatedStatus(page);
-  const message = `Workspace discovery needs attention. ${'long-diagnostic-reference-'.repeat(18)}`;
-  const status = {
-    mode: 'auto',
-    state: 'watching',
-    root: `/workspace/${'long-repository-name-'.repeat(12)}`,
-    message,
-  };
+  const message = `Browser diagnostics need attention. ${'long-diagnostic-reference-'.repeat(18)}`;
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       json: {
         workspaces: [],
         profiles: [],
         sessions: [],
-        xerj: status,
         versions: [
-          { id: 'xerj', label: 'XERJ', version: '1.0.0' },
           {
             id: 'playwright',
             label: 'Playwright MCP',
             version: '0.0.85',
             status: 'working',
-            detail:
-              'Playwright 1.66.0-alpha-2026-11-09; Chrome 157.0.8103.78; browser page check passed at startup.',
+            detail: message,
           },
         ],
       },
     }),
   );
-  await page.route('**/api/xerj', (route) => route.fulfill({ json: status }));
   await page.route('**/api/skill-profiles', (route) => route.fulfill({ json: { profiles: [] } }));
   await page.goto('/');
   for (const width of [320, 390, 1440]) {
@@ -65,7 +55,7 @@ test('configuration stays compact and wraps long messages and paths at normal an
           width: bounds.width,
           fits: element.scrollWidth <= element.clientWidth,
           documentFits: document.documentElement.scrollWidth <= innerWidth,
-          textFits: [...element.querySelectorAll('p, dt, dd.with-status, .xerj-root')].every(
+          textFits: [...element.querySelectorAll('p, dt, dd.with-status')].every(
             (text) => text.scrollWidth <= text.clientWidth,
           ),
         };

@@ -21,7 +21,7 @@ export const startupDescriptor = {
 };
 
 export async function installStartupFixture(root: string, version = '0.0.1') {
-  for (const path of ['.codex-plugin', 'startup', 'skills/coding', 'skills/xerj', 'skills/serena'])
+  for (const path of ['.codex-plugin', 'startup', 'skills/coding', 'skills/serena'])
     await mkdir(join(root, path), { recursive: true });
   await writeFile(
     join(root, '.codex-plugin/plugin.json'),
@@ -34,12 +34,12 @@ export async function installStartupFixture(root: string, version = '0.0.1') {
   );
   await writeFile(join(root, 'gestalt-startup-contract.json'), JSON.stringify(startupDescriptor));
   await writeFile(join(root, 'startup/bootstrap.md'), syntheticBootstrap);
-  for (const name of ['coding', 'xerj', 'serena'])
+  for (const name of ['coding', 'serena'])
     await writeFile(
       join(root, `skills/${name}/SKILL.md`),
       `---\nname: ${name}\ndescription: Synthetic ${name} fixture\n---\nSYNTHETIC_${name.toUpperCase()}_GUIDANCE\n`,
     );
-  return ['coding', 'xerj', 'serena'].map((name) => ({
+  return ['coding', 'serena'].map((name) => ({
     name: `gestalt:${name}`,
     path: join(root, `skills/${name}/SKILL.md`),
     enabled: true,

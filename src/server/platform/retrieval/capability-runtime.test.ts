@@ -16,18 +16,21 @@ function setup(connected = true, missingRollout = false) {
   let started = 0;
   const prepare = vi.fn(async (): Promise<CodexCapabilityState> => {
     const state: CodexCapabilityState = {
-      config: { mcp_servers: { 'gestalt-xerj': { enabled: true } } },
+      config: { mcp_servers: { 'gestalt-serena': { enabled: true } } },
       skillsConfig: [
-        { path: '/xerj/SKILL.md', enabled: true },
+        { path: '/serena/SKILL.md', enabled: true },
         { path: '/org/SKILL.md', enabled: true },
       ],
       ready: true,
+      get capabilities() {
+        return [{ skillName: 'gestalt:serena', serverName: 'gestalt-serena', ready: state.ready }];
+      },
       deadline: Date.now() + 1000,
       fallback: () => {
         state.ready = false;
-        state.config = { mcp_servers: { 'gestalt-xerj': { enabled: false } } };
+        state.config = { mcp_servers: { 'gestalt-serena': { enabled: false } } };
         state.skillsConfig = [
-          { path: '/xerj/SKILL.md', enabled: false },
+          { path: '/serena/SKILL.md', enabled: false },
           { path: '/org/SKILL.md', enabled: true },
         ];
       },
@@ -73,7 +76,7 @@ function setup(connected = true, missingRollout = false) {
     now: 't',
     effectiveSkillSelection: {
       skills: [
-        { name: 'gestalt:xerj', path: '/xerj/SKILL.md', enabled: false },
+        { name: 'gestalt:serena', path: '/serena/SKILL.md', enabled: false },
         { name: 'gestalt:org-plan', path: '/org/SKILL.md', enabled: true },
       ],
     },
@@ -98,7 +101,7 @@ describe('runtime capability boundaries', () => {
     });
     expect(f.requests.at(-1)).toMatchObject({
       method: 'thread/start',
-      params: { config: { mcp_servers: { 'gestalt-xerj': { enabled: false } } } },
+      params: { config: { mcp_servers: { 'gestalt-serena': { enabled: false } } } },
     });
     f.runtime.stopAll();
   });
@@ -107,17 +110,17 @@ describe('runtime capability boundaries', () => {
     const session = await f.runtime.start(f.session, 't');
     expect(session.effectiveSkillSelection?.skills).toEqual(
       expect.arrayContaining([
-        { name: 'gestalt:xerj', path: '/xerj/SKILL.md', enabled: true },
+        { name: 'gestalt:serena', path: '/serena/SKILL.md', enabled: true },
         { name: 'gestalt:org-plan', path: '/org/SKILL.md', enabled: true },
       ]),
     );
     const started = f.requests.find((request) => request.method === 'thread/start')!.params;
     expect(started).toMatchObject({
       config: {
-        mcp_servers: { 'gestalt-xerj': { enabled: true } },
+        mcp_servers: { 'gestalt-serena': { enabled: true } },
         skills: {
           config: [
-            { path: '/xerj/SKILL.md', enabled: true },
+            { path: '/serena/SKILL.md', enabled: true },
             { path: '/org/SKILL.md', enabled: true },
           ],
         },
@@ -133,17 +136,17 @@ describe('runtime capability boundaries', () => {
     const result = await f.runtime.start(f.session, 't');
     expect(result.threadId).toBe('root-thread');
     expect(
-      result.effectiveSkillSelection?.skills.find((skill) => skill.name === 'gestalt:xerj')
+      result.effectiveSkillSelection?.skills.find((skill) => skill.name === 'gestalt:serena')
         ?.enabled,
     ).toBe(false);
     expect(f.requests.at(-1)).toMatchObject({
       method: 'thread/start',
       params: {
         config: {
-          mcp_servers: { 'gestalt-xerj': { enabled: false } },
+          mcp_servers: { 'gestalt-serena': { enabled: false } },
           skills: {
             config: [
-              { path: '/xerj/SKILL.md', enabled: false },
+              { path: '/serena/SKILL.md', enabled: false },
               { path: '/org/SKILL.md', enabled: true },
             ],
           },
@@ -159,7 +162,7 @@ describe('runtime capability boundaries', () => {
     const restored = await f.runtime.restore(started, 'u');
     expect(restored.threadId).toBe(started.threadId);
     expect(
-      restored.effectiveSkillSelection?.skills.find((skill) => skill.name === 'gestalt:xerj')
+      restored.effectiveSkillSelection?.skills.find((skill) => skill.name === 'gestalt:serena')
         ?.enabled,
     ).toBe(true);
     const recovered = await f.runtime.recycle(restored, 'v');

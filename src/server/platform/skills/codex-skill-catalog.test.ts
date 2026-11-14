@@ -29,6 +29,29 @@ function fake(result: unknown) {
 }
 
 describe('CodexSkillCatalog', () => {
+  it('does not advertise a retired managed skill from an older installation', async () => {
+    const server = fake({
+      data: [
+        {
+          cwd: '/workspace',
+          errors: [],
+          skills: [
+            {
+              name: 'gestalt:xerj',
+              path: '/legacy/SKILL.md',
+              enabled: true,
+              description: 'Legacy',
+            },
+            { name: 'reviewer', path: '/review/SKILL.md', enabled: true, description: 'Retained' },
+          ],
+        },
+      ],
+    });
+    const result = await new CodexSkillCatalog('default', server.launch).list('/workspace');
+    expect(result.skills.map(({ name }) => name)).toEqual(['reviewer']);
+    expect(server.calls.map(({ method }) => method)).toEqual(['initialize', 'skills/list']);
+    expect(server.closed()).toBe(1);
+  });
   it('discards raw provider provenance and interface claims before creating stable metadata', async () => {
     const server = fake({
       data: [

@@ -21,12 +21,5 @@ export function serviceAvailabilityFeedback(event: {
       message:
         'Serena is unavailable in this session. Use native code tools. Connection availability will be checked when the runtime resumes.',
     };
-  if (payload.id === 'gestalt-xerj-availability' && payload.label === 'Xerj unavailable')
-    return {
-      kind: 'warning',
-      code: 'XERJ_UNAVAILABLE',
-      message:
-        'XERJ is unavailable in this session. Use rg and current source reads. Connection availability will be checked when the runtime resumes.',
-    };
   return null;
 }

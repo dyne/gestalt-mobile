@@ -15,7 +15,6 @@ export type RelayConfig = {
   relyingParty: RelyingPartyConfig;
   root: string;
   dataDir?: string;
-  xerj: 'auto' | 'manual' | 'off';
   /** A validated global selection to use for every child session. */
   skillsProfile?: string;
   /** Optional PWA install icon, resolved from the invoking directory. */
@@ -44,7 +43,6 @@ const optionNames = new Set([
   '--public-origin',
   '--skills',
   '--icon',
-  '--xerj',
 ]);
 const flagNames = new Set(['--disable-passkey-auth', '--disable-test-runner']);
 
@@ -54,6 +52,10 @@ export function parseConfig(args: string[], cwd = process.cwd()): RelayConfig {
 
   for (let index = 0; index < args.length; index += 1) {
     const option = args[index];
+    if (option === '--xerj' || option.startsWith('--xerj='))
+      throw new CliUsageError(
+        'Xerj integration has been retired. Remove --xerj from this invocation.',
+      );
     if (!option.startsWith('--')) throw new CliUsageError(`Unexpected argument: ${option}`);
     if (flagNames.has(option)) {
       if (flags.has(option)) throw new CliUsageError(`Duplicate option: ${option}`);
@@ -69,10 +71,6 @@ export function parseConfig(args: string[], cwd = process.cwd()): RelayConfig {
     index += 1;
   }
 
-  const xerj = values.get('--xerj') ?? 'auto';
-  if (xerj !== 'auto' && xerj !== 'manual' && xerj !== 'off')
-    throw new CliUsageError('--xerj must be auto, manual, or off');
-
   const portValue = values.get('--port') ?? '3000';
   const port = Number(portValue);
   if (!Number.isInteger(port) || port < 1 || port > 65535)
@@ -87,7 +85,6 @@ export function parseConfig(args: string[], cwd = process.cwd()): RelayConfig {
   return {
     host,
     port,
-    xerj,
     passkeyAuthEnabled,
     relyingParty: createRelyingPartyConfig(publicOrigin),
     root: resolve(cwd, values.get('--cwd') ?? '.'),

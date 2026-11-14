@@ -481,7 +481,7 @@ export class CodexPlaywright {
         return config;
       },
       // Each verifier already disables only its failed connection. A shared
-      // fallback must not disable a healthy browser after an XERJ/Serena failure.
+      // fallback must not disable a healthy browser after an Serena failure.
       fallback() {},
       get turnInstructions() {
         return binding.connected && current()
@@ -538,7 +538,7 @@ export class CodexPlaywright {
         await beforeDeadline(new Promise((resolve) => setTimeout(resolve, 25)), prepared.deadline);
       }
     } catch {
-      /* Keep chat, XERJ and Serena usable. */
+      /* Keep chat and Serena usable. */
     }
     prepared.binding.reason = 'connection-or-tools-unavailable';
     prepared.fail();

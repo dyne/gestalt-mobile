@@ -64,30 +64,9 @@ for (const viewport of [
         activeTurnId: null,
       };
       await fixture.install([session]);
-      const index = unknownReadiness();
-      index.connection = {
-        state: 'ready',
-        observedAt: '2026-10-26T12:00:00Z',
-        generation: 'generation',
-      };
-      index.coverage = {
-        state: 'unavailable',
-        reason: 'empty-index',
-        observedAt: '2026-10-26T12:00:00Z',
-        generation: 'generation',
-      };
-      const xerj = {
-        mode: 'auto',
-        state: 'watching',
-        root: '/private/workspace',
-        files: 0,
-        records: 0,
-        readiness: index,
-      };
       await page.route('**/api/bootstrap', (route) =>
-        route.fulfill({ json: { workspaces: [], profiles: [], sessions: [session], xerj } }),
+        route.fulfill({ json: { workspaces: [], profiles: [], sessions: [session] } }),
       );
-      await page.route('**/api/xerj', (route) => route.fulfill({ json: xerj }));
       await page.route('**/api/skill-profiles', (route) =>
         route.fulfill({ json: { profiles: [] } }),
       );
@@ -115,12 +94,7 @@ for (const viewport of [
       await expect(region.locator('details')).toHaveAttribute('open', '');
       await expect(region).toContainText('Compiler selection is unverified');
       await expect(region.getByText('Repository index')).toBeVisible();
-      const discovery = page.getByRole('region', { name: 'Workspace discovery' });
-      await expect(discovery).toContainText('The workspace index contains no records.');
-      await expect(discovery.getByText('XERJ service').locator('..')).toContainText('Ready');
-      await expect(discovery.getByText('Indexer', { exact: true }).locator('..')).toContainText(
-        'watching',
-      );
+      await expect(page.getByRole('region', { name: 'Workspace discovery' })).toHaveCount(0);
       await expect(page.locator('#configuration-panel')).not.toContainText('/private/');
       response = observed('unavailable');
       await region.getByRole('button', { name: 'Refresh tool readiness' }).click();
@@ -135,7 +109,7 @@ for (const viewport of [
           .evaluate((element) => element.scrollWidth <= element.clientWidth),
       ).toBe(true);
       expect(
-        await discovery
+        await region
           .locator('dd')
           .evaluateAll((elements) =>
             elements.every(

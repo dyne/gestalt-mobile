@@ -11,56 +11,40 @@ import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { McpStartupTracker } from '../../src/server/platform/codex/mcp-startup-failure.js';
 import { normalizeCodexNotification } from '../../src/server/platform/codex/normalizer.js';
 
-test('background XERJ readiness stays pending without a warning and reports local failure accurately', async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 390, height: 844 });
+test('ignores retired startup telemetry without hiding ordinary chat work', async ({ page }) => {
   await mockAuthenticatedStatus(page);
   const fixture = new ChatRelayFixture(page);
-  const session = {
-    id: 'xerj-startup',
-    state: 'ready',
-    threadId: 'root',
-    provider: 'codex',
-    workspaceId: 'workspace',
-    workspacePath: '/private/workspace',
-    profile: 'default',
-    activeTurnId: null,
-  };
-  await fixture.install([session]);
+  await fixture.install([
+    {
+      id: 'legacy-session',
+      state: 'ready',
+      threadId: 'root',
+      workspaceId: 'workspace',
+      profile: 'default',
+      activeTurnId: null,
+    },
+  ]);
   await page.route('**/api/skill-profiles', (route) => route.fulfill({ json: { profiles: [] } }));
   await page.route('**/api/sessions/*/plan', (route) => route.fulfill({ status: 204 }));
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat', exact: true }).click();
-  await expect.poll(() => fixture.sockets.has(session.id)).toBe(true);
-  const tracker = new McpStartupTracker();
-  const send = (status: 'starting' | 'failed', sequence: number, reason?: string) => {
-    const observed = tracker.observeReadiness(status, reason)!;
-    const event = normalizeCodexNotification(session.id, sequence, observed.observedAt, {
-      method: 'gestalt/mcpStartup',
-      params: observed,
-    })!;
-    fixture.event(session.id, sequence, event.type, event.payload, event.occurredAt);
-  };
-  send('starting', 1);
-  const timeline = page.getByRole('list', { name: 'Chat messages' });
-  // A visible activity confirms the preceding readiness event has been consumed.
-  fixture.event(session.id, 2, 'activity.updated', {
+  await expect.poll(() => fixture.sockets.has('legacy-session')).toBe(true);
+  for (const [index, status] of ['starting', 'failed'].entries())
+    fixture.event('legacy-session', index + 1, 'activity.updated', {
+      id: 'old-startup',
+      label: 'XERJ startup',
+      detail: status,
+      mcpStartup: { serverName: 'gestalt-xerj', status },
+    });
+  fixture.event('legacy-session', 3, 'activity.updated', {
     id: 'command',
     label: 'Command · completed',
     detail: 'git status --short',
   });
+  const timeline = page.getByRole('list', { name: 'Chat messages' });
   await expect(timeline).toContainText('Work details · 1 activity');
-  await expect(timeline).not.toContainText('XERJ');
-  await expect(page.getByRole('status').filter({ hasText: 'XERJ startup failed' })).toHaveCount(0);
-  await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeEnabled();
-  send('failed', 3, 'authentication-failed');
-  const warning = page.getByRole('status').filter({ hasText: 'XERJ startup failed' });
-  await expect(warning).toBeVisible();
-  await expect(warning).toContainText('backend authentication is unavailable or was rejected');
-  await expect(warning).not.toContainText('Codex');
-  await expect(warning).not.toContainText('Child process');
-  await expect(timeline).not.toContainText('XERJ');
+  await expect(page.locator('body')).not.toContainText('XERJ');
+  await expect(page.getByRole('status').filter({ hasText: /startup/ })).toHaveCount(0);
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeEnabled();
   expect(fixture.commands).toEqual([]);
 });
@@ -96,8 +80,8 @@ for (const width of [390, 1440]) {
           params: observed,
         })!;
       };
-      const ready = ['context-mode', 'gestalt-context-mode', 'gestalt-serena', 'gestalt-xerj'].map(
-        (name) => event('ready', name),
+      const ready = ['context-mode', 'gestalt-context-mode', 'gestalt-serena'].map((name) =>
+        event('ready', name),
       );
       sequence = 0;
       fixture.snapshot(
@@ -117,12 +101,7 @@ for (const width of [390, 1440]) {
         fixture.event(session.id, update.sequence, update.type, update.payload, update.occurredAt);
         return update;
       };
-      for (const name of [
-        'context-mode',
-        'gestalt-context-mode',
-        'gestalt-serena',
-        'gestalt-xerj',
-      ]) {
+      for (const name of ['context-mode', 'gestalt-context-mode', 'gestalt-serena']) {
         send('starting', name);
         send('ready', name);
       }

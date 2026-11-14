@@ -45,7 +45,7 @@ async function execute(args: readonly string[], environment: NodeJS.ProcessEnv, 
 }
 
 /** Same actual native-TUI/bootstrap harness as the accepted manager L3 tests.
- * Extract production launch_cli_with_xerj verbatim; only add bounded lifecycle
+ * Extract production launch_cli_with_capabilities verbatim; only add bounded lifecycle
  * observation. This avoids global manager/setup mutations and uses no npm,
  * browser/package install, network model, or replacement MCP implementation.
  */
@@ -115,7 +115,7 @@ export async function seedWithNativeCli(input: {
   );
   const source = await readFile(input.manager, 'utf8');
   const program = source
-    .split('launch_cli_with_xerj() {')[1]
+    .split('launch_cli_with_capabilities() {')[1]
     ?.split("<<'NODE'\n")[1]
     ?.split('\nNODE\n')[0];
   const needle = 'managedPlaywright(launchArgs, undefined, refreshPlaywrightConsent)';

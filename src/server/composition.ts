@@ -132,17 +132,12 @@ import { CachedSkillCatalog } from './platform/skills/cached-skill-catalog.js';
 import { ManagedSkillProvenance } from './platform/skills/managed-skill-provenance.js';
 import { ManagedSkillCatalog } from './platform/skills/managed-skill-catalog.js';
 import { VerifiedSkillCatalog } from './platform/skills/verified-skill-catalog.js';
-import { XerjIndexer } from './platform/retrieval/xerj-indexer.js';
-import type { XerjStatus } from '../shared/contracts/xerj-status.js';
-import { ManagedXerj, xerjDeadline } from './platform/retrieval/managed-xerj.js';
-import { CodexXerj } from './platform/retrieval/codex-xerj.js';
 import { CodexSerena } from './platform/codex/codex-serena.js';
 import { ManagedSerena } from './platform/codex/managed-serena.js';
 import { CodexCapabilities } from './platform/codex/codex-capabilities.js';
 import { CodexPlaywright, type PlaywrightAuthority } from './platform/codex/codex-playwright.js';
 import { ManagedPlaywright } from './platform/codex/managed-playwright.js';
 import { isManagedPlaywrightCall } from '../shared/contracts/managed-playwright.js';
-import type { RetrievalCapabilityPort } from './features/skills/application/ports.js';
 import { compileSkillOverride, type SkillProfile } from './features/skills/model/skill-profile.js';
 import { SupervisedPlanRegistry } from './features/plans/application/supervised-plan-registry.js';
 import { planAttachmentSupervision } from './features/plans/application/plan-attachment-supervision.js';
@@ -221,7 +216,6 @@ export type ComposeRelayAppOptions = {
   installedKimiVersion?: string | null;
   componentVersions?: readonly ComponentVersion[];
   startAppServers?: boolean;
-  xerj?: XerjStatus['mode'];
   activityDiagnostic?: (
     sessionId: string,
     code: 'reconcileExhausted',
@@ -257,7 +251,6 @@ export type ComposeRelayAppOptions = {
     cwd: string;
     environment?: Readonly<Record<string, string>>;
   }) => AppServer;
-  retrievalCapability?: RetrievalCapabilityPort;
   /** Test-only explicit-session model resolver; production uses provider runtimes below. */
   sessionModelCatalog?: ModelCatalog;
   /** Test seam; production constructs the manager when the kimi CLI is installed. */
@@ -839,21 +832,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     ),
     skillProvenance,
   );
-  const retrievalCapability =
-    options.xerj === 'off'
-      ? { check: async () => ({ status: 'absent' as const }) }
-      : (options.retrievalCapability ?? new ManagedXerj());
-  const xerjIndexer = new XerjIndexer(
-    root,
-    options.xerj ?? 'manual',
-    retrievalCapability,
-    process.env,
-    console.warn,
-    () => sessionScratch.allocateService(root, 'xerj-indexer'),
-  );
-  const xerj = new CodexXerj(retrievalCapability);
   const serenaInstallation = new ManagedSerena();
-  const capabilities = new CodexCapabilities(xerj, new CodexSerena(serenaInstallation));
+  const capabilities = new CodexCapabilities(new CodexSerena(serenaInstallation));
   const playwright = new CodexPlaywright(new ManagedPlaywright(), sessionScratch);
   const playwrightAuthority = (session: RelaySessionSnapshot): PlaywrightAuthority => {
     const plan = supervisedPlans.findCurrent(session.id);
@@ -893,19 +873,18 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         : kimiSkillCatalog.list(workspace),
     async (provider, _profile, workspace, result) => {
       if (provider !== 'codex') return result;
-      const [xerjStatus, serenaStatus] = await Promise.all([
-        result.skills.some((skill) => skill.name === 'gestalt:xerj' && skill.enabled)
-          ? retrievalCapability.check({ cwd: workspace, deadline: xerjDeadline(), start: false })
-          : undefined,
-        result.skills.some((skill) => skill.name === 'gestalt:serena' && skill.enabled)
-          ? serenaInstallation.check()
-          : undefined,
-      ]);
+      const serenaStatus = result.skills.some(
+        (skill) => skill.name === 'gestalt:serena' && skill.enabled,
+      )
+        ? serenaInstallation.check()
+        : undefined;
+      const installedSerena = await serenaStatus;
       return {
         ...result,
         skills: result.skills.map((skill) =>
-          (skill.name === 'gestalt:xerj' && xerjStatus && xerjStatus.status !== 'ready') ||
-          (skill.name === 'gestalt:serena' && serenaStatus && serenaStatus.status !== 'installed')
+          skill.name === 'gestalt:serena' &&
+          installedSerena &&
+          installedSerena.status !== 'installed'
             ? { ...skill, enabled: false }
             : skill,
         ),
@@ -2791,7 +2770,6 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             }
           : new CodexAllowanceReader(root, options.launchAppServer ?? launchCodexAppServer),
       bootstrap: {
-        xerj: () => xerjIndexer.status(),
         sessionDefaults,
         workspaces,
         profiles: options.profiles,
@@ -3245,7 +3223,6 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     });
   } catch (error) {
     await hostTests?.close();
-    await retrievalCapability.close?.();
     authorization?.close();
     database.close();
     throw error;
@@ -3277,7 +3254,6 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   app.addHook('onListen', async () => {
     for (const id of forgetOperations.pendingIds())
       void forgetSessions.execute(id).catch(() => undefined);
-    if (options.xerj) xerjIndexer.start();
     const profile = (await options.profiles.list()).find((item) => item.state === 'ok')?.name;
     if (profile) await editorSkillCatalog.refresh('codex', profile, root);
     // Kimi discovery owns a provider process, so passive relay startup must not
@@ -3317,8 +3293,6 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   app.addHook('onClose', async () => {
     await hostTests?.close();
     await forgetSessions.drain();
-    await retrievalCapability.close?.();
-    await xerjIndexer.close();
     for (const [sessionId, timer] of capacityRecoveryTimers) {
       clearTimeout(timer);
       capacityRecoveries.delete(sessionId);

@@ -11,7 +11,6 @@ export type ComponentVersion = Readonly<{
     | 'gestalt-agents'
     | 'context-mode'
     | 'codex'
-    | 'xerj'
     | 'serena'
     | 'playwright'
     | 'uv'

@@ -173,12 +173,7 @@ async function capture(
       builds.push(hash(JSON.stringify([build, item])));
     }
   }
-  for (const name of [
-    '.serena/project.yml',
-    '.xerjignore',
-    'CMakePresets.json',
-    'CMakeUserPresets.json',
-  ]) {
+  for (const name of ['.serena/project.yml', 'CMakePresets.json', 'CMakeUserPresets.json']) {
     const content = await read(join(repository, name), true);
     metadata.push([name, content ? hash(content) : null]);
   }

@@ -22,7 +22,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onrefresh?: () => void;
   } = $props();
   const repositories = $derived(Array.isArray(status?.repositories) ? status.repositories : []);
-  const connections = $derived(Array.isArray(status?.connections) ? status.connections : []);
+  const connections = $derived(
+    Array.isArray(status?.connections)
+      ? status.connections.filter((connection) => connection.serverName === 'gestalt-serena')
+      : [],
+  );
   const states = $derived(repositories.map((entry) => semanticState(entry.readiness)));
   const state = $derived(
     states.includes('unavailable')
@@ -45,11 +49,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <dl>
           {#each connections as connection (connection.serverName)}
             <div>
-              <dt>
-                {connection.serverName === 'gestalt-serena'
-                  ? 'Serena connection'
-                  : 'XERJ connection'}
-              </dt>
+              <dt>Serena connection</dt>
               <dd>{readinessLabel(connection.readiness?.connection?.state)}</dd>
             </div>
           {/each}

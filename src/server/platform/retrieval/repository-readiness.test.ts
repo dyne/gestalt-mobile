@@ -15,7 +15,6 @@ import { CodexSerena } from '../codex/codex-serena.js';
 import { serenaTools } from '../codex/managed-serena.js';
 import { CodexSessionRuntime } from '../codex/session-runtime.js';
 import { RelaySession } from '../../features/sessions/model/relay-session.js';
-import { CodexXerj } from './codex-xerj.js';
 
 vi.mock('node:fs/promises', async (original) => {
   const actual = await original<typeof import('node:fs/promises')>();
@@ -125,7 +124,6 @@ async function fixture() {
     onServerRequest: () => () => {},
   };
   const capabilities = new CodexCapabilities(
-    new CodexXerj({ check: async () => ({ status: 'absent' }) }),
     new CodexSerena({
       check: async () => ({ status: 'installed', manager: '/fixture/gestalt', version: '1.7.0' }),
     }),

@@ -42,6 +42,32 @@ const snapshot = (baseSequence = 1) => ({
   ],
 });
 describe('chat projection', () => {
+  it('ignores retired telemetry during cache hydration, history reopening and live replay', () => {
+    const legacy = {
+      id: 'old-startup',
+      label: 'XERJ startup',
+      detail: 'Old status',
+      mcpStartup: { serverName: 'gestalt-xerj' },
+    };
+    const user = { id: 'user-work', label: 'Command', detail: 'inspect a Xerj project' };
+    const cached = { ...createChatProjection('s'), activities: [legacy, user] };
+    const before = JSON.stringify(cached);
+    const hydrated = hydrateCache('s', cached);
+    expect(hydrated.activities).toEqual([user]);
+    const history = {
+      ...snapshot(0),
+      activities: [legacy, user] as unknown as Parameters<typeof acceptSnapshot>[1]['activities'],
+    };
+    const reopened = acceptSnapshot(hydrated, history);
+    expect(reopened.activities).toEqual([user]);
+    const replayed = applyProjectionEvent(reopened, {
+      sequence: 1,
+      type: 'activity.updated',
+      payload: legacy,
+    });
+    expect(replayed.activities).toEqual([user]);
+    expect(JSON.stringify(cached)).toBe(before);
+  });
   it('restores authoritative interaction timing while preserving a cached resolved operation', () => {
     const cached = hydrateCache(
       's',

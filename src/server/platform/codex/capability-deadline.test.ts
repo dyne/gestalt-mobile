@@ -10,6 +10,11 @@ import { beforeDeadline, capabilityDeadline } from './capability-deadline.js';
 afterEach(() => vi.useRealTimers());
 
 describe('shared capability deadlines', () => {
+  it('ignores the retired retrieval timeout environment contract', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(100_000);
+    expect(capabilityDeadline({ XERJ_READY_TIMEOUT_MS: '100' })).toBe(105_000);
+  });
   it.each([
     [undefined, 5_000],
     ['100', 100],
@@ -18,11 +23,13 @@ describe('shared capability deadlines', () => {
     ['60001', 5_000],
     ['100.5', 5_000],
     ['invalid', 5_000],
-  ])('preserves the existing timeout setting %s', (configured, expected) => {
+  ])('uses the retained-capability timeout setting %s', (configured, expected) => {
     vi.useFakeTimers();
     vi.setSystemTime(100_000);
     expect(
-      capabilityDeadline(configured === undefined ? {} : { XERJ_READY_TIMEOUT_MS: configured }),
+      capabilityDeadline(
+        configured === undefined ? {} : { GESTALT_CAPABILITY_TIMEOUT_MS: configured },
+      ),
     ).toBe(100_000 + expected);
   });
 
@@ -43,7 +50,7 @@ describe('shared capability deadlines', () => {
   it.each([0, 100])('bounds a stalled operation with %sms remaining', async (remaining) => {
     vi.useFakeTimers();
     const result = beforeDeadline(new Promise<never>(() => {}), Date.now() + remaining);
-    const rejected = expect(result).rejects.toThrow('XERJ_READINESS_TIMEOUT');
+    const rejected = expect(result).rejects.toThrow('CAPABILITY_READINESS_TIMEOUT');
     await vi.advanceTimersByTimeAsync(remaining);
     await rejected;
     expect(vi.getTimerCount()).toBe(0);

@@ -2,7 +2,7 @@
 
 Playwright is optional for Mobile Codex sessions. The Gestalt host owns its
 stdio connection and browser descendants. Installation, profile consent,
-activation, and verified tools are separate steps. Chat, Serena, and XERJ remain
+activation, and verified tools are separate steps. Chat and Serena remain
 usable when the browser capability is unavailable. Kimi has no managed browser
 activation path.
 

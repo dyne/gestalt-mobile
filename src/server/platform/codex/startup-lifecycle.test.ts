@@ -12,7 +12,6 @@ import { expect, it, onTestFinished, vi } from 'vitest';
 import { CodexSessionRuntime, type AppServer } from './session-runtime.js';
 import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexCapabilities } from './codex-capabilities.js';
-import { CodexXerj } from '../retrieval/codex-xerj.js';
 import { CodexSerena } from './codex-serena.js';
 import { CodexPlaywright } from './codex-playwright.js';
 import { RelaySession } from '../../features/sessions/model/relay-session.js';
@@ -24,7 +23,6 @@ async function fixture(resumeError?: Error) {
   onTestFinished(() => rm(root, { recursive: true, force: true }));
   const skills = await installStartupFixture(join(root, 'installed'));
   const pair = new CodexCapabilities(
-    new CodexXerj({ check: async () => ({ status: 'absent' }) }),
     new CodexSerena({ check: async () => ({ status: 'absent' }) }),
   );
   const requests: Array<{ method: string; params: unknown }> = [];
@@ -150,7 +148,7 @@ it('assembles the selected bootstrap for an authorized missing-rollout replaceme
     model: 'fixture',
     config: { model_reasoning_effort: 'medium' },
   });
-  for (const name of ['xerj', 'serena', 'playwright'])
+  for (const name of ['serena', 'playwright'])
     expect(sent.config.developer_instructions?.split(`<gestalt_${name}_unavailable>`)).toHaveLength(
       2,
     );

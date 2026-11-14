@@ -17,7 +17,6 @@ import {
 } from './startup-guidance.fixture.js';
 import { CodexCapabilities } from './codex-capabilities.js';
 import { CodexSerena } from './codex-serena.js';
-import { CodexXerj, xerjTools } from '../retrieval/codex-xerj.js';
 import { serenaTools } from './managed-serena.js';
 import { CodexSessionRuntime, type AppServer } from './session-runtime.js';
 import { RelaySession } from '../../features/sessions/model/relay-session.js';
@@ -165,12 +164,8 @@ describe('fresh runtime startup delivery', () => {
         onNotification: () => () => {},
         onServerRequest: () => () => {},
       };
-      const xerjCheck = vi.fn(),
-        serenaCheck = vi.fn();
-      const pair = new CodexCapabilities(
-        new CodexXerj({ check: xerjCheck }),
-        new CodexSerena({ check: serenaCheck }),
-      );
+      const serenaCheck = vi.fn();
+      const pair = new CodexCapabilities(new CodexSerena({ check: serenaCheck }));
       const browser = new CodexPlaywright({ check: vi.fn(), ready: vi.fn() });
       const session = RelaySession.create({
         id: 'fallback',
@@ -232,19 +227,17 @@ describe('fresh runtime startup delivery', () => {
         expect(sent).not.toHaveProperty('baseInstructions');
         expect(sent.config).toMatchObject({
           mcp_servers: {
-            'gestalt-xerj': { enabled: false },
             'gestalt-serena': { enabled: false },
             'gestalt-playwright': { enabled: false },
           },
         });
-        expect(xerjCheck).not.toHaveBeenCalled();
         expect(serenaCheck).not.toHaveBeenCalled();
       } finally {
         runtime.stopAll();
       }
     },
   );
-  it.each(['both', 'xerj', 'serena', 'neither'])(
+  it.each(['serena', 'neither'])(
     'sends preserved config and independent %s capabilities with one stable block',
     async (availability) => {
       const f = await fixture();
@@ -265,11 +258,6 @@ describe('fresh runtime startup delivery', () => {
           return {
             data: [
               {
-                name: 'gestalt-xerj',
-                runtimeStatus: 'connected',
-                tools: Object.fromEntries(xerjTools.map((tool) => [tool, {}])),
-              },
-              {
                 name: 'gestalt-serena',
                 runtimeStatus: 'connected',
                 tools: Object.fromEntries(serenaTools.map((tool) => [tool, {}])),
@@ -281,19 +269,9 @@ describe('fresh runtime startup delivery', () => {
         onServerRequest: () => () => {},
       };
       const pair = new CodexCapabilities(
-        new CodexXerj({
-          check: async () =>
-            availability === 'both' || availability === 'xerj'
-              ? {
-                  status: 'ready',
-                  manager: '/synthetic/manager',
-                  endpoint: 'http://127.0.0.1:19200',
-                }
-              : { status: 'absent' },
-        }),
         new CodexSerena({
           check: async () =>
-            availability === 'both' || availability === 'serena'
+            availability === 'serena'
               ? { status: 'installed', manager: '/synthetic/manager', version: '0.0.1' }
               : { status: 'absent' },
         }),
@@ -365,10 +343,7 @@ describe('fresh runtime startup delivery', () => {
         expect(count(text, syntheticBootstrap)).toBe(1);
         expect(count(text, '<gestalt_playwright_unavailable>')).toBe(1);
         expect(text).toContain(
-          `<gestalt_xerj_${availability === 'both' || availability === 'xerj' ? 'capability' : 'unavailable'}>`,
-        );
-        expect(text).toContain(
-          `<gestalt_serena_${availability === 'both' || availability === 'serena' ? 'capability' : 'unavailable'}>`,
+          `<gestalt_serena_${availability === 'serena' ? 'capability' : 'unavailable'}>`,
         );
       } finally {
         runtime.stopAll();
@@ -378,19 +353,23 @@ describe('fresh runtime startup delivery', () => {
   it('keeps repeated prepare/verify fallback idempotent without removing unrelated guidance', async () => {
     const f = await fixture();
     const pair = new CodexCapabilities(
-      new CodexXerj({
+      new CodexSerena({
         check: async () => ({
-          status: 'ready',
+          status: 'installed',
           manager: '/synthetic/manager',
-          endpoint: 'http://127.0.0.1:19200',
+          version: '0.0.1',
         }),
       }),
-      new CodexSerena({ check: async () => ({ status: 'absent' }) }),
     );
     const rpc = {
       request: async (method: string) =>
         method === 'config/read'
-          ? { config: { developer_instructions: 'CUSTOM\n<unrelated>Keep</unrelated>' } }
+          ? {
+              config: {
+                features: { hooks: true },
+                developer_instructions: 'CUSTOM\n<unrelated>Keep</unrelated>',
+              },
+            }
           : { data: [] },
     };
     const input = {
@@ -415,14 +394,13 @@ describe('fresh runtime startup delivery', () => {
     const f = await fixture();
     const requests: Array<{ method: string; params: unknown }> = [];
     const pair = new CodexCapabilities(
-      new CodexXerj({
+      new CodexSerena({
         check: async () => ({
-          status: 'ready',
+          status: 'installed',
           manager: '/synthetic/manager',
-          endpoint: 'http://127.0.0.1:19200',
+          version: '0.0.1',
         }),
       }),
-      new CodexSerena({ check: async () => ({ status: 'absent' }) }),
     );
     const catalog = new CodexSkillCatalog(
       'default',
@@ -444,14 +422,14 @@ describe('fresh runtime startup delivery', () => {
                   },
                 ],
               };
-            if (method === 'config/read') return { config: {} };
+            if (method === 'config/read') return { config: { features: { hooks: true } } };
             if (method === 'thread/start') return { thread: { id: 'probe' } };
             return {
               data: [
                 {
-                  name: 'gestalt-xerj',
+                  name: 'gestalt-serena',
                   runtimeStatus: 'connected',
-                  tools: Object.fromEntries(xerjTools.map((tool) => [tool, {}])),
+                  tools: Object.fromEntries(serenaTools.map((tool) => [tool, {}])),
                 },
               ],
             };

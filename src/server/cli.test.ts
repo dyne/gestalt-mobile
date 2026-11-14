@@ -237,7 +237,6 @@ describe('runCli', () => {
           { id: 'gestalt-agents', label: 'Gestalt Agents', version: '2.9.0' },
           { id: 'context-mode', label: 'Context Mode', version: '2.9.0' },
           { id: 'codex', label: 'Codex CLI', version: 'codex-cli 1.2.3' },
-          { id: 'xerj', label: 'xerj', version: '1.0.0-rc.87' },
           { id: 'serena', label: 'Serena', version: '1.7.0' },
           { id: 'playwright', label: 'Playwright MCP', version: '0.0.85', status: 'ready' },
           { id: 'uv', label: 'uv', version: '0.11.12' },

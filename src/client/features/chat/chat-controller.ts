@@ -13,6 +13,7 @@ import { createIdempotencyKey } from '../sessions/idempotency-key.js';
 import { autopilotAuditAttention } from '../../../shared/contracts/autopilot-audit.js';
 import { parseToolEfficiencySnapshot } from '../../../shared/contracts/tool-efficiency.js';
 import { parseMcpStartupStatus } from '../../../shared/contracts/mcp-startup-failure.js';
+import { isRetiredServiceActivity } from './activity-summary.js';
 import {
   acceptSnapshot,
   applyProjectionEvent,
@@ -757,6 +758,7 @@ function hasConversationContent(view: ChatProjection): boolean {
 
 /** Tool startup is observable before Codex has created any conversation history. */
 function isConversationActivity(value: unknown): boolean {
+  if (isRetiredServiceActivity(value)) return false;
   const activity = value as { mcpStartup?: unknown; turnId?: unknown; actorTurnId?: unknown };
   return Boolean(
     !parseMcpStartupStatus(activity.mcpStartup) ||

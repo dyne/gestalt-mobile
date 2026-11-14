@@ -108,7 +108,6 @@ try {
     installedCodexVersion: version.stdout.trim(),
     startAppServers: true,
     // No indexing/service installation is part of this bounded native boundary.
-    xerj: 'off',
     launchAppServer: (input) => {
       const server = launchCodexAppServer(input);
       const request = server.rpc.request.bind(server.rpc);

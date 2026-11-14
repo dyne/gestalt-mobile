@@ -102,26 +102,6 @@ export function normalizeCodexNotification(
   if (
     notification.method === 'mcpServer/statusUpdated' &&
     !connection?.threadId &&
-    connection?.name === 'gestalt-xerj' &&
-    ['failed', 'cancelled'].includes(String(connection.status))
-  ) {
-    return {
-      sessionId,
-      sequence,
-      occurredAt,
-      type: 'activity.updated',
-      payload: {
-        id: 'gestalt-xerj-availability',
-        label: 'Xerj unavailable',
-        detail:
-          'Retrieval is unavailable. Check gestalt xerj status. Use rg and current source reads; readiness will be checked when the runtime resumes.',
-        ...(activeTurnId ? { turnId: activeTurnId } : {}),
-      },
-    };
-  }
-  if (
-    notification.method === 'mcpServer/statusUpdated' &&
-    !connection?.threadId &&
     connection?.name === 'gestalt-serena' &&
     ['connected', 'failed', 'cancelled'].includes(String(connection.status))
   ) {

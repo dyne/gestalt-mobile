@@ -26,15 +26,3 @@ export interface SkillCatalog {
 export interface SkillProvenanceVerifier {
   verify(paths: readonly string[]): Promise<ReadonlyMap<string, SkillProvenance>>;
 }
-
-/** Optional retrieval: availability must be recomputed at runtime boundaries. */
-export type RetrievalCapability =
-  | { status: 'absent' }
-  | { status: 'starting' }
-  | { status: 'unavailable'; reason: string }
-  | { status: 'ready'; manager: string; endpoint: string };
-
-export interface RetrievalCapabilityPort {
-  check(input: { cwd: string; deadline: number; start: boolean }): Promise<RetrievalCapability>;
-  close?(): Promise<void>;
-}
