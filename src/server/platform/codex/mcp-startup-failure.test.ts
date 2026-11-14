@@ -26,37 +26,14 @@ const decode = (params: unknown, method = 'mcpServer/startupStatus/updated') =>
   decodeMcpStartupFailure({ method, params }, correlation);
 
 describe('bounded MCP startup failure evidence', () => {
-  it('distinguishes local pending readiness and allowlisted failures from upstream MCP failures', () => {
-    const tracker = new McpStartupTracker();
-    const pending = tracker.observeReadiness('starting')!;
-    expect(pending).toMatchObject({ status: 'starting', phase: 'readiness', failure: null });
-    const failed = tracker.observeReadiness('failed', 'authentication-failed')!;
-    expect(failed.attemptId).toBe(pending.attemptId);
-    expect(failed.failure).toMatchObject({
-      phase: 'readiness',
-      code: 'readiness-failed',
-      readinessReason: 'authentication-failed',
-      exitCode: null,
-      signal: null,
-    });
-    expect(parseMcpStartupStatus(failed)).toEqual(failed);
-    tracker.observeReadiness('starting');
-    const unknown = tracker.observeReadiness('failed', 'private key and stderr')!;
-    expect(unknown.failure?.readinessReason).toBe('unknown');
-    expect(JSON.stringify(unknown)).not.toContain('private');
-    const upstream = decode({
-      name: 'gestalt-xerj',
-      status: 'failed',
-      phase: 'readiness',
-      code: 'readiness-failed',
-      readinessReason: 'authentication-failed',
-    })!;
-    expect(upstream).toMatchObject({ phase: 'startup', code: 'startup-failed' });
-    expect(upstream.readinessReason).toBeUndefined();
+  it('ignores retired extra startup fields and server notifications', () => {
+    expect(decode({ name: 'gestalt-xerj', status: 'failed' })).toBeUndefined();
     expect(
-      parseMcpStartupFailure({ ...failed.failure, serverName: 'context-mode' }),
+      new McpStartupTracker().observe({
+        method: 'mcpServer/statusUpdated',
+        params: { name: 'gestalt-xerj', status: 'starting' },
+      }),
     ).toBeUndefined();
-    expect(parseMcpStartupFailure({ ...failed.failure, phase: 'startup' })).toBeUndefined();
   });
   it('correlates attempts, deduplicates their first failure, and isolates concurrent tools', () => {
     const tracker = new McpStartupTracker();
@@ -165,13 +142,16 @@ describe('bounded MCP startup failure evidence', () => {
 
   it('retains only the upstream structured reason and cancellation', () => {
     expect(
-      decode({ name: 'gestalt-xerj', status: 'failed', failureReason: 'reauthenticationRequired' })
-        ?.code,
+      decode({
+        name: 'gestalt-serena',
+        status: 'failed',
+        failureReason: 'reauthenticationRequired',
+      })?.code,
     ).toBe('reauthentication-required');
-    expect(decode({ name: 'gestalt-xerj', status: 'failed', failureReason: 'secret' })?.code).toBe(
-      'startup-failed',
-    );
-    expect(decode({ name: 'gestalt-xerj', status: 'cancelled' })?.code).toBe('cancelled');
+    expect(
+      decode({ name: 'gestalt-serena', status: 'failed', failureReason: 'secret' })?.code,
+    ).toBe('startup-failed');
+    expect(decode({ name: 'gestalt-serena', status: 'cancelled' })?.code).toBe('cancelled');
   });
 
   it('ignores successful, unrelated and malformed notifications', () => {

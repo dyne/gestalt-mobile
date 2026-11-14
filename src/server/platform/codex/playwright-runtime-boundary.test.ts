@@ -12,7 +12,7 @@ import { CodexSessionRuntime } from './session-runtime.js';
 import { RelaySession } from '../../features/sessions/model/relay-session.js';
 import { CodexPlaywright, type PlaywrightAuthority } from './codex-playwright.js';
 import { playwrightServerName, playwrightTools } from './managed-playwright.js';
-import type { CodexRetrievalState } from '../retrieval/codex-xerj.js';
+import type { CodexCapabilityState } from './capability-contracts.js';
 
 function fixture(
   topology: 'idle' | 'active-root' | 'active-child' | 'unknown' = 'idle',
@@ -89,7 +89,7 @@ function fixture(
     undefined,
     undefined,
     retrieval ?? {
-      prepare: async (): Promise<CodexRetrievalState> => ({
+      prepare: async (): Promise<CodexCapabilityState> => ({
         config: {},
         skillsConfig: [],
         ready: requested,

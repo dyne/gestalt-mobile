@@ -11,30 +11,24 @@ import { createMcpStartupFeedback } from './mcp-startup-feedback.js';
 import { createToastQueue } from './toast-queue.js';
 
 describe('MCP startup toast pipeline', () => {
-  afterEach(() => vi.useRealTimers());
-  it('reports local XERJ readiness reasons in warnings while pending preparation stays silent', () => {
+  it('ignores retired extra startup fields rather than restoring obsolete warnings', () => {
     const queue = createToastQueue();
-    const observe = createMcpStartupFeedback(queue);
-    const tracker = new McpStartupTracker();
-    const event = (status: 'starting' | 'failed', reason?: string) => ({
+    createMcpStartupFeedback(queue)('saved', {
       type: 'activity.updated',
-      payload: mcpStartupActivity(tracker.observeReadiness(status, reason)!),
+      payload: {
+        id: 'old-startup',
+        mcpStartup: {
+          schemaVersion: 1,
+          serverName: 'gestalt-xerj',
+          status: 'failed',
+          failure: { readinessReason: 'timeout' },
+        },
+      },
     });
-    observe('session', event('starting'));
     expect(queue.snapshot()).toEqual([]);
     expect(queue.historySnapshot()).toEqual([]);
-    observe('session', event('failed', 'authentication-failed'));
-    expect(queue.snapshot()).toHaveLength(1);
-    expect(queue.snapshot()[0]!.message).toContain(
-      'XERJ backend authentication is unavailable or was rejected.',
-    );
-    expect(queue.snapshot()[0]!.message).not.toContain('Codex');
-    observe('session', event('starting'));
-    observe('session', event('failed', 'private-secret TOKEN=secret'));
-    expect(queue.snapshot()).toHaveLength(1);
-    expect(queue.snapshot()[0]!.message).toContain('no more specific cause is available');
-    expect(JSON.stringify(queue.historySnapshot())).not.toContain('private-secret');
   });
+  afterEach(() => vi.useRealTimers());
   it('isolates current errors by session, child and tool, preserves history and ignores replayed failures', () => {
     vi.useFakeTimers();
     const queue = createToastQueue();
@@ -79,7 +73,7 @@ describe('MCP startup toast pipeline', () => {
     const queue = createToastQueue();
     const observe = createMcpStartupFeedback(queue);
     const tracker = new McpStartupTracker();
-    for (const name of ['context-mode', 'gestalt-context-mode', 'gestalt-serena', 'gestalt-xerj']) {
+    for (const name of ['context-mode', 'gestalt-context-mode', 'gestalt-serena']) {
       for (const status of ['starting', 'ready']) {
         observe('session', {
           type: 'activity.updated',

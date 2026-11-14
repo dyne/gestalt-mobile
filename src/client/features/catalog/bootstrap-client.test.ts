@@ -45,6 +45,21 @@ const bootstrap = {
 } satisfies Bootstrap;
 
 describe('loadBootstrap', () => {
+  it('hydrates old extra payload fields while omitting the retired version display', async () => {
+    const legacy = {
+      ...bootstrap,
+      xerj: { state: 'error', message: 'Old retrieval failure' },
+      sessions: [{ id: 'saved', xerj: { state: 'ready' } }],
+      versions: [
+        { id: 'xerj', label: 'XERJ', version: 'old' },
+        { id: 'serena', label: 'Serena', version: '1.7.0' },
+      ],
+    };
+    const decoded = await loadBootstrap(async () => new Response(JSON.stringify(legacy)));
+    expect(decoded.sessions).toEqual(legacy.sessions);
+    expect(decoded.versions).toEqual([{ id: 'serena', label: 'Serena', version: '1.7.0' }]);
+    expect(legacy.versions).toHaveLength(2);
+  });
   it('returns the recursive workspace tree from the API payload', async () => {
     await expect(
       loadBootstrap(

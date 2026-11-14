@@ -54,8 +54,8 @@ import {
   isMissingCodexThreadRollout,
 } from './json-rpc-client.js';
 import { resolvedServerRequestId } from './server-request.js';
-import type { CodexRetrievalState } from '../retrieval/codex-xerj.js';
-import { xerjDeadline } from '../retrieval/managed-xerj.js';
+import type { CodexCapabilityState } from './capability-contracts.js';
+import { capabilityDeadline } from './capability-deadline.js';
 import { McpStartupTracker } from './mcp-startup-failure.js';
 import type { McpStartupStatus } from '../../../shared/contracts/mcp-startup-failure.js';
 
@@ -188,11 +188,10 @@ class SessionResource {
     private readonly onDisposed: () => void,
   ) {}
 
-  retrieval: CodexRetrievalState | undefined;
-  retrievalFailureReported = false;
+  retrieval: CodexCapabilityState | undefined;
   readonly capabilityFailuresReported = new Set<string>();
   readonly readinessPublished = new Map<string, string>();
-  readinessDeadline = xerjDeadline();
+  readinessDeadline = capabilityDeadline();
 
   dispose(): boolean {
     if (this.disposed) return false;
@@ -298,12 +297,16 @@ export class CodexSessionRuntime {
         rpc: AppServer['rpc'],
         config: Record<string, unknown>,
         deadline: number,
-      ): Promise<CodexRetrievalState>;
-      verify(rpc: AppServer['rpc'], threadId: string, state: CodexRetrievalState): Promise<boolean>;
+      ): Promise<CodexCapabilityState>;
+      verify(
+        rpc: AppServer['rpc'],
+        threadId: string,
+        state: CodexCapabilityState,
+      ): Promise<boolean>;
       needsResume?(session: RelaySessionSnapshot): boolean | Promise<boolean>;
       release?(sessionId: string): void;
       observe?(sessionId: string, notification: { method: string; params: unknown }): void;
-      bound?(state: CodexRetrievalState, threadId: string): void;
+      bound?(state: CodexCapabilityState, threadId: string): void;
     },
     private readonly requireExecutorAdmission?: (
       sessionId: string,
@@ -1918,7 +1921,7 @@ export class CodexSessionRuntime {
     this.runtimeReleases?.invalidate(session.id);
     if (purpose === 'execution') this.scratch?.reserveRuntime?.(session);
     this.confirmedWorkspaceReleases.delete(session.id);
-    const deadline = xerjDeadline();
+    const deadline = capabilityDeadline();
     const lease =
       purpose === 'execution' && this.planStatusSource
         ? await this.planStatusSource.open(
@@ -2073,14 +2076,6 @@ export class CodexSessionRuntime {
             if (resource.capabilityFailuresReported.has(status.name)) return;
             resource.capabilityFailuresReported.add(status.name);
           }
-          if (
-            !asRecord(notification.params)?.threadId &&
-            status?.name === 'gestalt-xerj' &&
-            ['failed', 'cancelled'].includes(status.status ?? '')
-          ) {
-            if (resource.retrievalFailureReported) return;
-            resource.retrievalFailureReported = true;
-          }
         }
         const childModel = decodeThreadSettingsModel(notification);
         if (
@@ -2167,9 +2162,7 @@ export class CodexSessionRuntime {
                   )?.ready,
                 ),
               }
-            : skill.name === 'gestalt:xerj'
-              ? { ...skill, enabled: resource.retrieval!.ready }
-              : skill,
+            : skill,
         ),
       },
     };
@@ -2189,46 +2182,11 @@ export class CodexSessionRuntime {
     resource.retrieval = state;
     resource.skillsConfig = state.skillsConfig;
     resource.modelConfig = state.config;
-    if (state.backendPreparation) {
-      const status = state.backendPreparation.status === 'starting' ? 'starting' : 'failed';
-      this.publishStartupStatus(
-        resource,
-        resource.mcpStartup.observeReadiness(status, state.backendPreparation.reason),
-      );
-      if (status === 'failed') {
-        resource.retrievalFailureReported = true;
-        this.onNotification?.(
-          session.id,
-          {
-            method: 'mcpServer/statusUpdated',
-            params: { name: 'gestalt-xerj', status },
-          },
-          { kind: 'root' },
-        );
-      }
-    }
     this.reportCapabilityFailures(resource, session);
-    if (state.diagnostic && !state.backendPreparation && !resource.retrievalFailureReported) {
-      resource.retrievalFailureReported = true;
-      this.publishMcpStartup(resource, {
-        method: 'mcpServer/statusUpdated',
-        params: { name: 'gestalt-xerj', status: 'failed' },
-      });
-      this.onNotification?.(
-        session.id,
-        {
-          method: 'mcpServer/statusUpdated',
-          params: { name: 'gestalt-xerj', status: 'failed' },
-        },
-        { kind: 'root' },
-      );
-    }
   }
 
   private reportCapabilityFailures(resource: SessionResource, session: RelaySessionSnapshot): void {
     for (const capability of resource.retrieval?.capabilities ?? []) {
-      if (capability.serverName === 'gestalt-xerj' && resource.retrieval?.backendPreparation)
-        continue;
       if (!capability.diagnostic || resource.capabilityFailuresReported.has(capability.serverName))
         continue;
       resource.capabilityFailuresReported.add(capability.serverName);
@@ -2278,24 +2236,6 @@ export class CodexSessionRuntime {
     }
     state.fallback();
     this.reportCapabilityFailures(resource, session);
-    if (!state.capabilities && !resource.retrievalFailureReported) {
-      resource.retrievalFailureReported = true;
-      this.publishMcpStartup(resource, {
-        method: 'mcpServer/statusUpdated',
-        params: { name: 'gestalt-xerj', status: 'failed' },
-      });
-      this.onNotification?.(
-        session.id,
-        {
-          method: 'mcpServer/statusUpdated',
-          params: {
-            name: 'gestalt-xerj',
-            status: 'failed',
-          },
-        },
-        { kind: 'root' },
-      );
-    }
     resource.skillsConfig = state.skillsConfig;
     resource.modelConfig = state.config;
     // A fresh Codex thread has no durable rollout until its first turn, so it

@@ -135,7 +135,6 @@ const app = await composeRelayApp({
     stdio: ['ignore', 'pipe', 'ignore'],
   }).trim(),
   startAppServers: true,
-  xerj: 'off',
   planMeasurementHelperPath: join(skill, 'scripts/org-plan'),
   launchAppServer: (input) => {
     const server = launchCodexAppServer({

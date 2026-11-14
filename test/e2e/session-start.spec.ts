@@ -8,6 +8,7 @@ import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { chatSnapshot } from './chat-snapshot-fixture.js';
 import { screenshotPath } from './screenshot-path.js';
+import { writeFile } from 'node:fs/promises';
 
 test.beforeEach(async ({ page }) => mockAuthenticatedStatus(page));
 
@@ -192,15 +193,15 @@ for (const width of [1280, 390]) {
             sequence: 1,
             type: 'activity.updated',
             payload: {
-              id: 'xerj-startup',
-              label: 'XERJ startup',
+              id: 'serena-startup',
+              label: 'Serena startup',
               detail: 'Ready',
               mcpStartup: {
                 schemaVersion: 1,
                 runtimeId: 'runtime',
                 attemptId: 'attempt',
                 threadId: 'codex-thread-1',
-                serverName: 'gestalt-xerj',
+                serverName: 'gestalt-serena',
                 observedAt: '2026-10-31T12:00:00.000Z',
                 status: 'ready',
                 failure: null,
@@ -2206,7 +2207,7 @@ test('captures the configuration popover across the named theme accessibility ma
   }
 });
 
-test('shows live root-wide XERJ progress only while configuration is open', async ({
+test('ignores retired progress payloads while configuration remains usable', async ({
   page,
 }, testInfo) => {
   let requests = 0;
@@ -2240,10 +2241,10 @@ test('shows live root-wide XERJ progress only while configuration is open', asyn
   await expect(page.getByRole('button', { name: 'Open configuration' })).toBeVisible();
   expect(requests).toBe(0);
   await page.getByRole('button', { name: 'Open configuration' }).click();
-  const region = page.getByRole('region', { name: 'Workspace discovery' });
-  await expect(region).toContainText('42%');
-  await expect(region).toContainText('bitcoin-forks');
-  await expect.poll(() => requests).toBe(1);
+  const panel = page.locator('#configuration-panel');
+  await expect(page.getByRole('region', { name: 'Workspace discovery' })).toHaveCount(0);
+  await expect(panel).not.toContainText(/xerj|bitcoin-forks|42%/i);
+  const keyboardMetrics = [];
   for (const scale of [100, 200]) {
     await page.locator('html').evaluate((root, size) => {
       root.style.fontSize = `${size}%`;
@@ -2251,17 +2252,57 @@ test('shows live root-wide XERJ progress only while configuration is open', asyn
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true,
     );
-    await region.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: testInfo.outputPath(`xerj-menu-${scale}.png`) });
+    const quit = panel.getByRole('button', { name: 'Quit', exact: true });
+    const before = await quit.evaluate((button) => ({
+      focused: document.activeElement === button,
+      top: button.getBoundingClientRect().top,
+      bottom: button.getBoundingClientRect().bottom,
+      panelScrollTop: button.closest('#configuration-panel')!.scrollTop,
+    }));
+    if (scale === 200) await expect(quit).toBeFocused();
+    // Reflow can move an already focused button out of view; focusing that same
+    // element again is not keyboard navigation. Verify fresh native focus moves.
+    const appearance = panel.getByRole('combobox', { name: 'Appearance' });
+    await appearance.focus();
+    await expect(appearance).toBeFocused();
+    await expect(appearance).toBeInViewport();
+    for (const name of [
+      'Notifications',
+      'Scratchpad',
+      'Authorized devices',
+      'Lock Gestalt Mobile',
+      'Clean TMP',
+      'Upgrade',
+      'Quit',
+    ]) {
+      await page.keyboard.press('Tab');
+      const action = panel.getByRole('button', { name, exact: true });
+      await expect(action).toBeFocused();
+      await expect(action).toBeInViewport();
+    }
+    await expect(quit).toBeInViewport();
+    const after = await quit.evaluate((button) => ({
+      focused: document.activeElement === button,
+      top: button.getBoundingClientRect().top,
+      bottom: button.getBoundingClientRect().bottom,
+      panelScrollTop: button.closest('#configuration-panel')!.scrollTop,
+    }));
+    keyboardMetrics.push({ scale, before, after });
+    expect(after.focused).toBe(true);
+    expect(after.top).toBeGreaterThanOrEqual(0);
+    expect(after.bottom).toBeLessThanOrEqual(568);
+    await writeFile(
+      testInfo.outputPath('retired-progress-keyboard-metrics.json'),
+      JSON.stringify(keyboardMetrics, null, 2),
+    );
+    await page.screenshot({ path: testInfo.outputPath(`retired-progress-ignored-${scale}.png`) });
   }
   await page.keyboard.press('Escape');
-  await expect(region).toBeHidden();
-  const closedRequests = requests;
-  await page.waitForTimeout(5200);
-  expect(requests).toBe(closedRequests);
+  await expect(panel).toBeHidden();
   Object.assign(status, { state: 'error', message: 'XERJ needs an index rebuild.' });
   await page.getByRole('button', { name: 'Open configuration' }).click();
-  await expect(page.getByRole('status')).toContainText('XERJ needs an index rebuild.');
+  await expect(page.getByRole('status').filter({ hasText: 'XERJ' })).toHaveCount(0);
+  expect(requests).toBe(0);
 });
 
 test('hides workspace discovery and installation advice when Xerj is absent', async ({ page }) => {

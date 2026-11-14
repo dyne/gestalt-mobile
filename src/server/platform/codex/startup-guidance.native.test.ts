@@ -16,7 +16,6 @@ import { launchCodexAppServer } from './codex-process-launcher.js';
 import { CodexSessionRuntime, type AppServer } from './session-runtime.js';
 import { CodexCapabilities } from './codex-capabilities.js';
 import { CodexSerena } from './codex-serena.js';
-import { CodexXerj } from '../retrieval/codex-xerj.js';
 import { RelaySession } from '../../features/sessions/model/relay-session.js';
 import {
   compileSkillOverride,
@@ -155,7 +154,7 @@ it
       await writeFile(join(home, 'foundation.md'), 'EXPLICIT_FOUNDATION\n');
     await writeFile(
       join(home, 'config.toml'),
-      `model='fixture'\nmodel_provider='fixture'\napproval_policy='never'\npersonality='pragmatic'\ndeveloper_instructions=${JSON.stringify(scalar)}\n${mode === 'explicit-foundation' ? 'model_instructions_file=' + JSON.stringify(join(home, 'foundation.md')) + '\n' : ''}${providerConfig(port)}[features]\nhooks=true\ntool_search=false\n[skills]\n[[skills.config]]\nname='gestalt:xerj'\nenabled=false\n[[skills.config]]\nname='gestalt:serena'\nenabled=false\n`,
+      `model='fixture'\nmodel_provider='fixture'\napproval_policy='never'\npersonality='pragmatic'\ndeveloper_instructions=${JSON.stringify(scalar)}\n${mode === 'explicit-foundation' ? 'model_instructions_file=' + JSON.stringify(join(home, 'foundation.md')) + '\n' : ''}${providerConfig(port)}[features]\nhooks=true\ntool_search=false\n[skills]\n[[skills.config]]\nname='gestalt:serena'\nenabled=false\n`,
     );
     const environment = { ...process.env, CODEX_HOME: home };
     for (const args of [
@@ -201,15 +200,12 @@ it
               })) as { data: Array<{ cwd: string; skills: AvailableSkill[] }> };
               const fixtureSkills = discovered.data
                 .find((entry) => entry.cwd === workspace)!
-                .skills.filter((skill) =>
-                  ['gestalt:coding', 'gestalt:xerj', 'gestalt:serena'].includes(skill.name),
-                )
+                .skills.filter((skill) => ['gestalt:coding', 'gestalt:serena'].includes(skill.name))
                 .map(({ name, enabled }) => ({ name, enabled }))
                 .sort((a, b) => a.name.localeCompare(b.name));
               expect(fixtureSkills).toEqual([
                 { name: 'gestalt:coding', enabled: true },
                 { name: 'gestalt:serena', enabled: false },
-                { name: 'gestalt:xerj', enabled: false },
               ]);
             }
             return result;
@@ -222,7 +218,6 @@ it
       return server;
     };
     const pair = new CodexCapabilities(
-      new CodexXerj({ check: async () => ({ status: 'absent' }) }),
       new CodexSerena({ check: async () => ({ status: 'absent' }) }),
     );
     const session = {
@@ -287,10 +282,6 @@ it
                   expect(selected.skillsConfig).toContainEqual({
                     path: join(installed, 'skills/coding/SKILL.md'),
                     enabled: true,
-                  });
-                  expect(selected.skillsConfig).toContainEqual({
-                    path: join(installed, 'skills/xerj/SKILL.md'),
-                    enabled: false,
                   });
                   expect(selected.skillsConfig).toContainEqual({
                     path: join(installed, 'skills/serena/SKILL.md'),
@@ -389,10 +380,6 @@ it
       expect(sentSkills).toContainEqual({
         path: join(installed, 'skills/coding/SKILL.md'),
         enabled: true,
-      });
-      expect(sentSkills).toContainEqual({
-        path: join(installed, 'skills/xerj/SKILL.md'),
-        enabled: false,
       });
       expect(sentSkills).toContainEqual({
         path: join(installed, 'skills/serena/SKILL.md'),

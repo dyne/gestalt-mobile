@@ -64,7 +64,7 @@ export function registerListAvailableSkills(
         ...(project?.capabilities ? { capabilities: project.capabilities } : {}),
         errors: discovered.errors.map(({ message }) => ({ message })),
         skills: skills
-          .filter((skill) => !isAlwaysAdvertisedSkill(skill) && skill.name !== 'gestalt:xerj')
+          .filter((skill) => !isAlwaysAdvertisedSkill(skill))
           .sort((left, right) => left.path.localeCompare(right.path))
           .map((skill) => ({
             name: skill.name,
