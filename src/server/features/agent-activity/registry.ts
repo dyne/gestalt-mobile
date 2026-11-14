@@ -81,10 +81,12 @@ export class AgentActivityRegistry {
     );
     if (next !== snapshot) {
       this.#snapshots.set(fact.sessionId, next);
-      this.publish(next, fact.occurredAt);
     }
     this.#generation.set(fact.sessionId, (this.#generation.get(fact.sessionId) ?? 0) + 1);
     this.#armStaleness(fact.sessionId);
+    // Publish only after the observation owns its timer and generation. A
+    // synchronous lifecycle observer can then suspend or dispose both.
+    if (next !== snapshot) this.publish(next, fact.occurredAt);
     return next;
   }
   reconciling(sessionId: string, occurredAt: string): AgentActivitySnapshot {
@@ -107,8 +109,7 @@ export class AgentActivityRegistry {
     return next;
   }
   suspend(sessionId: string): void {
-    this.#timers.get(sessionId)?.();
-    this.#timers.delete(sessionId);
+    this.#cancelTimer(sessionId);
     this.#generation.set(sessionId, (this.#generation.get(sessionId) ?? 0) + 1);
     // The RPC cannot be cancelled, but a restart must not coalesce onto its
     // obsolete promise. Generation guards suppress its eventual result.
@@ -239,29 +240,54 @@ export class AgentActivityRegistry {
   dispose(sessionId: string): void {
     this.#disposed.add(sessionId);
     this.#snapshots.delete(sessionId);
-    this.#timers.get(sessionId)?.();
-    this.#timers.delete(sessionId);
+    this.#cancelTimer(sessionId);
     this.#generation.delete(sessionId);
     this.#inFlight.delete(sessionId);
   }
 
   #armStaleness(sessionId: string): void {
-    if (!this.options.schedule || !this.options.reconcile) return;
-    this.#timers.get(sessionId)?.();
-    this.#timers.set(
+    if (this.#disposed.has(sessionId) || !this.options.schedule || !this.options.reconcile) return;
+    this.#schedule(
       sessionId,
-      this.options.schedule(
-        () => void this.refresh(sessionId),
-        this.options.staleAfterMs ?? 30_000,
-      ),
+      () => void this.refresh(sessionId),
+      this.options.staleAfterMs ?? 30_000,
     );
+  }
+
+  #cancelTimer(sessionId: string): void {
+    const cancel = this.#timers.get(sessionId);
+    this.#timers.delete(sessionId);
+    cancel?.();
+  }
+
+  #schedule(sessionId: string, callback: () => void, delayMs: number, onCancel?: () => void): void {
+    this.#cancelTimer(sessionId);
+    let active = true;
+    const cancelScheduled = this.options.schedule!(() => {
+      // Cancellation cannot retract an already-dispatched callback. Slot
+      // identity prevents it from consuming a newer observation's timer.
+      if (!active || this.#timers.get(sessionId) !== cancel) return;
+      active = false;
+      this.#timers.delete(sessionId);
+      callback();
+    }, delayMs);
+    const cancel = () => {
+      if (!active) return;
+      active = false;
+      cancelScheduled();
+      onCancel?.();
+    };
+    this.#timers.set(sessionId, cancel);
   }
 
   async #attempt(sessionId: string, generation: number, attempt: number): Promise<void> {
     if (this.#generation.get(sessionId) !== generation) return;
-    this.#timers.delete(sessionId);
+    // A foreground refresh must cancel the observed staleness timeout, not
+    // merely forget its handle. Fired retry callbacks already consumed theirs.
+    this.#cancelTimer(sessionId);
     const now = this.options.now?.() ?? new Date().toISOString();
     this.reconciling(sessionId, now);
+    if (this.#generation.get(sessionId) !== generation) return;
     try {
       const observed = await this.options.reconcile?.(sessionId);
       if (observed !== true) throw new Error('AGENT_ACTIVITY_RECONCILE_NO_EVIDENCE');
@@ -300,15 +326,13 @@ export class AgentActivityRegistry {
       // Otherwise a caller treats the intermediate reconciling projection as
       // failure and can launch a new refresh that supersedes this retry.
       await new Promise<void>((resolve, reject) => {
-        const cancel = this.options.schedule!(
+        this.#schedule(
+          sessionId,
           () => void this.#attempt(sessionId, generation, attempt + 1).then(resolve, reject),
           delays[attempt - 1]!,
-        );
-        this.#timers.set(sessionId, () => {
-          cancel();
           // Suspension, disposal, or newer live evidence retires this read.
-          resolve();
-        });
+          resolve,
+        );
       });
     }
   }
