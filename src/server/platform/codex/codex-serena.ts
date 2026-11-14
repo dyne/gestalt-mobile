@@ -6,17 +6,16 @@
 
 import { readFile } from 'node:fs/promises';
 import { sessionScratchEnvironmentKeys } from '../scratch/child-environment.js';
-import {
-  beforeDeadline,
-  type CodexRetrievalState,
-  type CodexXerj,
-} from '../retrieval/codex-xerj.js';
+import { beforeDeadline } from './capability-deadline.js';
+import type {
+  CodexCapabilityInput as Input,
+  CodexCapabilityState,
+} from './capability-contracts.js';
 import { ManagedSerena, serenaTools } from './managed-serena.js';
 import { ReadinessEvidence } from '../retrieval/readiness-evidence.js';
 import { withCapabilityInstructions } from './instruction-blocks.js';
 
 export const serenaServerName = 'gestalt-serena';
-type Input = Parameters<CodexXerj['prepare']>[0];
 type Rpc = Input['rpc'];
 
 // config/read includes unset defaults as null. Thread overrides cannot encode
@@ -36,7 +35,7 @@ function omitUnsetConfig(value: unknown): unknown {
 export class CodexSerena {
   constructor(private readonly installation: Pick<ManagedSerena, 'check'> = new ManagedSerena()) {}
 
-  async prepare(input: Input): Promise<CodexRetrievalState> {
+  async prepare(input: Input): Promise<CodexCapabilityState> {
     const evidence = new ReadinessEvidence();
     const skill = input.skills.find((entry) => entry.name === 'gestalt:serena');
     let native: Record<string, unknown> = {};
@@ -71,7 +70,7 @@ export class CodexSerena {
         : typeof native.developer_instructions === 'string'
           ? native.developer_instructions
           : '';
-    const state: CodexRetrievalState = {
+    const state: CodexCapabilityState = {
       evidence,
       get readiness() {
         return evidence.snapshot();
@@ -188,7 +187,7 @@ export class CodexSerena {
     return state;
   }
 
-  async verify(rpc: Rpc, threadId: string, state: CodexRetrievalState): Promise<boolean> {
+  async verify(rpc: Rpc, threadId: string, state: CodexCapabilityState): Promise<boolean> {
     if (!state.ready) return false;
     try {
       while (Date.now() < state.deadline) {

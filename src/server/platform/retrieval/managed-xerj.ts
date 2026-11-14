@@ -182,21 +182,10 @@ export class ManagedXerj implements RetrievalCapabilityPort {
   }
 }
 
-export function xerjDeadline(environment: NodeJS.ProcessEnv = process.env): number {
-  const configured = Number(environment.XERJ_READY_TIMEOUT_MS);
-  return (
-    Date.now() +
-    (Number.isInteger(configured) &&
-    configured >= minimumXerjTimeoutMs &&
-    configured <= maximumXerjTimeoutMs
-      ? configured
-      : defaultXerjTimeoutMs)
-  );
-}
+export { capabilityDeadline as xerjDeadline } from '../codex/capability-deadline.js';
 
 const minimumXerjTimeoutMs = 100;
 const maximumXerjTimeoutMs = 60_000;
-const defaultXerjTimeoutMs = 5_000;
 
 export function xerjStartupTimeout(environment: NodeJS.ProcessEnv = process.env): number {
   const configured = Number(environment.XERJ_STARTUP_TIMEOUT_MS);

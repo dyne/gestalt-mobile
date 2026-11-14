@@ -13,7 +13,8 @@ import type { RelaySessionSnapshot } from '../../features/sessions/model/relay-s
 import type { AvailableSkill } from '../../features/skills/model/skill-profile.js';
 import { managedPlaywrightRequestSchema } from '../../../shared/contracts/managed-playwright.js';
 import { profileCapabilitiesSchema } from '../../../shared/contracts/profile-capabilities.js';
-import { beforeDeadline, type CodexRetrievalState } from '../retrieval/codex-xerj.js';
+import { beforeDeadline } from './capability-deadline.js';
+import type { CodexCapabilityState } from './capability-contracts.js';
 import {
   ManagedPlaywright,
   playwrightServerName,
@@ -49,7 +50,7 @@ type Binding = {
 };
 type Prepared = {
   binding: Binding;
-  base: CodexRetrievalState;
+  base: CodexCapabilityState;
   enabled: boolean;
   deadline: number;
   current(): boolean;
@@ -59,7 +60,7 @@ type Prepared = {
 /** One browser owner per relay root. This is a capability adapter, not a global MCP registry. */
 export class CodexPlaywright {
   private readonly bindings = new Map<string, Binding>();
-  private readonly prepared = new WeakMap<CodexRetrievalState, Prepared>();
+  private readonly prepared = new WeakMap<CodexCapabilityState, Prepared>();
   private readonly readinessWork = new Map<string, Set<Promise<PlaywrightReadiness>>>();
   constructor(
     private readonly installation: Pick<ManagedPlaywright, 'check' | 'ready'>,
@@ -260,7 +261,7 @@ export class CodexPlaywright {
 
   /** Called only at thread start/resume. Native app-server owns the managed stdio child. */
   async prepare(
-    base: CodexRetrievalState,
+    base: CodexCapabilityState,
     authority: PlaywrightAuthority,
     input: {
       rpc: Rpc;
@@ -268,7 +269,7 @@ export class CodexPlaywright {
       deadline: number;
       current?: () => PlaywrightAuthority;
     },
-  ): Promise<CodexRetrievalState> {
+  ): Promise<CodexCapabilityState> {
     const binding = await this.binding(authority);
     const current = () => {
       const now = input.current?.() ?? authority;
@@ -411,7 +412,7 @@ export class CodexPlaywright {
       required: false,
     };
     let available = enabled;
-    const state: CodexRetrievalState = {
+    const state: CodexCapabilityState = {
       get startup() {
         return base.startup;
       },
@@ -502,7 +503,7 @@ export class CodexPlaywright {
     return state;
   }
 
-  async verify(rpc: Rpc, threadId: string, state: CodexRetrievalState): Promise<boolean> {
+  async verify(rpc: Rpc, threadId: string, state: CodexCapabilityState): Promise<boolean> {
     const prepared = this.prepared.get(state);
     if (!prepared?.enabled) return true;
     try {
@@ -550,7 +551,7 @@ export class CodexPlaywright {
   /** The runtime binds even an unavailable fresh capability to its actual root.
    * Otherwise a failed fresh declaration looks like a fork at the first turn
    * and requests a resume before Codex has created a durable rollout. */
-  bound(state: CodexRetrievalState, threadId: string): void {
+  bound(state: CodexCapabilityState, threadId: string): void {
     const prepared = this.prepared.get(state);
     if (prepared) prepared.binding.root = threadId;
   }
@@ -575,7 +576,7 @@ export class CodexPlaywright {
     binding.connected = false;
     binding.reason = 'connection-or-tools-unavailable';
   }
-  base(state: CodexRetrievalState): CodexRetrievalState {
+  base(state: CodexCapabilityState): CodexCapabilityState {
     return this.prepared.get(state)?.base ?? state;
   }
 }

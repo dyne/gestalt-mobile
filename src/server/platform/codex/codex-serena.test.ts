@@ -17,6 +17,8 @@ import {
 import { CodexSerena, serenaServerName } from './codex-serena.js';
 import { ManagedSerena, serenaTools } from './managed-serena.js';
 import { CodexCapabilities } from './codex-capabilities.js';
+import { CodexPlaywright, type PlaywrightAuthority } from './codex-playwright.js';
+import { playwrightServerName, playwrightTools } from './managed-playwright.js';
 import { CodexXerj, xerjServerName, xerjTools } from '../retrieval/codex-xerj.js';
 import {
   applySkillSelectionSnapshot,
@@ -446,6 +448,115 @@ describe('workspace-bound Serena capability', () => {
       { ready: false },
     ]);
   });
+  it.each([
+    { serena: true, browser: true },
+    { serena: true, browser: false },
+    { serena: false, browser: true },
+    { serena: false, browser: false },
+  ])(
+    'composes retained capability availability and native approvals independently: %j',
+    async (available) => {
+      const f = await fixture();
+      if (!available.serena) await rm(f.descriptorPath);
+      const browserSkill = {
+        name: 'gestalt:playwright',
+        path: join(f.root, 'browser.md'),
+        enabled: true,
+      };
+      await writeFile(browserSkill.path, '# Browser\nUse verified browser tools.');
+      const approvals = {
+        default_tools_approval_mode: 'prompt',
+        tools: { inspect: { approval_mode: 'prompt' } },
+      };
+      Object.assign(f.native.mcp_servers as object, {
+        [serenaServerName]: approvals,
+        [playwrightServerName]: approvals,
+      });
+      const rpc = {
+        request: async (method: string) => {
+          const response = await f.rpc.request(method);
+          if (method === 'config/read') return response;
+          return {
+            data: [
+              ...(response.data ?? []),
+              {
+                name: playwrightServerName,
+                runtimeStatus: 'connected',
+                tools: Object.fromEntries(playwrightTools.map((tool) => [tool, {}])),
+              },
+            ],
+          };
+        },
+      };
+      const skills = [...f.input.skills, browserSkill];
+      const pair = new CodexCapabilities(
+        new CodexXerj({ check: async () => ({ status: 'absent' }) }),
+        f.adapter,
+      );
+      const base = await pair.prepare({
+        ...f.input,
+        rpc,
+        skills,
+        skillsConfig: compileSkillOverride({ discovered: skills }).skillsConfig,
+      });
+      const browser = new CodexPlaywright({
+        check: async () =>
+          available.browser
+            ? { status: 'installed', manager: f.manager, version: '0.0.1' }
+            : { status: 'absent' },
+        ready: async () => ({
+          ready: true,
+          package: 'ready',
+          chrome: 'ready',
+          node: 'ready',
+          chromeVersion: null,
+        }),
+      });
+      const authority: PlaywrightAuthority = {
+        session: {
+          id: 'retained-capabilities',
+          threadId: 'root',
+          workspacePath: f.root,
+          provider: 'codex',
+          effectiveSkillSelection: { capabilities: { playwright: { enabled: true } } },
+        } as RelaySessionSnapshot,
+        planIdentity: 'plan',
+        activePlanId: 'milestone',
+        declared: true,
+        fenced: false,
+      };
+      const state = await browser.prepare(base, authority, {
+        rpc,
+        skills,
+        deadline: f.input.deadline,
+      });
+      expect(await pair.verify(rpc, 'root', base)).toBe(true);
+      expect(await browser.verify(rpc, 'root', state)).toBe(true);
+      state.fallback();
+      expect(state.ready).toBe(available.serena || available.browser);
+      expect(state.capabilities?.map(({ skillName, ready }) => ({ skillName, ready }))).toEqual([
+        { skillName: 'gestalt:xerj', ready: false },
+        { skillName: 'gestalt:serena', ready: available.serena },
+        { skillName: 'gestalt:playwright', ready: available.browser },
+      ]);
+      expect(state.config).toMatchObject({
+        ...f.input.config,
+        mcp_servers: {
+          [serenaServerName]: { ...approvals, enabled: available.serena },
+          [playwrightServerName]: {
+            ...(available.browser ? approvals : {}),
+            enabled: available.browser,
+          },
+        },
+      });
+      expect(state.config.developer_instructions).toContain('Keep guidance.');
+      expect(state.turnInstructions?.includes('Verified')).toBe(available.browser);
+      expect(f.native.mcp_servers).toMatchObject({
+        [serenaServerName]: approvals,
+        [playwrightServerName]: approvals,
+      });
+    },
+  );
   it('falls back when native catalog is stale or the optional LSP connection fails', async () => {
     const f = await fixture();
     const state = await f.adapter.prepare(f.input);
