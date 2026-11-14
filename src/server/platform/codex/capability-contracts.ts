@@ -34,7 +34,6 @@ export type CodexCapabilityState = {
   startup?: StartupGuidance;
   /** Fresh replacement boundary only; no capability, provider or scratch preparation. */
   prepareFreshStartup?(): Promise<void>;
-  backendPreparation?: { status: 'starting' | 'unavailable'; reason?: string };
   /** Verified optional capability guidance inserted only when starting a root turn. */
   turnInstructions?: string;
   evidence?: ReadinessEvidence;

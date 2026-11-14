@@ -164,9 +164,7 @@ describe('MessageList', () => {
     'omits startup-only activity blocks with active turn %j',
     async (activeTurnId) => {
       const activities = [
-        ...(
-          ['context-mode', 'gestalt-context-mode', 'gestalt-serena', 'gestalt-xerj'] as const
-        ).map((serverName) =>
+        ...(['context-mode', 'gestalt-context-mode', 'gestalt-serena'] as const).map((serverName) =>
           mcpStartupActivity({
             schemaVersion: 1,
             runtimeId: 'runtime',

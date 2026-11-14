@@ -223,20 +223,10 @@ relevant skills when challenges arise without revising the plan. Skill use does
 not expand scope or authority, and plan declarations do not enable unavailable
 conditional tools. Agents owns validation and the execution-time loading rules.
 
-`gestalt:xerj` is conditional retrieval infrastructure. For Codex, Mobile checks
-the manager's shared readiness contract and the owning thread's native MCP
-connection before accepting its first turn. Ready retrieval is mandatory even
-when a saved profile excluded it; unavailable retrieval is excluded even when
-a legacy selection enabled it. Fresh runtimes, resumes and process recovery
-repeat the check. Native child agents inherit their parent's configuration and
-open their own MCP connections. A connection failure appears in the existing
-chat activity; use `rg` and current source reads until the next runtime check.
-Instructions already delivered during a turn cannot be retroactively removed.
-
 `gestalt:serena` provides automatic semantic navigation and editing for Codex sessions.
 It is hidden from skill profiles and loaded when the session readiness check succeeds.
 It is enabled only when native hooks are enabled, the manager installation is valid, and the owning
-thread's MCP connection exposes the expected tools. XERJ and Serena have
+thread's MCP connection exposes the expected tools. Serena and managed browser tools have
 independent availability and fallback. A connected catalog proves the connection;
 language readiness remains unverified until a model-authorized
 `get_symbols_overview` call succeeds on a current source file. On failure, use
@@ -274,30 +264,20 @@ example Python dependencies or a TypeScript project's dependencies). Missing
 services or restricted session network/bootstrap access produce a fallback;
 permissions are never broadened to repair them. Kimi behavior is unchanged.
 
-Managed launch provides `GESTALT_MANAGER_BIN`. Direct Mobile launch discovers
-`gestalt` on `PATH`, or accepts an absolute executable path through that same
-environment variable. Without a manager or installed xerj, chat starts normally.
-`XERJ_READY_TIMEOUT_MS` bounds each chat's wait for optional backend preparation
-with a five-second default. One shared background startup attempt continues after
-that wait, bounded separately by `XERJ_STARTUP_TIMEOUT_MS` (30 seconds by default).
-Both settings accept 100–60000 milliseconds. Concurrent sessions share the same
-in-flight attempt; an expired chat wait does not cancel it or report a failure.
-Chat continues with native tools and checks retrieval again at a supported runtime
-resume boundary; background completion never changes tools in an active turn.
-Local readiness failures retain only allowlisted manager reason codes and are
-identified separately from Codex MCP startup failures. XERJ's native MCP handshake gets a separate five-second allowance;
-connection verification gets another bounded five seconds after thread startup.
-Slow preparation cannot consume the handshake budget. Startup never installs xerj,
-downloads models or indexes repositories. Install explicitly with
-`gestalt xerj install`; inspect readiness with `gestalt xerj status`.
+Managed launch provides `GESTALT_MANAGER_BIN`; direct launch discovers the manager
+on `PATH` or accepts an absolute executable path in that variable. Optional
+capabilities fall back to native tools when unavailable. The shared preparation
+budget defaults to five seconds; `GESTALT_CAPABILITY_TIMEOUT_MS` accepts integer
+values from 100 through 60000 milliseconds. Expired operations report
+`CAPABILITY_READINESS_TIMEOUT`. Serena connection verification receives a
+separate bounded allowance after preparation. Startup does not install tools,
+index repositories or widen session permissions.
 
-The manager owns one authenticated loopback backend shared by CLI and Mobile.
-Closing either client closes only its native MCP proxies. Use
-`gestalt xerj stop` for explicit managed shutdown; a later eligible runtime can
-start the installed backend again. An empty index remains ready: index only
-repositories you explicitly select, verify repository identity and freshness,
-and confirm retrieval results against current source. See the manager's
-[xerj setup and lifetime documentation](https://github.com/dyne/gestalt/blob/main/start/install.md).
+Xerj integration has been retired. Old manual `--xerj` invocations fail with
+recovery guidance before startup. Run `gestalt update` to migrate positively
+identified managed configuration before reopening an older installation.
+User-defined MCP services, installed binaries, indexes and session data are
+preserved. See [retirement compatibility](docs/xerj.md).
 
 ## Kimi provider
 
@@ -333,14 +313,6 @@ cannot disable those native discoveries.
 
 Kimi sessions stay on core chat: org-plan/autopilot tooling (the Plan tab,
 autopilot controls) remains Codex-only and is hidden for Kimi sessions.
-
-Xerj retrieval is unavailable through Mobile's supported `kimi web` path.
-Although the terminal CLI accepts ad-hoc MCP configuration, web workers load
-only their global MCP file and expose no native per-session connection-readiness
-gate. Mobile does not materialize the conditional skill or add a tool bridge.
-Profile runtimes and authentication isolation remain unchanged. This limitation
-is grounded in the provider's [web command](https://github.com/MoonshotAI/kimi-cli/blob/main/src/kimi_cli/cli/web.py)
-and [worker MCP loading](https://github.com/MoonshotAI/kimi-cli/blob/main/src/kimi_cli/web/runner/worker.py).
 
 Kimi threads have no CLI resume command, so recent Kimi threads offer **Open**
 but no **Copy**, and the session card carries a **Kimi** badge instead.
@@ -773,8 +745,3 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 Gestalt Mobile is distributed under the GNU Affero General Public License
 version 3 or, at your option, any later version. See [LICENSE](LICENSE).
-
-Source discovery defaults to `--xerj auto` (index and watch). Use `--xerj manual`
-for retrieval only or `--xerj off` to disable the integration.
-See [root-wide XERJ discovery](docs/xerj.md) for background indexing, exclusions,
-status, recovery and the retrieval/write-permission boundary.

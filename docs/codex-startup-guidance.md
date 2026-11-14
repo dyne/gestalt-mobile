@@ -35,21 +35,28 @@ original stable layer. The adapter's `startup` result contains only a fixed
 status/reason, selected package version and, on success, block version/hash.
 It contains no instruction text or filesystem diagnostics. Excluded Gestalt
 skills or `skills.include_instructions=false` omit new stable delivery. Optional
-XERJ and Serena failures do not suppress an otherwise available stable contract.
+Serena and Playwright failures do not suppress an otherwise available stable contract.
 
 If native configuration readback fails and no explicit input developer scalar is
 known, Mobile omits the scalar override entirely. It cannot safely append even
 unavailability guidance to an unknown native value. Optional connections remain
 disabled; no foundation/RPC replacement channel is used to mask the failed read.
 
-XERJ, Serena and Playwright own separate complete capability blocks. Preparation
+Serena and Playwright own separate complete capability blocks. Preparation
 and verification update only the relevant block, retaining user text and other
 capabilities. Connection availability does not establish repository coverage or
 semantic readiness. Ephemeral catalog probes do not install the stable bootstrap
 or acquire durable Org role duties.
 
+Complete legacy Xerj capability/unavailable blocks copied into the mutable
+configuration override are retired in memory. Only flat, fully marked owned
+blocks are removed; user prose, other capabilities and ambiguous/unclosed
+markers remain unchanged. Native configuration and durable thread history are
+not rewritten. Positively identified old managed MCP entries require an explicit
+manager update before startup; custom or unproven entries retain native ownership.
+
 Existing threads retain their native durable instructions, including legacy
-absence. Package updates and ordinary resume are not an instruction migration.
+absence. Package updates and ordinary resume do not rewrite the stable instruction layer.
 When the existing missing-rollout policy authorizes a replacement, the new
 thread prepares its stable instructions from the selected package using the
 native configuration snapshot already read for that owned runtime. Only the

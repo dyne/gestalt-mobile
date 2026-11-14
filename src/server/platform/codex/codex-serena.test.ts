@@ -19,7 +19,6 @@ import { ManagedSerena, serenaTools } from './managed-serena.js';
 import { CodexCapabilities } from './codex-capabilities.js';
 import { CodexPlaywright, type PlaywrightAuthority } from './codex-playwright.js';
 import { playwrightServerName, playwrightTools } from './managed-playwright.js';
-import { CodexXerj, xerjServerName, xerjTools } from '../retrieval/codex-xerj.js';
 import {
   applySkillSelectionSnapshot,
   compileSkillOverride,
@@ -53,12 +52,7 @@ async function fixture() {
   await writeFile(descriptorPath, JSON.stringify(descriptor));
   const skillPath = join(root, 'SKILL.md');
   await writeFile(skillPath, '# Serena\nUse semantic tools with current-source verification.');
-  const xerjPath = join(root, 'XERJ.md');
-  await writeFile(xerjPath, '# XERJ\nRead current source.');
-  const skills = [
-    { name: 'gestalt:serena', path: skillPath, enabled: true },
-    { name: 'gestalt:xerj', path: xerjPath, enabled: false },
-  ];
+  const skills = [{ name: 'gestalt:serena', path: skillPath, enabled: true }];
   const native: Record<string, unknown> = {
     features: { hooks: true },
     developer_instructions: 'Keep guidance.',
@@ -77,11 +71,6 @@ async function fixture() {
                 name: serenaServerName,
                 runtimeStatus: 'connected',
                 tools: Object.fromEntries(serenaTools.map((tool) => [tool, {}])),
-              },
-              {
-                name: xerjServerName,
-                runtimeStatus: 'connected',
-                tools: Object.fromEntries(xerjTools.map((tool) => [tool, {}])),
               },
             ],
           },
@@ -151,10 +140,7 @@ describe('workspace-bound Serena capability', () => {
             ? skills.map((skill) => ({ ...skill, enabled: false }))
             : undefined,
       }).skillsConfig;
-      const pair = new CodexCapabilities(
-        new CodexXerj({ check: async () => ({ status: 'absent' }) }),
-        f.adapter,
-      );
+      const pair = new CodexCapabilities(f.adapter);
       const state = await pair.prepare({ ...f.input, skills, skillsConfig });
       expect(state.ready).toBe(false);
       // Codex validates transport even for disabled servers. The override also
@@ -258,7 +244,7 @@ describe('workspace-bound Serena capability', () => {
         .default_tools_approval_mode,
     ).toBe(mode);
   });
-  it('preserves explicit operator per-tool approvals without copying XERJ autoapproval', async () => {
+  it('preserves explicit operator per-tool approvals without overriding native approvals', async () => {
     const f = await fixture();
     const approvals = {
       default_tools_approval_mode: 'approve',
@@ -348,106 +334,6 @@ describe('workspace-bound Serena capability', () => {
         ?.enabled,
     ).toBe(true);
   });
-  it.each(['xerj', 'serena'] as const)(
-    'retains the other connection after %s fails at verification',
-    async (failure) => {
-      const f = await fixture();
-      const xerj = new CodexXerj({
-        check: async () => ({
-          status: 'ready',
-          manager: f.manager,
-          endpoint: 'http://127.0.0.1:19200',
-        }),
-      });
-      const pair = new CodexCapabilities(xerj, f.adapter);
-      const state = await pair.prepare(f.input);
-      const badRpc = {
-        request: async () => ({
-          data: [
-            {
-              name: xerjServerName,
-              runtimeStatus: failure === 'xerj' ? 'failed' : 'connected',
-              tools: Object.fromEntries(xerjTools.map((tool) => [tool, {}])),
-            },
-            {
-              name: serenaServerName,
-              runtimeStatus: failure === 'serena' ? 'failed' : 'connected',
-              tools: Object.fromEntries(serenaTools.map((tool) => [tool, {}])),
-            },
-          ],
-        }),
-      };
-      expect(await pair.verify(badRpc, 'thread', state)).toBe(false);
-      state.fallback();
-      expect(state.ready).toBe(true);
-      expect(state.capabilities?.find((cap) => cap.skillName === `gestalt:${failure}`)?.ready).toBe(
-        false,
-      );
-      expect(state.capabilities?.find((cap) => cap.skillName !== `gestalt:${failure}`)?.ready).toBe(
-        true,
-      );
-      expect(state.config).toMatchObject({ approval_policy: 'never', sandbox_mode: 'read-only' });
-      expect(state.config.developer_instructions).toContain('Keep guidance.');
-    },
-  );
-  it('retains a healthy Serena connection when slow XERJ preparation exhausts its deadline', async () => {
-    const f = await fixture();
-    const deadline = Date.now() + 75;
-    const xerj = new CodexXerj({
-      check: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        return { status: 'unavailable', reason: 'readiness-timeout' };
-      },
-    });
-    const prepareXerj = vi.spyOn(xerj, 'prepare');
-    const verifyXerj = vi.spyOn(xerj, 'verify');
-    const pair = new CodexCapabilities(xerj, f.adapter);
-    const state = await pair.prepare({ ...f.input, deadline });
-    expect((await prepareXerj.mock.results[0].value).deadline).toBe(deadline);
-    expect(Date.now()).toBeGreaterThan(deadline);
-    expect(state.deadline).toBeGreaterThan(Date.now());
-    expect(state.deadline).toBeLessThanOrEqual(Date.now() + 75);
-    expect(await pair.verify(f.rpc, 'thread', state)).toBe(true);
-    expect(state.capabilities).toMatchObject([{ ready: false }, { ready: true }]);
-    expect(verifyXerj).not.toHaveBeenCalled();
-    expect(state.skillsConfig.find((skill) => skill.path === f.skillPath)?.enabled).toBe(true);
-    expect(state.config).toMatchObject({ approval_policy: 'never', sandbox_mode: 'read-only' });
-    const statusRequests = f.rpc.request.mock.calls.filter(
-      ([method]) => method === 'mcpServerStatus/list',
-    ).length;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(await pair.verify(f.rpc, 'thread', state)).toBe(false);
-    expect(
-      f.rpc.request.mock.calls.filter(([method]) => method === 'mcpServerStatus/list'),
-    ).toHaveLength(statusRequests);
-  });
-
-  it('preserves Serena when XERJ is absent and XERJ when Serena is absent', async () => {
-    const f = await fixture();
-    const noXerj = new CodexCapabilities(
-      new CodexXerj({ check: async () => ({ status: 'absent' }) }),
-      f.adapter,
-    );
-    expect((await noXerj.prepare(f.input)).capabilities).toMatchObject([
-      { ready: false },
-      { ready: true },
-    ]);
-    await rm(f.descriptorPath);
-    const noSerena = new CodexCapabilities(
-      new CodexXerj({
-        check: async () => ({
-          status: 'ready',
-          manager: f.manager,
-          endpoint: 'http://127.0.0.1:19200',
-        }),
-      }),
-      f.adapter,
-    );
-    expect((await noSerena.prepare(f.input)).capabilities).toMatchObject([
-      { ready: true },
-      { ready: false },
-    ]);
-  });
   it.each([
     { serena: true, browser: true },
     { serena: true, browser: false },
@@ -489,10 +375,7 @@ describe('workspace-bound Serena capability', () => {
         },
       };
       const skills = [...f.input.skills, browserSkill];
-      const pair = new CodexCapabilities(
-        new CodexXerj({ check: async () => ({ status: 'absent' }) }),
-        f.adapter,
-      );
+      const pair = new CodexCapabilities(f.adapter);
       const base = await pair.prepare({
         ...f.input,
         rpc,
@@ -535,10 +418,15 @@ describe('workspace-bound Serena capability', () => {
       state.fallback();
       expect(state.ready).toBe(available.serena || available.browser);
       expect(state.capabilities?.map(({ skillName, ready }) => ({ skillName, ready }))).toEqual([
-        { skillName: 'gestalt:xerj', ready: false },
         { skillName: 'gestalt:serena', ready: available.serena },
         { skillName: 'gestalt:playwright', ready: available.browser },
       ]);
+      expect(Object.keys(state.config.mcp_servers as object).sort()).toEqual([
+        'alias',
+        'gestalt-playwright',
+        'gestalt-serena',
+      ]);
+      expect(JSON.stringify(state.config)).not.toMatch(/xerj/i);
       expect(state.config).toMatchObject({
         ...f.input.config,
         mcp_servers: {
@@ -581,15 +469,25 @@ describe('workspace-bound Serena capability', () => {
     expect(state.ready).toBe(false);
     expect(JSON.stringify(state)).not.toContain('private language failure');
   });
+
+  it('keeps unrelated MCP services unchanged even when named Xerj', async () => {
+    const f = await fixture();
+    const user = { command: '/user/custom-server', args: ['search'], required: true };
+    (f.native.mcp_servers as Record<string, unknown>).Xerj = user;
+    const before = JSON.stringify(f.native);
+    const pair = new CodexCapabilities(f.adapter);
+    const state = await pair.prepare(f.input);
+    expect(state.config.mcp_servers).not.toHaveProperty('Xerj');
+    expect(JSON.stringify(f.native)).toBe(before);
+    expect((f.native.mcp_servers as Record<string, unknown>).Xerj).toBe(user);
+    expect(state.config).not.toHaveProperty('backendPreparation');
+  });
 });
 
 describe('Serena runtime boundaries', () => {
   it('recomputes start, restore and recovery without overriding child authority, and closes only owned writers', async () => {
     const f = await fixture();
-    const pair = new CodexCapabilities(
-      new CodexXerj({ check: async () => ({ status: 'absent' }) }),
-      f.adapter,
-    );
+    const pair = new CodexCapabilities(f.adapter);
     const requests: Array<{ method: string; params: unknown }> = [];
     const close = vi.fn();
     let starts = 0;

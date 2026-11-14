@@ -15,7 +15,6 @@ import { expect, it, onTestFinished, vi } from 'vitest';
 import { launchCodexAppServer, type CodexProcess } from './codex-process-launcher.js';
 import { CodexCapabilities } from './codex-capabilities.js';
 import { CodexSerena } from './codex-serena.js';
-import { CodexXerj } from '../retrieval/codex-xerj.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 import { SessionModelConfig } from './session-model-config.js';
 import {
@@ -254,7 +253,7 @@ async function fixture(options: { legacy?: boolean; role?: 'default' | 'named' |
   const rolePath = join(home, 'agents/org-plan-executor.toml');
   const roleBytes = `name='org-plan-executor'\nmodel='old-fixture'\nmodel_reasoning_effort='high'\ndeveloper_instructions=${JSON.stringify('ROLE_ONLY_DUTIES\n' + (options.role === 'owned' ? syntheticBlock : ''))}\n`;
   await writeFile(rolePath, roleBytes);
-  const config = `model='fixture'\nmodel_provider='fixture'\napproval_policy='never'\ndeveloper_instructions='ROOT_ONLY_DUTIES'\n[model_providers.fixture]\nname='fixture'\nbase_url='http://127.0.0.1:${port}/v1'\nwire_api='responses'\nrequires_openai_auth=false\n[features]\nhooks=true\nmulti_agent=true\ntool_search=false\n[skills]\n[[skills.config]]\nname='gestalt:xerj'\nenabled=false\n[[skills.config]]\nname='gestalt:serena'\nenabled=false\n[agents.org-plan-executor]\ndescription='Synthetic installed executor role'\nconfig_file=${JSON.stringify(rolePath)}\n`;
+  const config = `model='fixture'\nmodel_provider='fixture'\napproval_policy='never'\ndeveloper_instructions='ROOT_ONLY_DUTIES'\n[model_providers.fixture]\nname='fixture'\nbase_url='http://127.0.0.1:${port}/v1'\nwire_api='responses'\nrequires_openai_auth=false\n[features]\nhooks=true\nmulti_agent=true\ntool_search=false\n[skills]\n[[skills.config]]\nname='gestalt:serena'\nenabled=false\n[agents.org-plan-executor]\ndescription='Synthetic installed executor role'\nconfig_file=${JSON.stringify(rolePath)}\n`;
   await writeFile(join(home, 'config.toml'), config);
   const environment = { ...process.env, CODEX_HOME: home };
   for (const args of [
@@ -270,7 +269,6 @@ async function fixture(options: { legacy?: boolean; role?: 'default' | 'named' |
   const sent: Array<{ method: string; params: unknown }> = [];
   const completed = new Set<string>();
   const pair = new CodexCapabilities(
-    new CodexXerj({ check: async () => ({ status: 'absent' }) }),
     new CodexSerena({ check: async () => ({ status: 'absent' }) }),
   );
   const resolver = new SessionModelConfig(home, join(root, 'mobile-state'));

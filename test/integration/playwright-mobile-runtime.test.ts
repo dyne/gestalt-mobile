@@ -35,7 +35,7 @@ import {
   RelaySession,
   type RelaySessionSnapshot,
 } from '../../src/server/features/sessions/model/relay-session.js';
-import type { CodexRetrievalState } from '../../src/server/platform/retrieval/codex-xerj.js';
+import type { CodexCapabilityState } from '../../src/server/platform/codex/capability-contracts.js';
 import { isManagedPlaywrightCall } from '../../src/shared/contracts/managed-playwright.js';
 import { seedWithNativeCli } from './fixtures/playwright-native-cli.js';
 import { prepareOfflineUpdate } from './fixtures/playwright-offline-update.js';
@@ -473,7 +473,7 @@ it.skipIf(process.env.RUN_MOBILE_PLAYWRIGHT !== '1')(
       undefined,
       {
         prepare: async (session, rpc, config, deadline) => {
-          const base: CodexRetrievalState = {
+          const base: CodexCapabilityState = {
             ready: false,
             deadline,
             config,

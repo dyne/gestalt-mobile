@@ -723,14 +723,14 @@ describe('ChatController', () => {
           type: 'activity.updated',
           payload: {
             id: 'startup',
-            label: 'XERJ startup',
+            label: 'Serena startup',
             detail: status,
             mcpStartup: {
               schemaVersion: 1,
               runtimeId: 'runtime',
               attemptId: 'attempt',
               threadId: 'thread',
-              serverName: 'gestalt-xerj',
+              serverName: 'gestalt-serena',
               observedAt: '2026-10-31T12:00:00.000Z',
               status,
               failure: null,
@@ -738,6 +738,19 @@ describe('ChatController', () => {
           },
         },
       });
+    socket.emit({
+      type: 'relay.event',
+      event: {
+        sequence: 5,
+        type: 'activity.updated',
+        payload: {
+          id: 'old-startup',
+          label: 'XERJ startup',
+          detail: 'Old status',
+          mcpStartup: { serverName: 'gestalt-xerj' },
+        },
+      },
+    });
     expect(controller.view.activities).toHaveLength(1);
     expect(controller.view.newEmpty).toBe(true);
     controller.refresh();

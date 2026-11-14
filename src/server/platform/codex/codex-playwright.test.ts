@@ -21,7 +21,6 @@ import { compileSkillOverride } from '../../features/skills/model/skill-profile.
 import { CodexCapabilities } from './codex-capabilities.js';
 import { FilesystemSessionScratch } from '../scratch/filesystem-session-scratch.js';
 import { FilesystemScratchCleanup } from '../scratch/filesystem-scratch-cleanup.js';
-import type { CodexXerj } from '../retrieval/codex-xerj.js';
 import type { CodexSerena } from './codex-serena.js';
 
 const roots: string[] = [];
@@ -496,14 +495,13 @@ describe('managed Mobile Playwright session', () => {
       ...f.base,
       fallback() {
         this.ready = false;
-        this.config = { mcp_servers: { 'gestalt-xerj': { enabled: false } } };
+        this.config = { mcp_servers: { 'gestalt-serena': { enabled: false } } };
       },
     };
-    const idle = { ...f.base, ready: false, capabilities: [] };
-    const retrieval = new CodexCapabilities(
-      { prepare: async () => failed, verify: async () => false } as unknown as CodexXerj,
-      { prepare: async () => idle } as unknown as CodexSerena,
-    );
+    const retrieval = new CodexCapabilities({
+      prepare: async () => failed,
+      verify: async () => false,
+    } as unknown as CodexSerena);
     const base = await retrieval.prepare({
       cwd: f.root,
       deadline: Date.now() + 1000,
@@ -522,7 +520,7 @@ describe('managed Mobile Playwright session', () => {
     expect(await f.adapter.verify(f.rpc, 'root-a', state)).toBe(true);
     state.fallback();
     expect(state.config.mcp_servers).toMatchObject({
-      'gestalt-xerj': { enabled: false },
+      'gestalt-serena': { enabled: false },
       [playwrightServerName]: { enabled: true },
     });
     expect(state.turnInstructions).toContain('Verified');

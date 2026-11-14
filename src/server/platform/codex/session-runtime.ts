@@ -189,7 +189,6 @@ class SessionResource {
   ) {}
 
   retrieval: CodexCapabilityState | undefined;
-  retrievalFailureReported = false;
   readonly capabilityFailuresReported = new Set<string>();
   readonly readinessPublished = new Map<string, string>();
   readinessDeadline = capabilityDeadline();
@@ -2074,14 +2073,6 @@ export class CodexSessionRuntime {
             if (resource.capabilityFailuresReported.has(status.name)) return;
             resource.capabilityFailuresReported.add(status.name);
           }
-          if (
-            !asRecord(notification.params)?.threadId &&
-            status?.name === 'gestalt-xerj' &&
-            ['failed', 'cancelled'].includes(status.status ?? '')
-          ) {
-            if (resource.retrievalFailureReported) return;
-            resource.retrievalFailureReported = true;
-          }
         }
         const childModel = decodeThreadSettingsModel(notification);
         if (
@@ -2168,9 +2159,7 @@ export class CodexSessionRuntime {
                   )?.ready,
                 ),
               }
-            : skill.name === 'gestalt:xerj'
-              ? { ...skill, enabled: resource.retrieval!.ready }
-              : skill,
+            : skill,
         ),
       },
     };
@@ -2190,46 +2179,11 @@ export class CodexSessionRuntime {
     resource.retrieval = state;
     resource.skillsConfig = state.skillsConfig;
     resource.modelConfig = state.config;
-    if (state.backendPreparation) {
-      const status = state.backendPreparation.status === 'starting' ? 'starting' : 'failed';
-      this.publishStartupStatus(
-        resource,
-        resource.mcpStartup.observeReadiness(status, state.backendPreparation.reason),
-      );
-      if (status === 'failed') {
-        resource.retrievalFailureReported = true;
-        this.onNotification?.(
-          session.id,
-          {
-            method: 'mcpServer/statusUpdated',
-            params: { name: 'gestalt-xerj', status },
-          },
-          { kind: 'root' },
-        );
-      }
-    }
     this.reportCapabilityFailures(resource, session);
-    if (state.diagnostic && !state.backendPreparation && !resource.retrievalFailureReported) {
-      resource.retrievalFailureReported = true;
-      this.publishMcpStartup(resource, {
-        method: 'mcpServer/statusUpdated',
-        params: { name: 'gestalt-xerj', status: 'failed' },
-      });
-      this.onNotification?.(
-        session.id,
-        {
-          method: 'mcpServer/statusUpdated',
-          params: { name: 'gestalt-xerj', status: 'failed' },
-        },
-        { kind: 'root' },
-      );
-    }
   }
 
   private reportCapabilityFailures(resource: SessionResource, session: RelaySessionSnapshot): void {
     for (const capability of resource.retrieval?.capabilities ?? []) {
-      if (capability.serverName === 'gestalt-xerj' && resource.retrieval?.backendPreparation)
-        continue;
       if (!capability.diagnostic || resource.capabilityFailuresReported.has(capability.serverName))
         continue;
       resource.capabilityFailuresReported.add(capability.serverName);
@@ -2279,24 +2233,6 @@ export class CodexSessionRuntime {
     }
     state.fallback();
     this.reportCapabilityFailures(resource, session);
-    if (!state.capabilities && !resource.retrievalFailureReported) {
-      resource.retrievalFailureReported = true;
-      this.publishMcpStartup(resource, {
-        method: 'mcpServer/statusUpdated',
-        params: { name: 'gestalt-xerj', status: 'failed' },
-      });
-      this.onNotification?.(
-        session.id,
-        {
-          method: 'mcpServer/statusUpdated',
-          params: {
-            name: 'gestalt-xerj',
-            status: 'failed',
-          },
-        },
-        { kind: 'root' },
-      );
-    }
     resource.skillsConfig = state.skillsConfig;
     resource.modelConfig = state.config;
     // A fresh Codex thread has no durable rollout until its first turn, so it

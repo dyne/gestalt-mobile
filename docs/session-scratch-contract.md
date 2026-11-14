@@ -2,7 +2,7 @@
 
 This contract is shared by Mobile, the Gestalt launcher and Agents. Scratch is
 disposable; source, Git state, history, plans, authentication, installations,
-dependency caches, browser profiles, Serena/XERJ indexes and context-mode databases
+dependency caches, browser profiles, semantic indexes and retained legacy index data and context-mode databases
 retain their existing persistence rules. Version mismatches fail visibly.
 
 ## Location and identity
@@ -92,15 +92,15 @@ published leases are protected until explicit authoritative recovery proves
 release. A shared service keeps its own owner and consumer leases, never the
 first caller's directory; changing callers/workspaces cannot relocate it.
 
-Mobile implements workspace-service allocation for shared Kimi processes and its
-XERJ indexing watcher. Each gets a fresh UUID and a manager consumer identity
-(`kimi-<profile>` or `xerj-indexer`). Its workspace is Mobile's configured canonical
+Mobile implements workspace-service allocation for shared Kimi processes.
+Each gets a fresh UUID and a manager consumer identity (`kimi-<profile>`).
+Its workspace is Mobile's configured canonical
 root, independent of the requesting session's workspace/cwd. The manager releases
 the consumer only after the owned process group is confirmed absent with a
 signal-zero probe. Shutdown allows bounded TERM grace, then KILL and bounded
 confirmation; successful signal delivery alone never authorizes release. Timeout,
 permission failure, unknown group identity and unreaped zombies retain an active
-protected lease. Watcher exit75 alone does not release it. An already-exited
+protected lease. Process exit alone does not release it. An already-exited
 leader permits only bounded read-only absence checks: a cached numeric group ID
 never authorizes a new termination signal after leader exit. Unconfirmed shutdown
 retains an indeterminate protected lease. Kimi commands share this service context because

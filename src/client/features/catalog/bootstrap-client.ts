@@ -5,7 +5,6 @@
  */
 
 import type { RelaySession } from '../sessions/relay-client.js';
-import type { XerjStatus } from '../../../shared/contracts/xerj-status.js';
 import type { ComponentVersion } from '../../../shared/contracts/component-version.js';
 import type { LlmProvider, ProviderAvailability } from '../../../shared/contracts/llm-provider.js';
 
@@ -18,7 +17,6 @@ export type WorkspaceOption = {
 };
 
 export type Bootstrap = {
-  xerj?: XerjStatus;
   sessionDefaults?: import('../../../shared/contracts/session-defaults.js').SessionDefaults | null;
   sessionDefaultsError?: boolean;
   workspaces: WorkspaceOption[];
@@ -69,7 +67,16 @@ export async function loadBootstrap(fetcher: typeof fetch = fetch): Promise<Boot
       await wait(bootstrapRetryDelays[attempt]);
       continue;
     }
-    if (response.ok) return response.json() as Promise<Bootstrap>;
+    if (response.ok) {
+      const bootstrap = (await response.json()) as Bootstrap;
+      return {
+        ...bootstrap,
+        // Older payloads may contain the retired component; do not render it.
+        versions: (bootstrap.versions ?? []).filter(
+          (component) => (component.id as string) !== 'xerj',
+        ),
+      };
+    }
     if (!shouldRetryBootstrap(response) || attempt === bootstrapRetryDelays.length)
       throw new Error('BOOTSTRAP_FAILED');
     await wait(bootstrapRetryDelays[attempt]);

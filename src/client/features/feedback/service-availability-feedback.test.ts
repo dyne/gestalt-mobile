@@ -9,6 +9,14 @@ import { normalizeCodexNotification } from '../../../server/platform/codex/norma
 import { serviceAvailabilityFeedback } from './service-availability-feedback.js';
 
 describe('session service availability feedback', () => {
+  it('ignores old service fields without disrupting retained warnings', () => {
+    expect(
+      serviceAvailabilityFeedback({
+        type: 'activity.updated',
+        payload: { id: 'gestalt-xerj-availability', label: 'Xerj unavailable' },
+      }),
+    ).toBeNull();
+  });
   it.each(['failed', 'cancelled'])(
     'routes %s through bounded existing activity and warning channels',
     (status) => {
@@ -63,18 +71,5 @@ describe('session service availability feedback', () => {
         },
       })?.message,
     ).not.toContain('secret');
-  });
-
-  it('preserves legacy XERJ failures in warning notifications', () => {
-    const event = normalizeCodexNotification('session', 1, 't', {
-      method: 'mcpServer/statusUpdated',
-      params: { name: 'gestalt-xerj', status: 'failed', error: 'private token' },
-    });
-    expect(serviceAvailabilityFeedback(event!)).toMatchObject({
-      kind: 'warning',
-      code: 'XERJ_UNAVAILABLE',
-      message: expect.stringContaining('Use rg and current source reads.'),
-    });
-    expect(JSON.stringify(serviceAvailabilityFeedback(event!))).not.toContain('private token');
   });
 });

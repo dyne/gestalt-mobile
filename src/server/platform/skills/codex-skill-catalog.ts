@@ -13,8 +13,8 @@ import {
 } from '../../features/skills/model/skill-profile.js';
 import { SkillProfileError } from '../../features/skills/model/errors.js';
 import { launchCodexAppServer, type CodexProcess } from '../codex/codex-process-launcher.js';
-import type { CodexXerj } from '../retrieval/codex-xerj.js';
-import { xerjDeadline } from '../retrieval/managed-xerj.js';
+import type { CodexCapabilities } from '../codex/codex-capabilities.js';
+import { capabilityDeadline } from '../codex/capability-deadline.js';
 import { threadSkillConfig } from '../codex/session-runtime.js';
 
 type AppServer = Pick<CodexProcess, 'close'> & {
@@ -66,11 +66,11 @@ export class CodexSkillCatalog implements SkillCatalog {
     private readonly profile: string,
     private readonly launch: Launch = launchCodexAppServer,
     private readonly timeoutMs = 5_000,
-    private readonly retrieval?: Pick<CodexXerj, 'prepare' | 'verify'>,
+    private readonly retrieval?: Pick<CodexCapabilities, 'prepare' | 'verify'>,
   ) {}
 
   async list(workspace: string): Promise<SkillCatalogResult> {
-    const deadline = Math.min(xerjDeadline(), Date.now() + this.timeoutMs);
+    const deadline = Math.min(capabilityDeadline(), Date.now() + this.timeoutMs);
     const canonicalWorkspace = resolve(workspace);
     const server = this.launch({ profile: this.profile, cwd: canonicalWorkspace });
     try {
@@ -97,18 +97,18 @@ export class CodexSkillCatalog implements SkillCatalog {
           'INVALID_SKILL_DISCOVERY',
           'Codex did not return the requested workspace catalog.',
         );
-      const skills = entry.skills.map((skill) => {
-        const stable = availableSkillSchema.safeParse(skill);
-        if (!stable.success)
-          throw new SkillProfileError('INVALID_SKILL_DISCOVERY', 'Invalid Codex skill metadata.');
-        return ['gestalt:xerj', 'gestalt:playwright'].includes(stable.data.name)
-          ? { ...stable.data, enabled: false }
-          : stable.data;
-      });
-      if (
-        this.retrieval &&
-        skills.some((skill) => ['gestalt:xerj', 'gestalt:serena'].includes(skill.name))
-      ) {
+      // Ignore the retired managed skill from independently updated older installations.
+      const skills = entry.skills
+        .filter((skill) => skill.name !== 'gestalt:xerj')
+        .map((skill) => {
+          const stable = availableSkillSchema.safeParse(skill);
+          if (!stable.success)
+            throw new SkillProfileError('INVALID_SKILL_DISCOVERY', 'Invalid Codex skill metadata.');
+          return stable.data.name === 'gestalt:playwright'
+            ? { ...stable.data, enabled: false }
+            : stable.data;
+        });
+      if (this.retrieval && skills.some((skill) => skill.name === 'gestalt:serena')) {
         const state = await this.retrieval.prepare({
           cwd: canonicalWorkspace,
           deadline,
@@ -134,7 +134,7 @@ export class CodexSkillCatalog implements SkillCatalog {
               result.thread?.id &&
               (await this.retrieval.verify(server.rpc, result.thread.id, state));
             for (const skill of skills)
-              if (['gestalt:xerj', 'gestalt:serena'].includes(skill.name))
+              if (skill.name === 'gestalt:serena')
                 skill.enabled = state.capabilities
                   ? Boolean(result.thread?.id) &&
                     Boolean(

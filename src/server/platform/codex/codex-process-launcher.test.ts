@@ -87,7 +87,10 @@ createInterface({input}).on('line', line => {
   const request = JSON.parse(line);
   if (request.method === 'hang') return;
   if (mode === 'noisy') process.stderr.write('diagnostic\\n'.repeat(100000));
-  process.stdout.write(JSON.stringify({id: request.id, result: {ready: true}}) + '\\n');
+  const result = mode === 'large-history' && request.method === 'thread/read'
+    ? {thread: {id: 'history-thread', turns: [{id: 'history-turn', items: [{id: 'history-item', type: 'agentMessage', text: 'native-output-'.repeat(262144)}]}]}}
+    : {ready: true};
+  process.stdout.write(JSON.stringify({id: request.id, result}) + '\\n');
   if (mode === 'early-exit') setImmediate(() => process.exit(7));
 });
 `,
@@ -97,19 +100,23 @@ createInterface({input}).on('line', line => {
       command: manager ? 'bash' : process.execPath,
       args: manager ? [manager, '__codex-app-server', native, '--stdio'] : [native],
     });
-    const server = launchCodexAppServer({ profile: '', cwd: root });
+    const server = launchCodexAppServer({
+      profile: '',
+      cwd: root,
+      environment: {
+        CODEX_HOME: join(root, 'codex-home'),
+        GESTALT_HOME: join(root, 'manager-home'),
+      },
+    });
     const exit = once(server.child, 'exit');
     const cleanup = async () => {
-      if (server.child.exitCode === null && server.child.signalCode === null)
-        server.child.kill('SIGKILL');
+      await server.closeAndWait();
       await exit;
       if (manager) {
         const pid = Number(await readFile(join(root, 'pid'), 'utf8'));
-        try {
-          process.kill(-pid, 'SIGKILL');
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-        }
+        // The candidate manager owns its native child group. After wrapper
+        // shutdown a cached numeric PID permits an absence check, never a signal.
+        expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }));
       }
       await rm(root, { recursive: true, force: true });
     };
@@ -207,9 +214,37 @@ createInterface({input}).on('line', line => {
   // Point this at a manager checkout to verify the two production boundaries
   // together, in addition to the standalone legacy-proxy regression above.
   it.runIf(Boolean(process.env.GESTALT_TEST_MANAGER_BIN))(
-    'closes repeated readers through the real managed app-server wrapper',
+    'reads complete history larger than pipe buffers through the candidate manager',
     async () => {
-      for (let i = 0; i < 20; i++) {
+      const { server, cleanup } = await fixture(
+        'large-history',
+        process.env.GESTALT_TEST_MANAGER_BIN,
+      );
+      try {
+        await server.rpc.request('initialize', {});
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const response = (await server.rpc.request('thread/read', {
+            threadId: 'history-thread',
+            includeTurns: true,
+          })) as { thread: { turns: Array<{ items: Array<{ text: string }> }> } };
+          const text = response.thread.turns[0]!.items[0]!.text;
+          expect(Buffer.byteLength(text)).toBe(14 * 262144);
+          expect(text).toBe('native-output-'.repeat(262144));
+        }
+      } finally {
+        await cleanup();
+      }
+    },
+  );
+  // The manager deliberately retains its process-group leader for a 750ms
+  // shutdown grace. Keep all twenty repetitions sequential, with the ordinary
+  // per-case timeout rather than charging twenty lifetimes to one 5s budget.
+  describe.sequential('managed wrapper repeated reader cycles', () => {
+    it
+      .runIf(Boolean(process.env.GESTALT_TEST_MANAGER_BIN))
+      .each(Array.from({ length: 20 }, (_, index) => index + 1))(
+      'closes reader cycle %i through the real managed app-server wrapper',
+      async () => {
         const { server, exit, cleanup, nativePid } = await fixture(
           'normal',
           process.env.GESTALT_TEST_MANAGER_BIN,
@@ -224,7 +259,7 @@ createInterface({input}).on('line', line => {
         } finally {
           await cleanup();
         }
-      }
-    },
-  );
+      },
+    );
+  });
 });

@@ -14,7 +14,7 @@ import {
   autopilotAuditLabel,
   autopilotAuditAttention,
 } from '../../../shared/contracts/autopilot-audit.js';
-import { toActivity, type HistoryActivity } from './activity-summary.js';
+import { isRetiredServiceActivity, toActivity, type HistoryActivity } from './activity-summary.js';
 import type { ChatMessage } from './message-store.js';
 import { parseMcpStartupStatus } from '../../../shared/contracts/mcp-startup-failure.js';
 
@@ -439,6 +439,7 @@ export function hydrateCache(sessionId: string, cached: unknown): ChatProjection
               (activity.turnId === undefined || typeof activity.turnId === 'string'),
             ),
           )
+          .filter((activity) => !isRetiredServiceActivity(activity))
           .map((activity) => {
             const { mcpStartup, ...safe } = activity;
             const status = parseMcpStartupStatus(mcpStartup);
@@ -533,18 +534,20 @@ export function acceptSnapshot(current: ChatProjection, snapshot: ChatSnapshot):
           key: `activity:${activity.id}`,
         })),
       ) as Array<HistoryActivity & { key: string }>,
-  ).map((item) => ({
-    id: item.id,
-    label: item.label,
-    detail: item.detail,
-    ...(item.turnId ? { turnId: item.turnId } : {}),
-    ...(item.actorTurnId ? { actorTurnId: item.actorTurnId } : {}),
-    ...(item.occurredAt !== undefined ? { occurredAt: item.occurredAt } : {}),
-    ...(item.changes ? { changes: item.changes } : {}),
-    ...(parseMcpStartupStatus(item.mcpStartup)
-      ? { mcpStartup: parseMcpStartupStatus(item.mcpStartup) }
-      : {}),
-  }));
+  )
+    .filter((item) => !isRetiredServiceActivity(item))
+    .map((item) => ({
+      id: item.id,
+      label: item.label,
+      detail: item.detail,
+      ...(item.turnId ? { turnId: item.turnId } : {}),
+      ...(item.actorTurnId ? { actorTurnId: item.actorTurnId } : {}),
+      ...(item.occurredAt !== undefined ? { occurredAt: item.occurredAt } : {}),
+      ...(item.changes ? { changes: item.changes } : {}),
+      ...(parseMcpStartupStatus(item.mcpStartup)
+        ? { mcpStartup: parseMcpStartupStatus(item.mcpStartup) }
+        : {}),
+    }));
   const activities = canonicalActivities.reduce(upsertActivity, [...current.activities]);
   const turnTimes = new Map(snapshot.turns.map((turn) => [turn.id, turn]));
   const items = snapshot.items.map((item) => {
@@ -865,6 +868,7 @@ export function applyProjectionEvent(
     next = resolveInteraction(next, payload.requestId, payload.outcome, occurredAt);
   else if (
     event.type === 'activity.updated' &&
+    !isRetiredServiceActivity(payload) &&
     typeof payload?.id === 'string' &&
     typeof payload.label === 'string' &&
     typeof payload.detail === 'string'

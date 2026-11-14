@@ -7,7 +7,7 @@
 /** Replace only complete blocks owned by this capability, preserving all other bytes. */
 export function withCapabilityInstructions(
   instructions: string,
-  capability: 'xerj' | 'serena' | 'playwright',
+  capability: 'serena' | 'playwright',
   block: string,
 ): string {
   const pattern = new RegExp(

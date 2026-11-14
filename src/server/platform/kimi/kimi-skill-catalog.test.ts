@@ -42,7 +42,7 @@ describe('KimiSkillCatalog', () => {
     );
     const result = await catalog.list('/repo');
     expect(result.skills.map((skill) => skill.name)).toEqual(['gestalt:org-plan']);
-    expect(result.errors[0].message).toContain('native session readiness is unsupported');
+    expect(result.errors).toEqual([]);
   });
   it('returns nothing when kimi is unavailable', async () => {
     const catalog = new KimiSkillCatalog(null, false);
