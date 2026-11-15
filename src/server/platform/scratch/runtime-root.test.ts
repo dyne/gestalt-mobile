@@ -136,24 +136,30 @@ print('descendants-ok')`;
     }
   });
 
-  it('measures complete UTF-8 endpoints including NUL at the Linux 107/108-byte boundary', async () => {
+  it('exchanges data at the native UTF-8 pathname boundary and reserves the terminating NUL', async () => {
     expect(requireSocketPath('é'.repeat(53) + 'a', 108)).toHaveLength(54);
     expect(() => requireSocketPath('é'.repeat(54), 108)).toThrow('UNIX_SOCKET_PATH_TOO_LONG');
     expect(() => requireSocketPath('x'.repeat(104), 104)).toThrow('UNIX_SOCKET_PATH_TOO_LONG');
     expect(() => requireSocketPath('a\0b')).toThrow('UNIX_SOCKET_PATH_TOO_LONG');
-    if (process.platform !== 'linux') return;
+    const capacity = { linux: 108, darwin: 104 }[process.platform as 'linux' | 'darwin'];
+    expect(capacity).toBeDefined();
     const context = await new FilesystemSessionScratch().allocate(await fixture());
     const script = `import os,socket
 prefix=os.environ['TMPDIR']+'/'
-remaining=107-len(prefix.encode())
+remaining=${capacity - 1}-len(prefix.encode())
 path=prefix+'é'*(remaining//2)+'a'*(remaining%2)
-assert len(path.encode())==107
-with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as peer: peer.bind(path)
+assert len(path.encode())==${capacity - 1}
+with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as server:
+ server.settimeout(5);server.bind(path);server.listen(1)
+ with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
+  client.settimeout(5);client.connect(path);client.sendall(b'edge');peer,_=server.accept()
+  with peer:
+   assert peer.recv(4)==b'edge';peer.sendall(b'ok');assert client.recv(2)==b'ok' 
 os.unlink(path)
 try:
  with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as peer: peer.bind(path+'b')
 except OSError: print('boundary-ok')
-else: raise AssertionError('108 bytes must fail')`;
+else: raise AssertionError('${capacity} bytes must fail')`;
     expect(
       (
         await execute('python3', ['-c', script], {
