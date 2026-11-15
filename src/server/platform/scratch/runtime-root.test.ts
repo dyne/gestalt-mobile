@@ -154,7 +154,7 @@ with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as server:
  with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
   client.settimeout(5);client.connect(path);client.sendall(b'edge');peer,_=server.accept()
   with peer:
-   assert peer.recv(4)==b'edge';peer.sendall(b'ok');assert client.recv(2)==b'ok' 
+   assert peer.recv(4)==b'edge';peer.sendall(b'ok');assert client.recv(2)==b'ok'
 os.unlink(path)
 try:
  with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as peer: peer.bind(path+'b')
