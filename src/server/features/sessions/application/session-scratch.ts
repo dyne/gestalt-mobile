@@ -7,6 +7,7 @@
 export type SessionScratchContext = Readonly<{
   workspacePath: string;
   ownerId: string;
+  /** Durable workspace metadata. Disposable payload uses environment.TMPDIR. */
   directory: string;
   environment: Readonly<Record<string, string>>;
 }>;

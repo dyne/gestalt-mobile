@@ -320,7 +320,7 @@ describe('managed Mobile Playwright session', () => {
       expect.any(Number),
       ['--executable-path', '/operator/chrome'],
       expect.objectContaining({
-        TMPDIR: expect.stringContaining('/tmp/sessions/mobile-'),
+        TMPDIR: expect.stringMatching(/^(\/private)?\/tmp\/gs-\d+\/[0-9a-f]{20}$/),
         GESTALT_SESSION_TMP_CONTEXT: expect.any(String),
       }),
     );

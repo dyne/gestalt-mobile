@@ -5,7 +5,7 @@
  */
 
 import { lstatSync, mkdirSync, realpathSync, renameSync } from 'node:fs';
-import { lstat, rm } from 'node:fs/promises';
+import { lstat, readdir, rm } from 'node:fs/promises';
 import type { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import type { ScratchSessionOwner } from '../../features/sessions/clean-tmp/use-case.js';
@@ -14,6 +14,9 @@ import {
   canonicalSessionWorkspace,
   workspaceContains,
 } from '../persistence/sqlite-workspace-lifecycle.js';
+import { FilesystemScratchCleanup } from './filesystem-scratch-cleanup.js';
+import { claimWorkspacePublication } from './workspace-publication.js';
+import { hasRuntimeOwner } from './runtime-root.js';
 
 /** Final Forget owns the entire selected workspace's explicitly disposable tmp directory. */
 export class FilesystemWorkspaceForget {
@@ -23,7 +26,7 @@ export class FilesystemWorkspaceForget {
     operationId: string,
     authorized: () => boolean,
     knownSessions: () => readonly ScratchSessionOwner[],
-  ): Promise<'retained' | void> {
+  ): Promise<'retained' | void | { release(): Promise<void> }> {
     const workspace = canonicalSessionWorkspace(session.workspacePath);
     const others = knownSessions().filter((other) => other.id !== session.id);
     if (others.some((other) => canonicalSessionWorkspace(other.workspacePath) === workspace))
@@ -33,17 +36,88 @@ export class FilesystemWorkspaceForget {
       if (workspaceContains(temporary, canonicalSessionWorkspace(other.workspacePath)))
         throw new WorkspaceSessionConflict('SESSION_NESTED_WORKSPACE', other.id);
     }
-    const retired = this.retire(session, operationId, workspace, temporary, authorized);
-    if (retired) await rm(retired, { recursive: true, force: true, maxRetries: 3 });
-    // A non-cooperating external publisher must not turn retained files into a
-    // successful final Forget. New Mobile starts remain durably fenced.
     try {
-      await lstat(temporary);
+      await lstat(workspace);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      await new FilesystemScratchCleanup().cleanSession(session, authorized, knownSessions);
+      return;
+    }
+    // Keep the physical publication fence through durable finalization. It is
+    // outside tmp, so a retiring namespace cannot hide it from new publishers.
+    const release = await claimWorkspacePublication(workspace);
+    try {
+      const cleanup = new FilesystemScratchCleanup();
+      await cleanup.retireNestedNamespaces(
+        temporary,
+        knownSessions,
+        authorized,
+        session.id,
+        undefined,
+        true,
+      );
+      const counts = await cleanup.cleanWorkspace(
+        workspace,
+        knownSessions,
+        undefined,
+        authorized,
+        session.id,
+      );
+      if (counts.skipped || counts.failed) throw new Error('SESSION_CLEANUP_FAILED');
+      if (process.getuid && (await hasRuntimeOwner({ workspacePath: workspace })))
+        throw new Error('SESSION_CLEANUP_FAILED');
+      const retired = this.retire(session, operationId, workspace, temporary, authorized);
+      if (retired) {
+        await this.assertRetired(retired);
+        await rm(retired, { recursive: true, force: true, maxRetries: 3 });
+      }
+      // A non-cooperating external publisher must not turn retained files into a
+      // successful final Forget. New Mobile starts remain durably fenced.
+      try {
+        await lstat(temporary);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { release };
+        throw error;
+      }
+      throw new Error('SESSION_CLEANUP_FAILED');
+    } catch (error) {
+      await release();
+      throw error;
+    }
+  }
+
+  private async assertRetired(
+    directory: string | Buffer,
+    depth = 0,
+    budget = { entries: 0 },
+  ): Promise<void> {
+    if (depth > 128) throw new Error('SESSION_CLEANUP_FAILED');
+    let entries;
+    try {
+      entries = await readdir(directory, { encoding: 'buffer', withFileTypes: true });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
       throw error;
     }
-    throw new Error('SESSION_CLEANUP_FAILED');
+    for (const entry of entries) {
+      if (
+        ++budget.entries > 100000 ||
+        [
+          '.gestalt-owner.json',
+          '.gestalt-runtime.json',
+          '.controller-lock',
+          '.containment-lock',
+          '.gestalt-scratch-lock',
+        ].includes(entry.name.toString())
+      )
+        throw new Error('SESSION_CLEANUP_FAILED');
+      if (entry.isDirectory() && !entry.isSymbolicLink())
+        await this.assertRetired(
+          Buffer.concat([Buffer.from(directory), Buffer.from('/'), entry.name]),
+          depth + 1,
+          budget,
+        );
+    }
   }
 
   private retire(

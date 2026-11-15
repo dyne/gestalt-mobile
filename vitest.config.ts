@@ -12,6 +12,9 @@ export default defineConfig({
   resolve: { conditions: ['browser'] },
   test: {
     environment: 'node',
+    // Managed fixture descendants share a live owner's containment fence.
+    // Keep every test, but do not make independent files contend for that fence.
+    fileParallelism: process.env.GESTALT_SESSION_TMP_CONTEXT === undefined,
     include: ['src/**/*.test.ts', 'test/**/*.test.ts', 'scripts/**/*.test.ts'],
     coverage: {
       provider: 'v8',

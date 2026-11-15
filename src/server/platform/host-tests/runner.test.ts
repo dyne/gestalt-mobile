@@ -128,8 +128,9 @@ describe('host-owned tests', () => {
       id: f.owner.sessionId,
       workspacePath: f.owner.workspace,
     });
-    expect(capture.tmp).toBe(context.directory);
-    expect(capture.node).toBe(context.directory);
+    expect(capture.tmp).toBe(context.environment.TMPDIR);
+    expect(capture.node).toBe(context.environment.TMPDIR);
+    expect(Buffer.byteLength(capture.tmp)).toBeLessThanOrEqual(48);
     expect(JSON.parse(capture.context).ownerId).toBe(context.ownerId);
   });
   it('retains an unread completion across restart until its owner reads the result', async () => {

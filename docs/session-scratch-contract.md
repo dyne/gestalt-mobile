@@ -1,11 +1,91 @@
-# Session scratch contract (version 1)
+# Session scratch contract (versions 1 and 2)
 
 This contract is shared by Mobile, the Gestalt launcher and Agents. Scratch is
 disposable; source, Git state, history, plans, authentication, installations,
 dependency caches, browser profiles, semantic indexes and retained legacy index data and context-mode databases
 retain their existing persistence rules. Version mismatches fail visibly.
 
-## Location and identity
+## Version 2: bounded physical runtime roots
+
+New POSIX allocations keep durable ownership, markers, fences and leases at
+`<workspace>/tmp/sessions/<ownerId>`, but store disposable payload in a separate
+private physical `<canonical /tmp>/gs-<uid>/<20 random lowercase hex digits>`
+directory. Exclusive creation with bounded collision retries never adopts an
+existing leaf. Both container and leaf must be canonical, current-user-owned,
+mode 0700 and free of symlink traversal. macOS resolves the system `/tmp` alias
+to `/private/tmp` first. PID reuse has no role in ownership or lifetime.
+
+The complete runtime-root pathname is capped at **48 UTF-8 bytes**, independent
+of workspace depth. Unsupported system roots fail before launch. Linux's
+108-byte `sun_path` includes the terminating NUL, allowing 107 pathname bytes.
+macOS checks reserve NUL within 104 bytes. Unverified endpoint platforms fail
+before launch rather than assuming another system's array size. A 48-byte root leaves
+at least 55 appended pathname bytes, including separators, for patterns such as
+`/bitcoin_sock0_XXXXXX` and `/com.google.Chrome.XXXXXX/SingletonSocket`.
+Gestalt validates its complete generated socket endpoints plus one NUL before
+bind/launch and reports `UNIX_SOCKET_PATH_TOO_LONG` with shortening guidance.
+Arbitrary application suffixes or overrides still require their own bounds.
+
+The v2 context keeps `workspacePath`, `ownerId`, `directory` and `markerPath`
+pointing to durable workspace metadata. Its `schemaVersion` is 2 and its added
+`runtime` field is identical to the v2 owner marker's binding:
+
+```json
+{
+  "directory": "/tmp/gs-1000/<20 lowercase hex>",
+  "token": "<64 random lowercase hex>",
+  "identity": "<device>:<inode>:<birthtime in nanoseconds>"
+}
+```
+
+The physical root has a private single-link `.gestalt-runtime.json` containing
+`schemaVersion: 2`, `ownerId`, `workspacePath`, `token` and `identity`. The broker
+validates both records and physical identity before exporting all three temp
+variables equal to this root. Aliases, copied records, replaced inodes and
+partial publication fail closed. No alias or per-command wrapper is required;
+canonicalizing consumers retain the short physical path. Leases remain v1
+records in the durable owner. CLI, Mobile and shared services use the same
+binding and existing authoritative lifetime rules. Sandbox/approval profiles
+are unchanged: context grants no extra filesystem or network permission.
+
+Restart and reopen reuse the same validated root and payload. They never replace
+a missing root or repair partial metadata. OS temporary storage remains volatile;
+external removal/OS cleanup fails visibly rather than silently changing ownership.
+Selecting a workspace inside a runtime follows its validated binding back to
+durable ancestry. Nested allocation and cleanup claim the same logical ancestors
+outermost first, with cycle/depth bounds and identity revalidation.
+
+Cleanup requires authoritative roster/release checks and fences for both roots.
+Allocation, borrower publication and final Forget share a private
+`<workspace>/.gestalt-scratch-lock` directory. Final Forget retains its exact
+open-directory claim through SQLite finalization, so moving `tmp` cannot hide
+the publication fence. Logical/temporary ancestors are checked before and after
+publication; an interrupted/unknown fence is never reclaimed by age or PID.
+Final cleanup retires positively attributed, released nested namespaces under
+inherited containment claims. Unknown metadata, active borrowers, foreign paths
+and known contained sessions retain their data. The retired tree is audited
+before deletion to retain any partial allocation from a non-cooperating writer.
+It deletes payload before authority metadata. Before removing a runtime marker,
+it atomically publishes `runtime.retiring: true` in the durable owner. Execution
+rejects that state. Retry can remove the exact empty runtime inode without its
+marker, or accept its absence, but cannot delete a replacement or unmarked
+nonempty root. Missing storage never proves process exit; cleanup still needs
+release authority. Released Unix socket payload entries are disposable.
+Persistent source, indexes, caches, auth and browser profiles keep their paths.
+Unknown uid-container allocations are never swept. A missing workspace with a
+retained/indeterminate external runtime cannot be a successful Forget.
+
+### Compatibility and rollout
+
+Upgrade Mobile, Manager and Agents together before producing v2 allocations.
+Older consumers reject v2 visibly, and older cleanup retains unknown v2 markers.
+Current consumers accept retained v1 contexts without moving payload or rewriting
+active metadata. Those owners retain their original long-path limitation;
+authoritative release/Forget followed by a new session obtains v2. There is no
+ambient override or silent live migration. Windows continues to allocate v1;
+the v2 physical-root/socket guarantee applies to POSIX platforms.
+
+## Legacy v1 location and identity
 
 Use the owning session's selected **canonical absolute workspace**, never a
 command's changing cwd. Mobile allocates
@@ -25,7 +105,7 @@ An allocation interrupted before a valid marker is written remains indeterminate
 it is never automatically adopted or deleted. OS mount restrictions still apply;
 the filesystem allocation test executes a generated 0700 command.
 
-## Environment and marker
+## Legacy v1 environment and marker
 
 Export `TMPDIR`, `TMP` and `TEMP` equal to the owner directory, and exactly one
 additional context variable, `GESTALT_SESSION_TMP_CONTEXT`, containing JSON:
@@ -284,10 +364,10 @@ SQLite prevents a late save from overwriting or recreating the roster row.
 Same-process requests join one promise; cross-process requests/retries use the
 same operation ID. Startup retries unfinished operations without assuming the
 prior runtime died. It re-enters resource release before attempting deletion.
-Unknown crashed controller fences or process leases remain protected, including
-on restart during per-owner Clean TMP and intermediate Forget. During final
-workspace Forget, old markers and leases are disposable metadata; they do not
-authorize signaling a PID or change the requirement to confirm runtime shutdown.
+Unknown crashed controller/publication fences and process leases remain
+protected on restart, during Clean TMP and during final workspace Forget.
+An old active borrower is not discarded as disposable metadata: only its
+authority may publish release. No timestamp or missing PID grants that authority.
 
 Mobile-owned Codex resources and host-test guardians publish individual process
 leases before launch. Normal exit releases only the exact claim after confirmed
@@ -304,7 +384,8 @@ Cleanup targets only the session's validated managed owner/removal directories,
 under its durable operation's authority. A successful request returns 204 after
 cleanup and atomic roster/operation finalization. Intermediate operations may
 record `scratchRetained: true`. Final Forget removes all contents of the selected
-workspace's `tmp`, preserving source, Git and persistent `.gestalt` data outside
+workspace's `tmp` after retiring its validated external runtime roots and released
+nested owners, preserving source, Git and persistent `.gestalt` data outside
 that directory. A known workspace contained inside `tmp` blocks final deletion
 with `SESSION_NESTED_WORKSPACE` and `blockingSessionId`. Unsafe directory roots,
 unconfirmed runtime shutdown and I/O failures still fail cleanup. Failure returns 503 with

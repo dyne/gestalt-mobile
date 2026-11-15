@@ -12,6 +12,7 @@ import {
   readMarker,
   scratchMarkerName,
 } from './scratch-filesystem.js';
+import { type RuntimeBinding, runtimeMarkerName, validateRuntime } from './runtime-root.js';
 
 export const scratchUuidPattern = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const ownerPattern = `(?:mobile-[0-9a-f]{64}|(?:cli|service)-${scratchUuidPattern})`;
@@ -25,6 +26,7 @@ const validTime = (value: unknown) =>
 
 export type ManagedScratchOwner = {
   schemaVersion: number;
+  runtime?: RuntimeBinding;
   ownerKind: string;
   ownerId: string;
   workspacePath: string;
@@ -71,7 +73,9 @@ export async function readManagedScratchOwner(
   }
   if (
     !marker ||
-    marker.schemaVersion !== 1 ||
+    ![1, 2].includes(marker.schemaVersion) ||
+    (marker.schemaVersion === 1 && marker.runtime !== undefined) ||
+    (marker.schemaVersion === 2 && !marker.runtime) ||
     marker.ownerId !== ownerId ||
     marker.workspacePath !== workspacePath ||
     !validTime(marker.createdAt) ||
@@ -133,7 +137,24 @@ export async function readManagedScratchAttribution(directory: string, allowReti
   await privateDirectory(container, false);
   await privateDirectory(directory, false);
   const marker = await readManagedScratchOwner(directory, workspacePath, ownerId);
+  if (marker.runtime) await validateRuntime(marker, marker.runtime, allowRetired);
   return { directory, workspacePath, ownerId, marker };
+}
+
+/** A runtime locator is not authority until the durable owner binds it back. */
+export async function readRuntimeScratchAttribution(runtimeDirectory: string) {
+  await privateDirectory(runtimeDirectory, false);
+  const locator = (await readMarker(join(runtimeDirectory, runtimeMarkerName))) as {
+    workspacePath: string;
+    ownerId: string;
+  };
+  if (!locator || !isAbsolute(locator.workspacePath) || !ownerName.test(locator.ownerId))
+    rejectOwner();
+  const owner = await readManagedScratchAttribution(
+    join(locator.workspacePath, 'tmp', 'sessions', locator.ownerId),
+  );
+  if (owner.marker.runtime?.directory !== runtimeDirectory) rejectOwner();
+  return owner;
 }
 
 export type ManagedScratchLease = Readonly<{

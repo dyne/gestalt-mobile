@@ -27,6 +27,20 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  scratch-macos:
+    name: macOS runtime scratch
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Verify actual Unix sockets, byte limits and runtime lifecycle
+        run: npm test -- src/server/platform/scratch/runtime-root.test.ts
+
   quality:
     name: Quality
     runs-on: ubuntu-latest
@@ -233,7 +247,7 @@ jobs:
   release:
     name: Release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'dyne/gestalt-mobile'
-    needs: [quality, vitest, package-smoke, browser-smoke]
+    needs: [quality, vitest, package-smoke, browser-smoke, scratch-macos]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:

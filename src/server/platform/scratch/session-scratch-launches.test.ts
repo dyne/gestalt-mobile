@@ -102,8 +102,9 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\\n');
         .map((line) => JSON.parse(line));
       expect(launches).toHaveLength(session.id === first.id ? 2 : 1);
       for (const launch of launches) {
-        expect(launch.tmp).toBe(context.directory);
-        expect(launch.child.tmp).toBe(context.directory);
+        expect(launch.tmp).toBe(context.environment.TMPDIR);
+        expect(launch.child.tmp).toBe(context.environment.TMPDIR);
+        expect(Buffer.byteLength(launch.tmp)).toBeLessThanOrEqual(48);
         expect(JSON.parse(launch.child.context)).toEqual(launch.context);
       }
       expect(
@@ -123,7 +124,7 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\\n');
     });
     const env = { ...withoutSessionScratch(), ...context.environment };
     const temporary = (await execute('mktemp', [], { cwd: nested, env })).stdout.trim();
-    expect(temporary.startsWith(context.directory + '/')).toBe(true);
+    expect(temporary.startsWith(context.environment.TMPDIR + '/')).toBe(true);
     const node = (
       await execute(process.execPath, ['-e', 'console.log(require("node:os").tmpdir())'], {
         cwd: nested,
@@ -136,8 +137,8 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\\n');
         env,
       })
     ).stdout.trim();
-    expect(node).toBe(context.directory);
-    expect(python).toBe(context.directory);
+    expect(node).toBe(context.environment.TMPDIR);
+    expect(python).toBe(context.environment.TMPDIR);
   });
 
   it('scrubs owning-session context from discovery while preserving persistent data variables', () => {

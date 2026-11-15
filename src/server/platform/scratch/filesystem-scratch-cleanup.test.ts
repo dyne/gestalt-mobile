@@ -180,11 +180,11 @@ async function enteredWhile(entered: Promise<unknown>, operation: Promise<unknow
 
 async function launcherAllocation(workspace: string, ready?: string, proceed?: string) {
   const runtime = await readFile(
-    join(process.cwd(), 'test', 'fixtures', 'scratch', 'launcher-containment-runtime.cjs.txt'),
+    join(process.cwd(), 'test', 'fixtures', 'scratch', 'launcher-v2-runtime.cjs.txt'),
     'utf8',
   );
   expect(createHash('sha256').update(runtime).digest('hex')).toBe(
-    '12a51c4306240366b3a316042d2b2deac6bdc0077020cfc611f36d346ad8fa94',
+    'aca3aa8bc504a8715bf81d6dd75171865f5c10c5c4d9cff032692f9e195dfa46',
   );
   const driver = `
 try {
