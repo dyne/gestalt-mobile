@@ -23,7 +23,13 @@ describe('GitHub verification workflow', () => {
     expect(configuration.on).toHaveProperty('pull_request');
     expect(configuration.on.push).toEqual({ branches: ['main'] });
     const required = configuration.jobs.release!.needs!;
-    expect(required.toSorted()).toEqual(['browser-smoke', 'package-smoke', 'quality', 'vitest']);
+    expect(required.toSorted()).toEqual([
+      'browser-smoke',
+      'package-smoke',
+      'quality',
+      'scratch-macos',
+      'vitest',
+    ]);
     expect(
       Object.entries(configuration.jobs)
         .filter(([, job]) => !job.if)
@@ -142,6 +148,7 @@ describe('GitHub verification workflow', () => {
       'vitest',
       'package-smoke',
       'browser-smoke',
+      'scratch-macos',
     ]);
     expect(workflow).toContain("github.repository == 'dyne/gestalt-mobile'");
     expect(workflow).toContain(

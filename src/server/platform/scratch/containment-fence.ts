@@ -11,8 +11,11 @@ import {
   canonicalScratchWorkspace,
   readManagedScratchAttribution,
   readManagedScratchLeases,
+  readRuntimeScratchAttribution,
 } from './managed-scratch-owner.js';
 import { privateDirectory } from './scratch-filesystem.js';
+import { runtimeContainer } from './runtime-root.js';
+import { assertParentPublications, claimWorkspacePublication } from './workspace-publication.js';
 
 export const containmentFenceName = '.containment-lock';
 type Identity = Readonly<{ dev: bigint; ino: bigint; birth: bigint }>;
@@ -43,6 +46,7 @@ async function ancestorIdentity(directory: string, allowRetired: boolean) {
   return {
     directory,
     ownerId: owner.ownerId,
+    workspacePath: owner.workspacePath,
     identity: await directoryIdentity(directory),
     provenance: JSON.stringify([
       marker.schemaVersion,
@@ -54,6 +58,9 @@ async function ancestorIdentity(directory: string, allowRetired: boolean) {
       marker.authority.kind,
       marker.authority.sessionId ?? null,
       marker.authority.leaseId ?? null,
+      marker.runtime
+        ? [marker.runtime.directory, marker.runtime.token, marker.runtime.identity]
+        : null,
     ]),
   };
 }
@@ -65,6 +72,10 @@ type Claim = {
   identity: Identity;
   handle?: FileHandle;
   attempted: boolean;
+};
+export type InheritedContainment = {
+  owns(directory: string): boolean;
+  revalidate(): Promise<void>;
 };
 
 async function assertClaimIdentity(claim: Claim): Promise<void> {
@@ -104,31 +115,50 @@ async function releaseClaims(claims: Claim[]): Promise<void> {
 }
 
 /** Interoperates with Launcher scratchWithContainment; no PID/age recovery. */
-export async function claimScratchContainment(workspace: string, cleanupOwnerId?: string) {
+export async function claimScratchContainment(
+  workspace: string,
+  cleanupOwnerId?: string,
+  inherited?: InheritedContainment,
+) {
   let selected = await canonicalScratchWorkspace(workspace);
   const selectedIdentity = await directoryIdentity(selected);
   const ancestors: Ancestor[] = [];
-  const parts = selected.slice(parse(selected).root.length).split(sep).filter(Boolean);
-  let directory = parse(selected).root;
-  for (let index = 0; index < parts.length; index++) {
-    directory = join(directory, parts[index]!);
-    if (index >= 2 && parts[index - 1] === 'sessions' && parts[index - 2] === 'tmp') {
-      if (ancestors.length >= 64) throw new Error('SESSION_SCRATCH_CONTAINMENT_INVALID');
-      const ancestor = await ancestorIdentity(
-        directory,
-        directory === selected && cleanupOwnerId !== undefined,
-      );
-      if (
-        directory === selected &&
-        cleanupOwnerId !== undefined &&
-        ancestor.ownerId !== cleanupOwnerId
-      )
-        throw new Error('SESSION_SCRATCH_CONTAINMENT_INVALID');
-      ancestors.push(ancestor);
+  const visiting = new Set<string>();
+  const runtimeBase = process.getuid ? await runtimeContainer() : undefined;
+  const discover = async (path: string): Promise<void> => {
+    if (visiting.has(path) || visiting.size >= 64)
+      throw new Error('SESSION_SCRATCH_CONTAINMENT_INVALID');
+    visiting.add(path);
+    const parts = path.slice(parse(path).root.length).split(sep).filter(Boolean);
+    let directory = parse(path).root;
+    for (let index = 0; index < parts.length; index++) {
+      directory = join(directory, parts[index]!);
+      if (dirname(directory) === runtimeBase) {
+        const owner = await readRuntimeScratchAttribution(directory);
+        await discover(owner.directory);
+      }
+      if (index >= 2 && parts[index - 1] === 'sessions' && parts[index - 2] === 'tmp') {
+        if (ancestors.some((ancestor) => ancestor.directory === directory)) continue;
+        if (ancestors.length >= 64) throw new Error('SESSION_SCRATCH_CONTAINMENT_INVALID');
+        const ancestor = await ancestorIdentity(
+          directory,
+          directory === selected && cleanupOwnerId !== undefined,
+        );
+        if (
+          directory === selected &&
+          cleanupOwnerId !== undefined &&
+          ancestor.ownerId !== cleanupOwnerId
+        )
+          throw new Error('SESSION_SCRATCH_CONTAINMENT_INVALID');
+        ancestors.push(ancestor);
+      }
     }
-  }
+    visiting.delete(path);
+  };
+  await discover(selected);
   const claims: Claim[] = [];
   const revalidate = async () => {
+    await inherited?.revalidate();
     await canonicalScratchWorkspace(selected);
     if (!same(selectedIdentity, await directoryIdentity(selected)))
       throw new Error('SESSION_SCRATCH_CONTAINMENT_CHANGED');
@@ -146,6 +176,10 @@ export async function claimScratchContainment(workspace: string, cleanupOwnerId?
     // Ancestors are discovered in path order. Containment always precedes the
     // owner's controller/association operation, and never spans a service lifetime.
     for (const ancestor of ancestors) {
+      if (inherited?.owns(ancestor.directory)) {
+        await inherited.revalidate();
+        continue;
+      }
       const path = join(ancestor.directory, containmentFenceName);
       try {
         await mkdir(path, { mode: 0o700 });
@@ -182,6 +216,10 @@ export async function claimScratchContainment(workspace: string, cleanupOwnerId?
     throw error;
   }
   return {
+    publicationParents: ancestors.map((ancestor) => ancestor.workspacePath),
+    owns: (directory: string): boolean =>
+      claims.some((claim) => !claim.attempted && claim.directory === directory) ||
+      !!inherited?.owns(directory),
     revalidate,
     async relocate(from: string, to: string) {
       const ancestor = ancestors.find((value) => value.directory === from);
@@ -217,11 +255,26 @@ export async function withScratchContainment<T>(
   workspace: string,
   publish: () => T | Promise<T>,
 ): Promise<T> {
-  const guard = await claimScratchContainment(workspace);
+  const releaseWorkspace = await claimWorkspacePublication(workspace);
+  let guard: Awaited<ReturnType<typeof claimScratchContainment>> | undefined;
+  let failed = false;
   try {
-    return await publish();
+    guard = await claimScratchContainment(workspace);
+    await assertParentPublications(workspace, guard.publicationParents);
+    const result = await publish();
+    await assertParentPublications(workspace, guard.publicationParents);
+    return result;
+  } catch (error) {
+    failed = true;
+    throw error;
   } finally {
-    await guard.release();
+    try {
+      await guard?.release();
+    } finally {
+      // Preserve the first failed boundary when the selected workspace changed.
+      if (failed) await releaseWorkspace().catch(() => {});
+      else await releaseWorkspace();
+    }
   }
 }
 
@@ -277,8 +330,13 @@ export async function withHistoryScratchContainment<T>(
   let ownerCount = 0;
   const parts = workspace.slice(parse(workspace).root.length).split(sep).filter(Boolean);
   let directory = parse(workspace).root;
+  const runtimeBase = process.getuid ? await runtimeContainer() : undefined;
   for (let index = 0; index < parts.length; index++) {
     directory = join(directory, parts[index]!);
+    if (dirname(directory) === runtimeBase) {
+      await readRuntimeScratchAttribution(directory);
+      deepestOwner = directory;
+    }
     if (index >= 2 && parts[index - 1] === 'sessions' && parts[index - 2] === 'tmp') {
       if (++ownerCount > 64) throw new Error('SESSION_SCRATCH_CONTAINMENT_INVALID');
       deepestOwner = directory;
@@ -289,7 +347,10 @@ export async function withHistoryScratchContainment<T>(
   const guard = deepestOwner ? await claimScratchContainment(deepestOwner) : undefined;
   try {
     await revalidate();
-    return await publish();
+    await assertParentPublications(workspace, guard?.publicationParents);
+    const result = await publish();
+    await assertParentPublications(workspace, guard?.publicationParents);
+    return result;
   } finally {
     await guard?.release();
   }

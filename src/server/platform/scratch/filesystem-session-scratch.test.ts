@@ -64,17 +64,22 @@ describe('FilesystemSessionScratch', () => {
     });
     expect(result.stdout).toBe('workspace-executable-ok');
     expect(result.stderr).toBe('');
+    const runtime = JSON.parse(
+      await readFile(join(context.directory, scratchMarkerName), 'utf8'),
+    ).runtime;
     expect(context.environment).toMatchObject({
-      TMPDIR: context.directory,
-      TMP: context.directory,
-      TEMP: context.directory,
+      TMPDIR: runtime.directory,
+      TMP: runtime.directory,
+      TEMP: runtime.directory,
     });
+    expect(Buffer.byteLength(context.environment.TMPDIR!)).toBeLessThanOrEqual(48);
     expect(JSON.parse(context.environment.GESTALT_SESSION_TMP_CONTEXT)).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       workspacePath: session.workspacePath,
       ownerId: context.ownerId,
       directory: context.directory,
       markerPath: join(context.directory, scratchMarkerName),
+      runtime,
     });
   });
 

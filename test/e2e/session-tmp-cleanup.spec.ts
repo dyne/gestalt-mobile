@@ -22,6 +22,7 @@ import { workspaceId } from '../../src/server/platform/catalog/workspace-id.js';
 import {
   FilesystemSessionScratch,
   mobileScratchOwnerId,
+  scratchMarkerName,
 } from '../../src/server/platform/scratch/filesystem-session-scratch.js';
 import { stopOwnedProcessGroup } from '../../src/server/platform/scratch/owned-process-group.js';
 import { buildApp } from '../../src/server/app.js';
@@ -157,13 +158,20 @@ fs.writeFileSync(path.join(root,'ready'),'yes');setInterval(()=>{},1000);`;
     );
     await expect.poll(() => exists(join(firstDirectory, 'ready')), { timeout: 2000 }).toBe(true);
     await expect.poll(() => exists(join(secondDirectory, 'ready')), { timeout: 2000 }).toBe(true);
-    await writeFile(join(firstDirectory, 'payload'), 'first');
-    await writeFile(join(secondDirectory, 'payload'), 'second');
+    const firstRuntime = JSON.parse(await readFile(join(firstDirectory, scratchMarkerName), 'utf8'))
+      .runtime.directory;
+    const secondRuntime = JSON.parse(
+      await readFile(join(secondDirectory, scratchMarkerName), 'utf8'),
+    ).runtime.directory;
+    expect(Buffer.byteLength(firstRuntime)).toBeLessThanOrEqual(48);
+    expect(firstRuntime).not.toBe(secondRuntime);
+    await writeFile(join(firstRuntime, 'payload'), 'first');
+    await writeFile(join(secondRuntime, 'payload'), 'second');
     const orphan = await new FilesystemSessionScratch().allocate({
       id: 'orphan-fixture',
       workspacePath: secondWorkspace,
     });
-    await writeFile(join(orphan.directory, 'payload'), 'orphan');
+    await writeFile(join(orphan.environment.TMPDIR!, 'payload'), 'orphan');
     const firstOrphan = await new FilesystemSessionScratch().allocate({
       id: 'first-workspace-orphan',
       workspacePath: firstWorkspace,
@@ -174,7 +182,7 @@ fs.writeFileSync(path.join(root,'ready'),'yes');setInterval(()=>{},1000);`;
     expect(
       (await request.post(`${url}/api/sessions/${second.id}/stop`, { data: {} })).status(),
     ).toBe(202);
-    expect(await readFile(join(secondDirectory, 'payload'), 'utf8')).toBe('second');
+    expect(await readFile(join(secondRuntime, 'payload'), 'utf8')).toBe('second');
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(url);
     await page.getByRole('button', { name: 'Open configuration', exact: true }).click();
@@ -204,11 +212,13 @@ fs.writeFileSync(path.join(root,'ready'),'yes');setInterval(()=>{},1000);`;
     });
     expect(await exists(orphan.directory)).toBe(false);
     expect(await exists(firstOrphan.directory)).toBe(false);
+    expect(await exists(orphan.environment.TMPDIR!)).toBe(false);
+    expect(await exists(firstOrphan.environment.TMPDIR!)).toBe(false);
     await expect(page.locator('.toast')).toContainText(
       'Removed 2 temporary folders in 2 workspaces. Kept 1 protected folder. Skipped 1 other folder.',
     );
-    expect(await readFile(join(firstDirectory, 'payload'), 'utf8')).toBe('first');
-    expect(await readFile(join(secondDirectory, 'payload'), 'utf8')).toBe('second');
+    expect(await readFile(join(firstRuntime, 'payload'), 'utf8')).toBe('first');
+    expect(await readFile(join(secondRuntime, 'payload'), 'utf8')).toBe('second');
 
     // Exercise the shipped client against production HTTP composition and a
     // genuinely held owned child, rather than replacing the operation with a UI mock.
@@ -237,7 +247,7 @@ fs.writeFileSync(path.join(root,'ready'),'yes');setInterval(()=>{},1000);`;
     await page.reload();
     await expect(firstFrame).toHaveAttribute('aria-busy', 'true');
     await expect(firstFrame.getByRole('status')).toContainText('Forgetting session…');
-    expect(await readFile(join(firstDirectory, 'payload'), 'utf8')).toBe('first');
+    expect(await readFile(join(firstRuntime, 'payload'), 'utf8')).toBe('first');
     expect(
       (await request.post(`${url}/api/sessions/${first.id}/restore`, { data: {} })).status(),
     ).toBe(409);
@@ -245,10 +255,11 @@ fs.writeFileSync(path.join(root,'ready'),'yes');setInterval(()=>{},1000);`;
     await writeFile(join(firstDirectory, 'release'), 'yes');
     expect((await forgetting).status()).toBe(204);
     expect(await exists(firstDirectory)).toBe(false);
+    expect(await exists(firstRuntime)).toBe(false);
     expect((await request.get(`${url}/api/sessions/${first.id}`)).status()).toBe(404);
     await expect(firstFrame).toHaveCount(0);
     await expect(page.getByRole('list', { name: 'Recent sessions' })).toContainText('/first');
-    expect(await readFile(join(secondDirectory, 'payload'), 'utf8')).toBe('second');
+    expect(await readFile(join(secondRuntime, 'payload'), 'utf8')).toBe('second');
   } finally {
     await page.close();
     await Promise.allSettled(

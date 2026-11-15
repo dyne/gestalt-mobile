@@ -125,7 +125,8 @@ describe('KimiWebServerManager', () => {
       expect(await manager.ensure('shared-profile', [])).toBe(first);
       expect(environments).toHaveLength(1);
       const context = JSON.parse(environments[0].GESTALT_SESSION_TMP_CONTEXT!);
-      expect(environments[0].TMPDIR).toBe(context.directory);
+      expect(environments[0].TMPDIR).toBe(context.runtime.directory);
+      expect(Buffer.byteLength(environments[0].TMPDIR!)).toBeLessThanOrEqual(48);
       const marker = JSON.parse(await readFile(join(context.directory, scratchMarkerName), 'utf8'));
       expect(marker.ownerKind).toBe('workspace-service');
       const lease = join(context.directory, 'leases', marker.authority.leaseId + '.json');

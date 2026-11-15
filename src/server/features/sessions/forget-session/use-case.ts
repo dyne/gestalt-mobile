@@ -23,7 +23,10 @@ export class ForgetSession {
       operations: ForgetOperationStore;
       find(id: string): RelaySessionSnapshot | null;
       release(session: RelaySessionSnapshot): Promise<void>;
-      clean(session: RelaySessionSnapshot, operationId: string): Promise<'retained' | void>;
+      clean(
+        session: RelaySessionSnapshot,
+        operationId: string,
+      ): Promise<'retained' | void | { release(): Promise<void> }>;
       changed(operation: SessionForgetOperation): void;
       now(): string;
     },
@@ -62,6 +65,7 @@ export class ForgetSession {
       return operation;
     };
     let failureCode: SessionForgetOperation['failureCode'] = 'SESSION_RELEASE_UNCONFIRMED';
+    let releaseCleanup: (() => Promise<void>) | undefined;
     try {
       const session = this.deps.find(id);
       if (!session) throw new Error('SESSION_FORGET_FAILED');
@@ -71,6 +75,7 @@ export class ForgetSession {
       failureCode = 'SESSION_CLEANUP_FAILED';
       if (advance('cleaning').phase === 'completed') return operation;
       const cleanup = await this.deps.clean(session, operation.operationId);
+      if (cleanup && typeof cleanup === 'object') releaseCleanup = () => cleanup.release();
       operation = { ...operation, scratchRetained: cleanup === 'retained' ? true : undefined };
       failureCode = 'SESSION_FORGET_FAILED';
       if (advance('finalizing').phase === 'completed') return operation;
@@ -89,6 +94,8 @@ export class ForgetSession {
       });
       this.deps.changed(operation);
       return operation;
+    } finally {
+      await releaseCleanup?.();
     }
   }
 }

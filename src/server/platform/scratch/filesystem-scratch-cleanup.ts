@@ -5,7 +5,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, readdir, realpath, rename, rm, rmdir } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, realpath, rename, rm, rmdir } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   emptyScratchCounts,
@@ -23,7 +23,18 @@ import {
   readManagedScratchLeases,
   type ManagedScratchOwner,
 } from './managed-scratch-owner.js';
-import { claimScratchContainment, containmentFenceName } from './containment-fence.js';
+import {
+  claimScratchContainment,
+  containmentFenceName,
+  type InheritedContainment,
+} from './containment-fence.js';
+import { workspacePublicationName } from './workspace-publication.js';
+import {
+  hasRuntimeOwner,
+  runtimeIdentity,
+  runtimeMarkerName,
+  validateRuntime,
+} from './runtime-root.js';
 
 function reject(reason: ScratchCleanupReason): never {
   throw new Error(`SCRATCH_CLEANUP_${reason}`);
@@ -48,7 +59,17 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
       try {
         await lstat(session.workspacePath);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          if (
+            process.getuid &&
+            (await hasRuntimeOwner({
+              workspacePath: session.workspacePath,
+              ownerId: mobileScratchOwnerId(session.id),
+            }))
+          )
+            throw new Error('SESSION_CLEANUP_FAILED');
+          return;
+        }
         throw error;
       }
     }
@@ -69,6 +90,8 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
     protectedSessions: () => readonly ScratchSessionOwner[],
     onlyOwnerId?: string,
     authorized?: () => boolean,
+    authorizedSessionId?: string,
+    inherited?: InheritedContainment,
   ) {
     await this.canonicalWorkspace(workspacePath);
     const counts = emptyScratchCounts();
@@ -118,7 +141,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
         // A removal reservation/partial allocation is not an owner yet. Inspect
         // its locator before claiming a fence; authority is rechecked below.
         await readManagedScratchOwner(directory, workspacePath, ownerId);
-        containment = await claimScratchContainment(directory, ownerId);
+        containment = await claimScratchContainment(directory, ownerId, inherited);
         release = await claimOwnerFence(directory);
         const marker = await readManagedScratchOwner(directory, workspacePath, ownerId);
         await this.releasedLeases(directory, marker);
@@ -128,8 +151,42 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
           marker,
           protectedSessions,
           authorized,
+          onlyOwnerId ??
+            (authorizedSessionId ? mobileScratchOwnerId(authorizedSessionId) : undefined),
         );
+        if (authorized) {
+          await this.retireNestedNamespaces(
+            directory,
+            protectedSessions,
+            authorized,
+            authorizedSessionId,
+            containment,
+          );
+          if (marker.runtime && (await validateRuntime(marker, marker.runtime, true)))
+            await this.retireNestedNamespaces(
+              marker.runtime.directory,
+              protectedSessions,
+              authorized,
+              authorizedSessionId,
+              containment,
+            );
+        }
         await this.validatePayload(directory);
+        if (marker.runtime) {
+          const present = await validateRuntime(marker, marker.runtime, true);
+          if (present) {
+            await this.assertProtection(
+              directory,
+              join(container, ownerId),
+              marker,
+              protectedSessions,
+              authorized,
+              onlyOwnerId ??
+                (authorizedSessionId ? mobileScratchOwnerId(authorizedSessionId) : undefined),
+            );
+            await this.validatePayload(marker.runtime.directory);
+          }
+        }
         await privateDirectory(directory, false);
         await containment.revalidate();
         if (name === ownerId) {
@@ -143,6 +200,8 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
               marker,
               protectedSessions,
               authorized,
+              onlyOwnerId ??
+                (authorizedSessionId ? mobileScratchOwnerId(authorizedSessionId) : undefined),
             );
           } catch (error) {
             await rmdir(retired);
@@ -163,6 +222,8 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
           marker,
           protectedSessions,
           authorized,
+          onlyOwnerId ??
+            (authorizedSessionId ? mobileScratchOwnerId(authorizedSessionId) : undefined),
         );
         // Keep authority metadata until disposable payload has been removed. A failed
         // payload deletion is retryable; an interrupted metadata retirement is unknown.
@@ -175,6 +236,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
             continue;
           await rm(payloadPath(directory, child), { recursive: true });
         }
+        await this.retireRuntime(directory, marker);
         if ((await readdir(directory)).includes('leases'))
           await rm(join(directory, 'leases'), { recursive: true });
         await rm(join(directory, scratchMarkerName));
@@ -242,12 +304,113 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
       reject('lease');
   }
 
+  /** Final workspace authority can retire positively attributed nested namespaces,
+   * but every nested roster, lease, inode and fence still has to pass its gate. */
+  async retireNestedNamespaces(
+    directory: string | Buffer,
+    protectedSessions: () => readonly ScratchSessionOwner[],
+    authorized: () => boolean,
+    authorizedSessionId?: string,
+    inherited?: InheritedContainment,
+    skipContainer = false,
+    depth = 0,
+    budget = { entries: 0 },
+  ): Promise<void> {
+    if (depth > 128 || !authorized()) reject('protected');
+    let entries;
+    try {
+      entries = await readdir(directory, { encoding: 'buffer', withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (++budget.entries > 100000) reject('unrecognized');
+      const name = entry.name.toString();
+      if (skipContainer && name === 'sessions') continue;
+      const path = payloadPath(directory, entry.name),
+        info = await lstat(path);
+      if (process.getuid && info.uid !== process.getuid()) reject('unsafe');
+      if (!info.isDirectory() || info.isSymbolicLink()) continue;
+      if (name === 'tmp') {
+        const workspace = directory.toString();
+        if (Buffer.isBuffer(directory) && !Buffer.from(workspace).equals(directory))
+          reject('unrecognized');
+        const counts = await this.cleanWorkspace(
+          workspace,
+          protectedSessions,
+          undefined,
+          authorized,
+          authorizedSessionId,
+          inherited,
+        );
+        if (counts.skipped || counts.failed) reject('unrecognized');
+        const container = join(workspace, 'tmp', 'sessions');
+        try {
+          await privateDirectory(container, false);
+          const remaining = await readdir(container);
+          if (remaining.some((child) => child !== '.gitignore')) reject('unrecognized');
+          if (remaining.includes('.gitignore')) await rm(join(container, '.gitignore'));
+          await rmdir(container);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+      }
+      await this.retireNestedNamespaces(
+        path,
+        protectedSessions,
+        authorized,
+        authorizedSessionId,
+        inherited,
+        name === 'tmp',
+        depth + 1,
+        budget,
+      );
+    }
+  }
+
+  private async retireRuntime(directory: string, marker: ManagedScratchOwner) {
+    if (!marker.runtime) return;
+    const runtime = marker.runtime;
+    if (!(await validateRuntime(marker, runtime, true))) return;
+    // Persist retirement intent before either authority record is removed.
+    // After a crash an absent runtime is acceptable only with this exact record;
+    // a replacement inode or a nonempty directory without its marker is retained.
+    if (!runtime.retiring) {
+      marker.runtime = { ...runtime, retiring: true };
+      const staging = join(directory, `.owner-${randomUUID()}.json`);
+      const handle = await open(staging, 'wx', 0o600);
+      try {
+        await handle.writeFile(`${JSON.stringify(marker)}\n`);
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await rename(staging, join(directory, scratchMarkerName));
+    }
+    const children = await readdir(runtime.directory, { encoding: 'buffer' });
+    const attributed = children.some((child) => child.toString() === runtimeMarkerName);
+    if (!attributed && children.length) reject('unrecognized');
+    if (attributed) {
+      await validateRuntime(marker, marker.runtime, true);
+      for (const child of children) {
+        if (child.toString() !== runtimeMarkerName)
+          await rm(payloadPath(runtime.directory, child), { recursive: true });
+      }
+      await validateRuntime(marker, marker.runtime, true);
+      await rm(join(runtime.directory, runtimeMarkerName));
+    }
+    if ((await runtimeIdentity(runtime.directory)) !== runtime.identity) reject('unsafe');
+    await rmdir(runtime.directory);
+  }
+
   private async assertProtection(
     directory: string,
     logicalDirectory: string,
     marker: ManagedScratchOwner,
     protectedSessions: () => readonly ScratchSessionOwner[],
     authorized?: () => boolean,
+    authorizedOwnerId?: string,
   ) {
     if (authorized && !authorized()) reject('protected');
     const within = (root: string, path: string) => {
@@ -258,7 +421,12 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
     };
     for (const session of protectedSessions()) {
       // Only this exact targeted owner's authorized Forget may exclude itself.
-      if (authorized && marker.ownerKind === 'mobile-session' && session.id === marker.sessionId)
+      if (
+        authorized &&
+        marker.ownerId === authorizedOwnerId &&
+        marker.ownerKind === 'mobile-session' &&
+        session.id === marker.sessionId
+      )
         continue;
       if (marker.ownerKind === 'mobile-session' && session.id === marker.sessionId)
         reject('protected');
@@ -273,7 +441,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
       for (const workspace of paths) {
         const scratch = join(workspace, 'tmp', 'sessions', mobileScratchOwnerId(session.id));
         if (
-          [directory, logicalDirectory].some(
+          [directory, logicalDirectory, ...(marker.runtime ? [marker.runtime.directory] : [])].some(
             (owner) => within(owner, workspace) || within(owner, scratch),
           )
         )
@@ -299,19 +467,24 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
       reject('unrecognized');
     for (const entry of await readdir(directory, { encoding: 'buffer', withFileTypes: true })) {
       const child = entry.name;
+      if (child.toString() === workspacePublicationName) reject('busy');
       if (++budget.entries > 100_000) reject('unrecognized');
       if (
         directory !== root &&
-        [scratchMarkerName, '.controller-lock', '.association-lock', containmentFenceName].includes(
-          child.toString(),
-        )
+        [
+          scratchMarkerName,
+          runtimeMarkerName,
+          '.controller-lock',
+          '.association-lock',
+          containmentFenceName,
+        ].includes(child.toString())
       )
         reject('unrecognized');
       const path = payloadPath(directory, child);
       const info = await lstat(path);
       if (
         (process.getuid && info.uid !== process.getuid()) ||
-        (!info.isDirectory() && !info.isFile() && !info.isSymbolicLink()) ||
+        (!info.isDirectory() && !info.isFile() && !info.isSymbolicLink() && !info.isSocket()) ||
         (info.isFile() && info.nlink !== 1)
       )
         reject('unsafe');
