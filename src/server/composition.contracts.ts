@@ -11367,6 +11367,111 @@ describe('production composition', () => {
       await third.close();
     }, 20000);
 
+    it.each(['initialize', 'thread/start'])(
+      'releases a failed %s start so a new session can use the same workspace',
+      async (failedMethod) => {
+        const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+        const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+        ownTemporaryPaths(root, dataDir);
+        await mkdir(join(root, 'workspace'));
+        let fail = true;
+        const released = vi.fn(async () => {});
+        const app = await composeAuthorizedApp({
+          root,
+          dataDir,
+          relyingParty,
+          profiles: {
+            list: async () => [],
+            require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
+          },
+          installedCodexVersion: 'codex-cli 0.167.2',
+          startAppServers: true,
+          launchAppServer: (options) => {
+            const process = fakeAppServer([]);
+            return {
+              ...process,
+              closeAndWait: released,
+              rpc: {
+                ...process.rpc,
+                request: async (method, params) => {
+                  if (options.environment && fail && method === failedMethod) {
+                    fail = false;
+                    throw new CodexJsonRpcError(-32600, 'Invalid startup settings');
+                  }
+                  return process.rpc.request(method, params);
+                },
+              },
+            };
+          },
+        });
+        try {
+          const workspace = (await app.inject('/api/bootstrap')).json().workspaces[0].children[0];
+          const payload = { workspaceId: workspace.id, profile: 'default', provider: 'codex' };
+          const failed = await app.inject({ method: 'POST', url: '/api/sessions', payload });
+          expect(failed.statusCode).toBe(500);
+          const db = new DatabaseSync(join(dataDir, 'relay.sqlite'));
+          try {
+            expect(
+              db.prepare('SELECT state,desired_state,thread_id FROM relay_sessions').all(),
+            ).toEqual([{ state: 'stopped', desired_state: 'stopped', thread_id: null }]);
+          } finally {
+            db.close();
+          }
+          expect(released).toHaveBeenCalled();
+          const retry = await app.inject({ method: 'POST', url: '/api/sessions', payload });
+          expect(retry.statusCode).toBe(202);
+          expect(retry.json()).toMatchObject({ state: 'ready', threadId: 'thread-1' });
+        } finally {
+          await app.close();
+        }
+      },
+    );
+
+    it.each(['starting', 'recovering'] as const)(
+      'clears a persisted %s session without a thread when the relay restarts',
+      async (state) => {
+        const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+        const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+        ownTemporaryPaths(root, dataDir);
+        await mkdir(join(root, 'workspace'));
+        const options: ComposeRelayAppOptions = {
+          root,
+          dataDir,
+          relyingParty,
+          profiles: {
+            list: async () => [],
+            require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
+          },
+          installedCodexVersion: 'codex-cli 0.167.2',
+          startAppServers: false,
+          launchAppServer: () => fakeAppServer([]),
+        };
+        const first = await composeAuthorizedApp(options);
+        const workspace = (await first.inject('/api/bootstrap')).json().workspaces[0].children[0];
+        const payload = { workspaceId: workspace.id, profile: 'default', provider: 'codex' };
+        const created = await first.inject({ method: 'POST', url: '/api/sessions', payload });
+        expect(created.statusCode).toBe(202);
+        await first.close();
+        const db = new DatabaseSync(join(dataDir, 'relay.sqlite'));
+        try {
+          db.prepare('UPDATE relay_sessions SET state=? WHERE id=?').run(state, created.json().id);
+        } finally {
+          db.close();
+        }
+        const restarted = await composeAuthorizedApp(options);
+        try {
+          await restarted.listen({ host: '127.0.0.1', port: 0 });
+          expect(
+            (await restarted.inject(`/api/sessions/${created.json().id}`)).json(),
+          ).toMatchObject({ state: 'stopped', desiredState: 'stopped', threadId: null });
+          const retry = await restarted.inject({ method: 'POST', url: '/api/sessions', payload });
+          expect(retry.statusCode).toBe(202);
+        } finally {
+          await restarted.close();
+        }
+      },
+    );
+
     it('detaches active persisted threads when the relay restarts without resuming a writer', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));

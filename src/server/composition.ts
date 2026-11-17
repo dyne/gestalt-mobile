@@ -2342,8 +2342,22 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             const now = new Date().toISOString();
             dismissPendingInteractions(session.id, now);
             const owner = ownerRuntime(session);
-            if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
-            return withWorkspaceAdmission(session.id, () => owner.start(session, now));
+            return withWorkspaceAdmission(session.id, async () => {
+              try {
+                if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
+                return await owner.start(session, now);
+              } catch (error) {
+                // Publication and scratch admission precede provider startup.
+                // Release its resources before allowing another workspace writer.
+                await owner?.releaseForForget(session);
+                const current = sessions.find(session.id);
+                if (current && current.desiredState === 'active')
+                  saveSession(
+                    RelaySession.rehydrate(current).stop(new Date().toISOString()).snapshot,
+                  );
+                throw error;
+              }
+            });
           }
         : undefined,
   };
@@ -3250,9 +3264,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   }
   const detachActiveSessions = async () => {
     await mapWithConcurrency(
-      sessions
-        .list()
-        .filter((session) => persistedSessionIds.has(session.id) && session.threadId !== null),
+      sessions.list().filter((session) => persistedSessionIds.has(session.id)),
       2,
       async (session) => {
         if (forgetOperations.find(session.id)) return;
@@ -3263,6 +3275,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           saveSession(RelaySession.rehydrate(session).stop(new Date().toISOString()).snapshot);
           await (session.provider === 'kimi' ? kimiRuntime : runtime)?.release(session.id);
         }
+        // An interrupted initial start has no thread to watch or resume, but
+        // its durable active reservation must still be detached on restart.
+        if (session.threadId === null) return;
         await runtime?.watchPlanStatus(session);
         autopilot.restore(session.id);
         // A prior process cannot resolve its original JSON-RPC request.  Turn
