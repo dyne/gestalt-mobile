@@ -22,6 +22,27 @@ const input = () => ({
   launch: null,
 });
 
+it('publishes a durable replacement identity as a compact delta without exposing its evidence', () => {
+  const cache = new SupervisionSnapshots();
+  const original = input();
+  const first = cache.read('s', compactSupervisionSnapshot(original));
+  const identity = {
+    canonicalPosition: 'L3',
+    canonicalTaskName: 'l3',
+    taskName: 'l3_g2',
+    generation: 2,
+  };
+  const next = cache.read(
+    's',
+    compactSupervisionSnapshot({ ...original, executorReplacement: identity }),
+    first.revision,
+  );
+  expect(next.changes).toEqual({ executorReplacement: identity });
+  expect(cache.read('s', compactSupervisionSnapshot(original), next.revision).changes).toEqual({
+    executorReplacement: null,
+  });
+});
+
 it('preserves suspension, unreviewed completion and denied execution admission', () => {
   const original = input();
   const plan: SupervisedPlan = {

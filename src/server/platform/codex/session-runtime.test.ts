@@ -20,6 +20,7 @@ import { gestaltAutopilotWaitLeaseDynamicTool } from '../../../shared/contracts/
 import { gestaltAgentCapacityRecoveryDynamicTool } from '../../../shared/contracts/agent-capacity-recovery.js';
 import { gestaltManagedPlaywrightDynamicTool } from '../../../shared/contracts/managed-playwright.js';
 import { gestaltOrgPlanTakeoverDynamicTool } from '../../../shared/contracts/org-plan-takeover.js';
+import { gestaltOrgPlanReplaceExecutorDynamicTool } from '../../../shared/contracts/org-plan-replace-executor.js';
 import { RelaySession } from '../../features/sessions/model/relay-session.js';
 import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
@@ -2134,6 +2135,7 @@ describe('CodexSessionRuntime', () => {
         gestaltAutopilotWaitLeaseDynamicTool,
         gestaltAgentCapacityRecoveryDynamicTool,
         gestaltOrgPlanTakeoverDynamicTool,
+        gestaltOrgPlanReplaceExecutorDynamicTool,
         gestaltManagedPlaywrightDynamicTool,
       ],
     });
@@ -2675,6 +2677,7 @@ describe('CodexSessionRuntime', () => {
           gestaltAutopilotWaitLeaseDynamicTool,
           gestaltAgentCapacityRecoveryDynamicTool,
           gestaltOrgPlanTakeoverDynamicTool,
+          gestaltOrgPlanReplaceExecutorDynamicTool,
           gestaltManagedPlaywrightDynamicTool,
         ],
       });

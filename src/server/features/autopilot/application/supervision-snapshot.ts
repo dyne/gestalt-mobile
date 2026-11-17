@@ -11,6 +11,7 @@ import { currentExecutableL1Index } from '../../plans/domain/supervised-plan.js'
 import type { ExecutorModelEvidenceReader } from '../../plans/application/executor-model-evidence.js';
 import type { ExecutorLaunchValidationReader } from '../../plans/application/executor-launch-validation.js';
 import type { AutopilotSnapshot } from '../domain/autopilot-session.js';
+import type { ExecutorIdentity } from '../domain/supervised-lifecycle.js';
 import type { SupervisionProtocolState } from '../domain/supervision-protocol.js';
 import type { HostTestResult } from '../../../../shared/contracts/host-tests.js';
 import { executionComplete } from './policy.js';
@@ -34,6 +35,7 @@ type Input = Readonly<{
   binding: { status: string; code: string } | null;
   modelPolicy: Awaited<ReturnType<ExecutorModelEvidenceReader['read']>>;
   launch: Awaited<ReturnType<ExecutorLaunchValidationReader['read']>>;
+  executorReplacement?: ExecutorIdentity | null;
 }>;
 
 const id = (value: string | null | undefined) => (value && value.length <= 128 ? value : null);
@@ -117,6 +119,7 @@ export function compactSupervisionSnapshot(input: Input) {
           outcome: a.executor.outcome,
         }
       : null,
+    executorReplacement: input.executorReplacement ?? null,
     activity: {
       confidence: activity.confidence,
       root: activity.root.state,

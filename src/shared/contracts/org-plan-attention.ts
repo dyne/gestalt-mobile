@@ -72,13 +72,8 @@ export const gestaltOrgPlanAttentionDynamicTool = {
         properties: { canonicalTaskName: { type: 'string', pattern: '^l[1-9][0-9]*$' } },
       },
     },
-    oneOf: orgPlanAttentionReasons.map((reason) => ({
-      properties: {
-        reason: { const: reason },
-        resumeCondition: { const: orgPlanAttentionResumeConditionByReason[reason] },
-      },
-      required: ['reason', 'resumeCondition'],
-    })),
+    // Union rendering can drop sibling properties from the model-visible tool
+    // declaration. Keep it flat; parseOrgPlanAttention validates reason pairs.
   },
 } as const;
 

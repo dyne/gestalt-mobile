@@ -3055,6 +3055,123 @@ describe('production composition', () => {
       await accepted.app.close();
     });
 
+    it('replaces a stopped executor in the current root on explicit user instruction and exposes one durable identity through health', async () => {
+      let rootThreadId = 'thread-1';
+      const fixture = await createProductionAutopilotFixture({
+        activitySchedule: () => () => {},
+        autopilotSchedule: () => () => {},
+        autopilotActivity: (sessionId) => {
+          const now = new Date().toISOString();
+          return {
+            sessionId,
+            rootThreadId,
+            confidence: 'fresh',
+            aggregateSubagents: 'idle',
+            root: { state: 'working', reason: 'turnActive', observedAt: now, lastActivityAt: now },
+            subagents: [
+              {
+                id: 'child',
+                threadId: 'child',
+                taskPath: '/root/l1',
+                canonicalTaskName: 'l1',
+                canonicalPosition: 'L1',
+                continuationGeneration: 1,
+                state: 'idle',
+                reason: 'turnCompleted',
+                observedAt: now,
+                lastActivityAt: now,
+                ownedProcesses: [],
+              },
+            ],
+          };
+        },
+      });
+      onTestFinished(() => fixture.app.close());
+      await fixture.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${fixture.sessionId}/turns`,
+        payload: { text: 'Replace the current executor.', clientUserMessageId: 'replace-test' },
+      });
+      const current = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+      rootThreadId = current.threadId;
+      const { SqliteAutopilotStore } =
+        await import('./platform/persistence/sqlite-autopilot-store.js');
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      onTestFinished(() => database.close());
+      const store = new SqliteAutopilotStore(database);
+      store.save({
+        ...store.find(fixture.sessionId)!,
+        executor: {
+          canonicalPosition: 'L1',
+          canonicalTaskName: 'l1',
+          taskPath: '/root/l1',
+          threadId: 'child',
+          l1State: 'WIP',
+          lastActivityAt: new Date().toISOString(),
+          ownedProcesses: [],
+          outcome: 'partial',
+          continuationGeneration: 1,
+          continuationCount: 0,
+        },
+      });
+      const handle = fixture.handles.find((h) =>
+        h.requests.some(
+          (r) =>
+            r.method === 'turn/start' &&
+            (r.params as { threadId: string }).threadId === current.threadId,
+        ),
+      )!;
+      const request = async (
+        id: number,
+        tool: string,
+        args: unknown,
+        turnId = current.activeTurnId,
+      ) => {
+        const result = (await handle.request!({
+          id,
+          method: 'item/tool/call',
+          params: { threadId: current.threadId, turnId, tool, arguments: args },
+        })) as { contentItems: Array<{ text: string }> };
+        return JSON.parse(result.contentItems[0]!.text);
+      };
+      const args = { version: 1, reason: 'userDirectedReplacement', canonicalTaskName: 'l1' };
+      expect(
+        await request(9900, 'gestalt_org_plan_replace_executor', args, 'stale-turn'),
+      ).toMatchObject({ accepted: false });
+      const expected = {
+        accepted: true,
+        identity: {
+          canonicalPosition: 'L1',
+          canonicalTaskName: 'l1',
+          taskName: 'l1_g2',
+          generation: 2,
+        },
+      };
+      expect(await request(9901, 'gestalt_org_plan_replace_executor', args)).toEqual(expected);
+      expect(await request(9902, 'gestalt_org_plan_replace_executor', args)).toEqual(expected);
+      expect(await request(9903, 'gestalt_org_plan_health', {})).toMatchObject({
+        executorReplacement: expected.identity,
+      });
+      expect(await request(9904, 'gestalt_org_plan_health', { view: 'compact' })).toMatchObject({
+        snapshot: { executorReplacement: expected.identity },
+      });
+      expect(
+        database
+          .prepare(
+            "SELECT count(*) AS n FROM session_events WHERE session_id = ? AND type = 'autopilot.executor-replacement-authorized'",
+          )
+          .get(fixture.sessionId),
+      ).toEqual({ n: 1 });
+      expect(
+        database
+          .prepare(
+            "SELECT count(*) AS n FROM pending_interactions WHERE session_id = ? AND kind = 'orgPlanAttention'",
+          )
+          .get(fixture.sessionId),
+      ).toEqual({ n: 0 });
+      expect(store.find(fixture.sessionId)?.executor?.replacement?.taskName).toBe('l1_g2');
+    });
+
     it.each(['Close', 'Forget'] as const)(
       'lets a user-directed new session take over after %s without an approval or an unreachable old-root executor',
       async (operation) => {
