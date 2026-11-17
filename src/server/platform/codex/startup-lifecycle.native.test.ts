@@ -24,6 +24,10 @@ import {
 import type { AvailableSkill } from '../../features/skills/model/skill-profile.js';
 import { sessionScratchEnvironmentKeys } from '../scratch/child-environment.js';
 import {
+  orgPlanAttentionReasons,
+  orgPlanAttentionResumeConditionByReason,
+} from '../../../shared/contracts/org-plan-attention.js';
+import {
   installStartupFixture,
   startupDescriptor,
   syntheticBlock,
@@ -131,7 +135,13 @@ const userText = (input: ModelInput) =>
     .join('\n');
 const run = promisify(execFile);
 
-async function fixture(options: { legacy?: boolean; role?: 'default' | 'named' | 'owned' } = {}) {
+async function fixture(
+  options: {
+    legacy?: boolean;
+    role?: 'default' | 'named' | 'owned';
+    legacyAttentionUnion?: boolean;
+  } = {},
+) {
   const root = await mkdtemp(join(tmpdir(), 'mobile native lifecycle '));
   const home = join(root, 'home'),
     workspace = join(root, 'workspace'),
@@ -297,6 +307,37 @@ async function fixture(options: { legacy?: boolean; role?: 'default' | 'named' |
         rpc: {
           request: async (method: string, params: unknown) => {
             sent.push({ method, params });
+            if (
+              options.legacyAttentionUnion &&
+              (method === 'thread/start' || method === 'thread/resume')
+            ) {
+              const input = params as {
+                dynamicTools?: Array<{ name: string; inputSchema: object }>;
+              };
+              if (input.dynamicTools)
+                params = {
+                  ...input,
+                  dynamicTools: input.dynamicTools.map((tool) =>
+                    tool.name === 'gestalt_org_plan_attention'
+                      ? {
+                          ...tool,
+                          inputSchema: {
+                            ...tool.inputSchema,
+                            oneOf: orgPlanAttentionReasons.map((reason) => ({
+                              properties: {
+                                reason: { const: reason },
+                                resumeCondition: {
+                                  const: orgPlanAttentionResumeConditionByReason[reason],
+                                },
+                              },
+                              required: ['reason', 'resumeCondition'],
+                            })),
+                          },
+                        }
+                      : tool,
+                  ),
+                };
+            }
             return native.request(method, params);
           },
           onNotification: native.onNotification.bind(native),
@@ -493,6 +534,28 @@ function assertDelivery(captures: Capture[], expectedBlocks: number, role = 'ROO
     expect(count(text, '<gestalt_serena_capability>')).toBe(0);
   }
 }
+
+it.skipIf(process.env.RUN_INSTALLED_CODEX !== '1').each([true, false])(
+  'native Codex transports replacement metadata and the selected attention schema; legacyUnion=%s',
+  async (legacyAttentionUnion) => {
+    const f = await fixture({ legacyAttentionUnion });
+    const session = await f.runtime.start(f.initial, 't');
+    await f.turn(session, 'replacement-contract');
+    expect(f.captures.length).toBeGreaterThan(0);
+    for (const capture of f.captures) {
+      const tools = JSON.stringify(capture.input.tools);
+      expect(tools).toContain('gestalt_org_plan_attention');
+      // Native transport retains siblings even in the old union. The loss was
+      // in the model-visible declaration, downstream of this request boundary.
+      expect(tools).toContain('executorReplacement');
+      expect(tools).toContain('requestedAction');
+      expect(tools.includes('"oneOf"')).toBe(legacyAttentionUnion);
+      expect(tools).toContain('gestalt_org_plan_replace_executor');
+      expect(tools).toContain('userDirectedReplacement');
+    }
+  },
+  60_000,
+);
 
 it.skipIf(process.env.RUN_INSTALLED_CODEX !== '1').each([false, true])(
   'native retained lifecycle keeps durable bytes across restore/recovery/fork and contract update; legacy=%s',

@@ -40,7 +40,6 @@ describe('Org Plan attention contract', () => {
           reason: { type: 'string', enum: expect.arrayContaining(['planChange', 'hardBlock']) },
           summary: { type: 'string', minLength: 1, maxLength: 600 },
         }),
-        oneOf: expect.any(Array),
       },
     });
   });
@@ -81,14 +80,10 @@ describe('Org Plan attention contract', () => {
       resumeConditions: orgPlanAttentionResumeConditions,
       reasonResumeConditions: orgPlanAttentionResumeConditionByReason,
     });
-    expect(gestaltOrgPlanAttentionDynamicTool.inputSchema.oneOf).toEqual(
-      orgPlanAttentionReasons.map((reason) => ({
-        properties: {
-          reason: { const: reason },
-          resumeCondition: { const: orgPlanAttentionResumeConditionByReason[reason] },
-        },
-        required: ['reason', 'resumeCondition'],
-      })),
+    // Native Codex must see sibling metadata rather than a reason-only union.
+    expect(gestaltOrgPlanAttentionDynamicTool.inputSchema).not.toHaveProperty('oneOf');
+    expect(gestaltOrgPlanAttentionDynamicTool.inputSchema.properties).toHaveProperty(
+      'executorReplacement',
     );
     for (const reason of orgPlanAttentionReasons) {
       const resumeCondition = orgPlanAttentionResumeConditionByReason[reason];

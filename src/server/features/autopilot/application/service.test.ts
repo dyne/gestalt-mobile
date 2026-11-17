@@ -3701,6 +3701,119 @@ ${index === 10 ? '** SUSPENDED [#A] L11.1\n:PROPERTIES:\n:ID: l11-1\n:END:\n- Wh
       expect(fixture.state?.supervision?.outcome).toBe('probeRequired');
     });
 
+    function userReplacementSubject() {
+      const fixture = subject();
+      fixture.session = { state: 'turnActive', threadId: 'root', activeTurnId: 'user-turn' };
+      fixture.activity = { ...fixture.activity, rootThreadId: 'root' };
+      fixture.state = {
+        ...fixture.state!,
+        planFingerprint: JSON.stringify(
+          fixture.plan.steps.map((step) => [
+            step.id,
+            step.state,
+            step.reviewStatus,
+            step.children.map((child) => [child.id, child.state]),
+          ]),
+        ),
+        executor: {
+          canonicalPosition: 'L1',
+          canonicalTaskName: 'l1',
+          taskPath: '/root/l1',
+          threadId: 'thread-l1',
+          l1State: 'WIP',
+          lastActivityAt: now,
+          ownedProcesses: [],
+          outcome: 'partial',
+          continuationGeneration: 1,
+          continuationCount: 0,
+        },
+      };
+      return fixture;
+    }
+
+    it('honors an explicit user replacement in the same supervisor without another permission request', () => {
+      const f = userReplacementSubject();
+      const replace = () =>
+        f.coordinator.authorizeExecutorReplacement('s', 'l1', 'userInstruction');
+      const expected = {
+        accepted: true,
+        identity: {
+          canonicalPosition: 'L1',
+          canonicalTaskName: 'l1',
+          taskName: 'l1_g2',
+          generation: 2,
+        },
+      };
+      expect(replace()).toEqual(expected);
+      expect(replace()).toEqual(expected);
+      expect(f.state?.state).toBe('monitoring');
+      expect(f.state?.blocking).toBeUndefined();
+      expect(f.state?.executor?.replacement?.evidence).toBe('explicit-user-replacement');
+      expect(f.coordinator.executorReplacement('s')).toEqual(expected.identity);
+      expect(
+        f.published.filter((type) => type === 'autopilot.executor-replacement-authorized'),
+      ).toHaveLength(1);
+      f.planIdentity = 'other-plan';
+      expect(f.coordinator.executorReplacement('s')).toBeNull();
+      expect(replace()).toEqual({ accepted: false, reason: 'planMismatch' });
+    });
+
+    it.each([
+      'off',
+      'attention',
+      'pending',
+      'root',
+      'stale',
+      'missing',
+      'working',
+      'process',
+      'persistedProcess',
+      'position',
+    ])('preserves the existing writer when user replacement is fenced by %s', (fence) => {
+      const f = userReplacementSubject();
+      const process = {
+        processId: 'p',
+        itemId: 'i',
+        ownerThreadId: 'thread-l1',
+        ownerTaskPath: '/root/l1',
+        ownership: 'executor' as const,
+        state: 'running' as const,
+        observedAt: now,
+        elapsedMs: 1,
+        cpuPercent: null,
+        rssBytes: null,
+      };
+      if (fence === 'off') f.state = { ...f.state!, requestedEnabled: false, state: 'disabled' };
+      if (fence === 'attention')
+        f.state = {
+          ...f.state!,
+          state: 'attentionRequired',
+          blocking: { reason: 'externalState', resumeCondition: 'externalStateChanged' },
+        };
+      if (fence === 'pending') f.pending = true;
+      if (fence === 'root') f.activity = { ...f.activity, rootThreadId: 'other-root' };
+      if (fence === 'stale') f.activity = { ...f.activity, confidence: 'stale' };
+      if (fence === 'missing') f.activity = { ...f.activity, subagents: [] };
+      if (fence === 'working')
+        f.activity = {
+          ...f.activity,
+          subagents: [{ ...f.activity.subagents[0]!, state: 'working' }],
+        };
+      if (fence === 'process')
+        f.activity = {
+          ...f.activity,
+          subagents: [{ ...f.activity.subagents[0]!, ownedProcesses: [process] }],
+        };
+      if (fence === 'persistedProcess')
+        f.state = { ...f.state!, executor: { ...f.state!.executor!, ownedProcesses: [process] } };
+      if (fence === 'position')
+        f.state = { ...f.state!, executor: { ...f.state!.executor!, canonicalPosition: 'L2' } };
+      expect(
+        f.coordinator.authorizeExecutorReplacement('s', 'l1', 'userInstruction').accepted,
+      ).toBe(false);
+      expect(f.state?.executor?.replacement).toBeUndefined();
+    });
+
     it('turns typed human permission into one exact durable replacement authorization', () => {
       const fixture = subject();
       const planFingerprint = JSON.stringify(

@@ -40,6 +40,7 @@ import { gestaltTestRunnerDynamicTool } from '../../../shared/contracts/host-tes
 import { gestaltAutopilotWaitLeaseDynamicTool } from '../../../shared/contracts/autopilot-wait-lease.js';
 import { gestaltAgentCapacityRecoveryDynamicTool } from '../../../shared/contracts/agent-capacity-recovery.js';
 import { gestaltOrgPlanTakeoverDynamicTool } from '../../../shared/contracts/org-plan-takeover.js';
+import { gestaltOrgPlanReplaceExecutorDynamicTool } from '../../../shared/contracts/org-plan-replace-executor.js';
 import { gestaltManagedPlaywrightDynamicTool } from '../../../shared/contracts/managed-playwright.js';
 import { countDiffLines } from '../../../shared/contracts/file-change.js';
 import { threadPlanName } from './thread-plan-name.js';
@@ -1739,6 +1740,7 @@ export class CodexSessionRuntime {
             gestaltAutopilotWaitLeaseDynamicTool,
             gestaltAgentCapacityRecoveryDynamicTool,
             gestaltOrgPlanTakeoverDynamicTool,
+            gestaltOrgPlanReplaceExecutorDynamicTool,
             gestaltManagedPlaywrightDynamicTool,
           ],
         });
@@ -1881,6 +1883,7 @@ export class CodexSessionRuntime {
         gestaltAutopilotWaitLeaseDynamicTool,
         gestaltAgentCapacityRecoveryDynamicTool,
         gestaltOrgPlanTakeoverDynamicTool,
+        gestaltOrgPlanReplaceExecutorDynamicTool,
         gestaltManagedPlaywrightDynamicTool,
       ],
       ...(session.model ? { model: session.model } : {}),

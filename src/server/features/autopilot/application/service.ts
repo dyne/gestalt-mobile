@@ -905,21 +905,48 @@ export class AutopilotCoordinator {
     this.evaluate(sessionId);
     return this.snapshot(sessionId);
   }
+  /** Exposes only current, durable replacement authority, never a guessed generation. */
+  executorReplacement(
+    sessionId: string,
+    snapshot = this.snapshot(sessionId),
+  ): ExecutorIdentity | null {
+    const replacement = snapshot.executor?.replacement;
+    if (!replacement || !this.validReplacement(sessionId, replacement)) return null;
+    const { canonicalPosition, canonicalTaskName, taskName, generation } = replacement;
+    return { canonicalPosition, canonicalTaskName, taskName, generation };
+  }
   /** Converts one typed human permission into one exact durable physical replacement. */
   authorizeExecutorReplacement(
     sessionId: string,
     canonicalTaskName: string,
+    authorization: 'attention' | 'userInstruction' = 'attention',
   ):
     | { accepted: true; identity: ExecutorIdentity }
     | {
         accepted: false;
         reason:
-          'attentionRequired' | 'executorNotAssigned' | 'executorStillActive' | 'planMismatch';
+          | 'attentionRequired'
+          | 'executorNotAssigned'
+          | 'executorStillActive'
+          | 'planMismatch'
+          | 'controlBlocked';
       } {
     const state = this.deps.store.find(sessionId);
     const retained = this.deps.plan(sessionId);
-    if (
-      !state ||
+    if (!state) return { accepted: false, reason: 'attentionRequired' };
+    if (authorization === 'userInstruction') {
+      const session = this.deps.session(sessionId);
+      if (
+        !state.requestedEnabled ||
+        !['monitoring', 'backoff'].includes(state.state) ||
+        state.blocking ||
+        this.deps.pendingInteraction(sessionId) ||
+        !session?.activeTurnId ||
+        session.state !== 'turnActive' ||
+        (this.deps.supervisorOwnership?.(sessionId) ?? 'owned') !== 'owned'
+      )
+        return { accepted: false, reason: 'controlBlocked' };
+    } else if (
       state.state !== 'attentionRequired' ||
       state.blocking?.reason !== 'permissionRequired'
     )
@@ -933,10 +960,41 @@ export class AutopilotCoordinator {
     const executor = state.executor;
     if (!executor || executor.canonicalTaskName !== canonicalTaskName || executor.l1State !== 'WIP')
       return { accepted: false, reason: 'executorNotAssigned' };
+    const position = currentExecutableL1Index(retained.plan);
+    if (
+      position < 0 ||
+      executor.canonicalPosition !== `L${position + 1}` ||
+      retained.plan.steps[position]?.state !== 'WIP'
+    )
+      return { accepted: false, reason: 'planMismatch' };
     if (executor.replacement && this.validReplacement(sessionId, executor.replacement))
-      return { accepted: true, identity: executor.replacement };
+      return { accepted: true, identity: this.executorReplacement(sessionId)! };
     const activity = this.deps.activity(sessionId);
     if (activity?.confidence !== 'fresh' || this.executorTurnActive(executor, activity))
+      return { accepted: false, reason: 'executorStillActive' };
+    if (
+      authorization === 'userInstruction' &&
+      (activity.rootThreadId !== this.deps.session(sessionId)?.threadId ||
+        activity.subagents.filter(
+          (child) =>
+            (child.threadId ?? child.id) === executor.threadId &&
+            child.taskPath === executor.taskPath &&
+            (child.continuationGeneration ?? 1) === executor.continuationGeneration,
+        ).length !== 1)
+    )
+      return { accepted: false, reason: 'executorNotAssigned' };
+    if (
+      executor.ownedProcesses.some((process) =>
+        ['running', 'detached-active', 'exited-awaiting-result'].includes(process.state),
+      ) ||
+      activity.subagents.some(
+        (child) =>
+          ['working', 'awaitingAgent', 'awaitingHuman', 'blocked'].includes(child.state) ||
+          child.ownedProcesses?.some((process) =>
+            ['running', 'detached-active', 'exited-awaiting-result'].includes(process.state),
+          ),
+      )
+    )
       return { accepted: false, reason: 'executorStillActive' };
 
     const previous = executor.assignment ?? executorAssignment(executor);
@@ -955,7 +1013,10 @@ export class AutopilotCoordinator {
             planFingerprint: fingerprint(retained.plan),
             previous: { ...previous, state: 'unavailable' },
             reason: 'humanPermissionGranted',
-            evidence: 'typed-attention-approval',
+            evidence:
+              authorization === 'userInstruction'
+                ? 'explicit-user-replacement'
+                : 'typed-attention-approval',
           },
           commands: executor.commands?.map((command) =>
             ['scheduled', 'issued'].includes(command.status)
@@ -975,7 +1036,10 @@ export class AutopilotCoordinator {
             previousTaskName: previous.taskName,
             taskName: identity.taskName,
             generation: identity.generation,
-            evidence: 'typed-attention-approval',
+            evidence:
+              authorization === 'userInstruction'
+                ? 'explicit-user-replacement'
+                : 'typed-attention-approval',
           },
           occurredAt: now,
         },

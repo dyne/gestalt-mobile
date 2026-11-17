@@ -103,6 +103,7 @@ import { SupervisionTakeover } from './features/autopilot/application/takeover-s
 import { SqliteSupervisionTakeoverStore } from './platform/persistence/sqlite-supervision-takeover-store.js';
 import { SqliteRuntimeReleaseStore } from './platform/persistence/sqlite-runtime-release-store.js';
 import { isOrgPlanTakeoverCall } from '../shared/contracts/org-plan-takeover.js';
+import { parseOrgPlanReplaceExecutorCall } from '../shared/contracts/org-plan-replace-executor.js';
 import { WriterAcquisitionError } from './features/sessions/application/writer-acquisition.js';
 import { toAgentActivityDto } from './features/agent-activity/activity-dto.js';
 import {
@@ -1665,6 +1666,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               executorLaunchValidation.read(sessionId),
             ]);
             const snapshot = autopilot.snapshot(sessionId);
+            const executorReplacement = autopilot.executorReplacement(sessionId, snapshot);
             const args = parseOrgPlanHealthArguments(toolCall?.arguments)!;
             const healthReport =
               args.view === 'compact'
@@ -1689,6 +1691,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                         : null,
                       modelPolicy,
                       launch: executorLaunch,
+                      executorReplacement,
                     }),
                     args.sinceRevision,
                   )
@@ -1697,6 +1700,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                     enabled: snapshot.enabled,
                     health: snapshot.health,
                     reason: snapshot.reason,
+                    executorReplacement,
                     ...(snapshot.executionAdmission
                       ? { executionAdmission: snapshot.executionAdmission }
                       : {}),
@@ -1724,6 +1728,23 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             );
             if ('handled' in expanded) return expanded.handled;
             rawInteraction = expanded.interaction;
+          }
+          const replacement = parseOrgPlanReplaceExecutorCall(request);
+          if (!rawInteraction && replacement) {
+            const result =
+              origin.kind === 'root' && origin.physicalTurnId === session.activeTurnId
+                ? autopilot.authorizeExecutorReplacement(
+                    sessionId,
+                    replacement.canonicalTaskName,
+                    'userInstruction',
+                  )
+                : { accepted: false as const, reason: 'CURRENT_ROOT_REQUIRED' };
+            return (
+              runtime?.resolveServerRequest(sessionId, String(request.id), {
+                success: true,
+                contentItems: [{ type: 'inputText', text: JSON.stringify(result) }],
+              }) === true
+            );
           }
           if (!rawInteraction && isOrgPlanTakeoverCall(request)) {
             const result =

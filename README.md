@@ -141,6 +141,18 @@ server revision. Child `modelPolicy.catalogRevision:null` does not mean the
 prelaunch catalog is unavailable. `CHILD_NOT_LAUNCHED` is expected before dispatch.
 Actual missing/incompatible catalogs retain explicit failure codes.
 
+When the user explicitly requests a replacement in the current supervisor
+session, call `gestalt_org_plan_replace_executor` with `version:1`,
+`reason:"userDirectedReplacement"` and the canonical `canonicalTaskName`
+(for example `l3`). That instruction supplies permission. Mobile checks the
+current plan, root ownership and stopped writer/processes, then persists and
+returns the exact physical identity. Retrying returns the same pending identity;
+resume it if already present in this root, otherwise spawn it once. Full and
+compact `gestalt_org_plan_health` expose it as `executorReplacement` until
+adoption or invalidation. Manual Off and unresolved attention remain independent
+gates. Use the attention tool's `executorReplacement` metadata only when user
+permission is still needed; use takeover only for a new supervisor session.
+
 Health retains `runtimeEnforcement:false`. Its `modelPolicy` evidence separately
 reports `admissionScope: runtime-attestation`, `admitted:false`, `attested:false`,
 requested values and observed configured thread settings. Unknown values remain
