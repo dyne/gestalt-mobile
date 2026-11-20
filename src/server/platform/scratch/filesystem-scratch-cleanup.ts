@@ -144,7 +144,6 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
         containment = await claimScratchContainment(directory, ownerId, inherited);
         release = await claimOwnerFence(directory);
         const marker = await readManagedScratchOwner(directory, workspacePath, ownerId);
-        await this.releasedLeases(directory, marker);
         await this.assertProtection(
           directory,
           join(container, ownerId),
@@ -154,6 +153,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
           onlyOwnerId ??
             (authorizedSessionId ? mobileScratchOwnerId(authorizedSessionId) : undefined),
         );
+        await this.releasedLeases(directory, marker);
         if (authorized) {
           await this.retireNestedNamespaces(
             directory,
