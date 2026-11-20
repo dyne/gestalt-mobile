@@ -37,7 +37,34 @@ export class OrgPlanDiscovery {
   constructor(private readonly execute: Run = run) {}
 
   async list(workspace: string): Promise<string[]> {
-    const args = ['.', '-type', 'f', '-name', '*.org', '-path', '*/.gestalt/*', '-print0'];
+    // Mark checkout roots without walking their Git metadata. A repository under
+    // a .gestalt directory is an internal checkout, not another project to list.
+    const args = [
+      '.',
+      '-name',
+      '.git',
+      '-print0',
+      '-prune',
+      '-o',
+      '-type',
+      'd',
+      '(',
+      '-path',
+      '*/tmp/sessions',
+      '-o',
+      '-path',
+      '*/.gestalt/evidence',
+      ')',
+      '-prune',
+      '-o',
+      '-type',
+      'f',
+      '-name',
+      '*.org',
+      '-path',
+      '*/.gestalt/*',
+      '-print0',
+    ];
     let output: string;
     try {
       output = await this.execute(this.command, args, workspace);
@@ -46,7 +73,7 @@ export class OrgPlanDiscovery {
       this.command = 'find';
       output = await this.execute('find', args, workspace);
     }
-    return [
+    const paths = [
       ...new Set(
         output
           .split('\0')
@@ -54,5 +81,19 @@ export class OrgPlanDiscovery {
           .map((path) => path.replace(/^\.\//, '')),
       ),
     ];
+    const internalCheckouts = new Set(
+      paths
+        .filter(
+          (path) => path.endsWith('/.git') && path.split('/').slice(0, -2).includes('.gestalt'),
+        )
+        .map((path) => path.slice(0, -'/.git'.length)),
+    );
+    return paths.filter((path) => {
+      if (!path.endsWith('.org')) return false;
+      for (let end = path.lastIndexOf('/'); end > 0; end = path.lastIndexOf('/', end - 1)) {
+        if (internalCheckouts.has(path.slice(0, end))) return false;
+      }
+      return true;
+    });
   }
 }

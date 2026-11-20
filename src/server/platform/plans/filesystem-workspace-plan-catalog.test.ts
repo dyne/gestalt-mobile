@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { FilesystemWorkspacePlanCatalog } from './filesystem-workspace-plan-catalog.js';
 import { OrgPlanDiscovery } from './org-plan-discovery.js';
+import { archiveOrgPlan } from './org-plan-archive-tag.js';
 
 const roots: string[] = [];
 afterEach(async () =>
@@ -151,6 +152,9 @@ describe('FilesystemWorkspacePlanCatalog', () => {
       mkdir(join(root, 'first', '.gestalt', 'nested'), { recursive: true }),
       mkdir(join(root, 'second', '.gestalt'), { recursive: true }),
       mkdir(join(root, 'first', '.git'), { recursive: true }),
+      mkdir(join(root, 'first', '.gestalt', 'worktree', '.gestalt'), { recursive: true }),
+      mkdir(join(root, 'first', '.gestalt', 'evidence'), { recursive: true }),
+      mkdir(join(root, 'first', 'tmp', 'sessions', 'copy', '.gestalt'), { recursive: true }),
     ]);
     await Promise.all([
       writeFile(join(root, 'ignored.org'), plan('Ignored')),
@@ -159,6 +163,19 @@ describe('FilesystemWorkspacePlanCatalog', () => {
       writeFile(join(root, '.gestalt', 'notes.txt'), plan('Ignored')),
       writeFile(join(root, 'first', '.gestalt', 'nested', 'deep.org'), plan('Deep')),
       writeFile(join(root, 'second', '.gestalt', 'same.org'), plan('Second')),
+      writeFile(
+        join(root, 'first', '.gestalt', 'worktree', '.git'),
+        'gitdir: /example/worktrees/one\n',
+      ),
+      writeFile(
+        join(root, 'first', '.gestalt', 'worktree', '.gestalt', 'copy.org'),
+        plan('Checkout'),
+      ),
+      writeFile(join(root, 'first', '.gestalt', 'evidence', 'copy.org'), plan('Evidence')),
+      writeFile(
+        join(root, 'first', 'tmp', 'sessions', 'copy', '.gestalt', 'copy.org'),
+        plan('Scratch'),
+      ),
     ]);
     expect(await new FilesystemWorkspacePlanCatalog().list(root)).toEqual([
       expect.objectContaining({
@@ -173,6 +190,69 @@ describe('FilesystemWorkspacePlanCatalog', () => {
       }),
       expect.objectContaining({ planName: 'first/.gestalt/nested/deep.org', title: 'Deep' }),
       expect.objectContaining({ planName: 'second/.gestalt/same.org', title: 'Second' }),
+    ]);
+  });
+
+  it('collapses same-name copies within an owner while keeping independent plans', async () => {
+    const root = await workspace();
+    for (const dir of ['.gestalt/copy', '.gestalt/version', 'other/.gestalt'])
+      await mkdir(join(root, dir), { recursive: true });
+    const original = plan('Roadmap');
+    await Promise.all([
+      writeFile(join(root, '.gestalt/roadmap.org'), original),
+      writeFile(join(root, '.gestalt/copy/roadmap.org'), original),
+      writeFile(join(root, '.gestalt/version/roadmap.org'), original.replace('Small', 'Large')),
+      writeFile(join(root, '.gestalt/renamed.org'), original),
+      writeFile(join(root, 'other/.gestalt/roadmap.org'), original),
+    ]);
+    const catalog = new FilesystemWorkspacePlanCatalog();
+    expect((await catalog.list(root)).map((entry) => entry.planName)).toEqual([
+      '.gestalt/renamed.org',
+      '.gestalt/roadmap.org',
+      '.gestalt/version/roadmap.org',
+      'other/.gestalt/roadmap.org',
+    ]);
+
+    await writeFile(join(root, '.gestalt/roadmap.org'), archiveOrgPlan(original));
+    const entries = await catalog.list(root, true);
+    expect(entries).toHaveLength(4);
+    expect(entries.at(-1)).toMatchObject({ planName: '.gestalt/roadmap.org', archived: true });
+    expect(await catalog.read(root, '.gestalt/copy/roadmap.org')).toMatchObject({
+      kind: 'available',
+    });
+  });
+
+  it('lists unfinished plans newest first using Org dates or file modification time', async () => {
+    const root = await workspace();
+    const directory = join(root, '.gestalt');
+    await mkdir(directory);
+    await Promise.all([
+      writeFile(join(directory, 'z-new.org'), plan('New').replace('2026-08-05', '2026-08-10')),
+      writeFile(join(directory, 'a-old.org'), plan('Old').replace('2026-08-05', '2026-08-08')),
+      writeFile(join(directory, 'raw.org'), '#+TITLE: Raw\n#+DATE: <2026-08-11 Tue>\n* Notes\n'),
+      writeFile(
+        join(directory, 'fallback.org'),
+        plan('Fallback').replace('2026-08-05', '2026-02-30'),
+      ),
+      writeFile(
+        join(directory, 'done.org'),
+        plan('Done').replace('TODO', 'DONE').replace('2026-08-05', '2026-10-01'),
+      ),
+      writeFile(
+        join(directory, 'archived.org'),
+        archiveOrgPlan(plan('Archive').replace('2026-08-05', '2026-10-02')),
+      ),
+    ]);
+    const modified = new Date('2026-08-09T12:00:00Z');
+    await filesystem.utimes(join(directory, 'fallback.org'), modified, modified);
+    const catalog = new FilesystemWorkspacePlanCatalog();
+    expect((await catalog.list(root)).map((entry) => entry.planName)).toEqual([
+      '.gestalt/raw.org',
+      '.gestalt/z-new.org',
+      '.gestalt/fallback.org',
+      '.gestalt/a-old.org',
+      '.gestalt/archived.org',
+      '.gestalt/done.org',
     ]);
   });
 

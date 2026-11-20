@@ -54,7 +54,7 @@ describe('PlansView', () => {
     expect(screen.getByRole('button', { name: 'Copy Org file path' })).toBeTruthy();
   });
 
-  it('shows compact paths and progress, reserves inline update status, and moves archived rows while preserving focus', async () => {
+  it('shows the full relative path and progress, reserves inline update status, and moves archived rows while preserving focus', async () => {
     const name = 'group/repository/.gestalt/deep/roadmap.org';
     const onarchive = vi.fn();
     const props = {
@@ -72,8 +72,7 @@ describe('PlansView', () => {
     const { rerender } = render(PlansView, props);
     const heading = screen.getByRole('heading', { name: 'ORG Plans' });
     expect(screen.getByRole('status').parentElement).toBe(heading.parentElement);
-    expect(screen.getByText('group/repository')).toBeTruthy();
-    expect(screen.getByText('roadmap.org').parentElement?.getAttribute('title')).toBe(name);
+    expect(screen.getByText(name)).toBeTruthy();
     const progress = screen.getByRole('progressbar', { name: 'Completion for Roadmap' });
     expect(progress.getAttribute('value')).toBe('1');
     expect(progress.getAttribute('max')).toBe('2');
@@ -236,7 +235,7 @@ describe('PlansView', () => {
     });
 
     expect(screen.getByText('Free-form notes')).toBeTruthy();
-    expect(screen.getByText('free-form.org')).toBeTruthy();
+    expect(screen.getByText('notes/free-form.org')).toBeTruthy();
     const open = screen.getByRole('button', {
       name: 'Open Free-form notes',
     });
