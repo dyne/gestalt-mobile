@@ -18,7 +18,7 @@ import type {
 } from '../../features/plans/domain/workspace-plan-catalog.js';
 
 import { OrgPlanDiscovery } from './org-plan-discovery.js';
-import { isArchivedOrgPlan } from './org-plan-archive-tag.js';
+import { archiveOrgPlan, isArchivedOrgPlan } from './org-plan-archive-tag.js';
 
 const maximumBytes = 1_048_576;
 
@@ -31,9 +31,16 @@ type ReadCandidateResult =
   | Readonly<{ kind: 'missing' }>
   | Readonly<{ kind: 'unavailable' }>;
 
+type CatalogFile = {
+  signature: string;
+  entry: WorkspacePlanEntry;
+  sortDate: number;
+  copyKey?: string;
+};
+
 type CatalogCache = {
   entries: readonly WorkspacePlanEntry[] | null;
-  files: Map<string, { signature: string; entry: WorkspacePlanEntry }>;
+  files: Map<string, CatalogFile>;
   refreshedAt: number;
   request: Promise<readonly WorkspacePlanEntry[]> | null;
 };
@@ -72,7 +79,7 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
     const planNames = [...new Set(await this.discovery.list(workspace))]
       .filter((name) => isPlanPath(name) && name.split('/').slice(0, -1).includes('.gestalt'))
       .sort((left, right) => left.localeCompare(right));
-    const entries = new Array<WorkspacePlanEntry | null>(planNames.length).fill(null);
+    const entries = new Array<CatalogFile | null>(planNames.length).fill(null);
     const files: CatalogCache['files'] = new Map();
     let next = 0;
     await Promise.all(
@@ -80,20 +87,20 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
         while (next < planNames.length) {
           const index = next++;
           const name = planNames[index]!;
-          let signature: string;
+          let metadata: Awaited<ReturnType<Filesystem['lstat']>>;
           try {
-            const metadata = await this.filesystem.lstat(resolve(workspace, ...name.split('/')));
+            metadata = await this.filesystem.lstat(resolve(workspace, ...name.split('/')));
             if (!metadata.isFile() || metadata.isSymbolicLink()) continue;
-            signature = [
-              metadata.dev,
-              metadata.ino,
-              metadata.size,
-              metadata.mtimeMs,
-              metadata.ctimeMs,
-            ].join(':');
           } catch {
             continue;
           }
+          const signature = [
+            metadata.dev,
+            metadata.ino,
+            metadata.size,
+            metadata.mtimeMs,
+            metadata.ctimeMs,
+          ].join(':');
           const previous = cache.files.get(name);
           if (previous?.signature === signature) {
             try {
@@ -108,13 +115,14 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
             } catch {
               continue;
             }
-            entries[index] = previous.entry;
+            entries[index] = previous;
             files.set(name, previous);
             continue;
           }
           const candidate = await this.readCandidate(workspace, name);
           if (candidate.kind === 'missing') continue;
           let entry: WorkspacePlanEntry;
+          let copyKey: string | undefined;
           if (candidate.kind === 'unavailable') {
             entry = toFallbackEntry(name);
           } else {
@@ -128,14 +136,21 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
                 ? toEntry(name, parsed.plan)
                 : toFallbackEntry(name, candidate.source);
             if (isArchivedOrgPlan(candidate.source)) entry = { ...entry, archived: true };
-            files.set(name, { signature, entry });
+            copyKey = catalogCopyKey(name, candidate.source);
           }
-          entries[index] = entry;
+          const file = {
+            signature,
+            entry,
+            sortDate: catalogDate(entry.date, metadata.mtimeMs),
+            copyKey,
+          };
+          if (candidate.kind === 'readable') files.set(name, file);
+          entries[index] = file;
         }
       }),
     );
     cache.files = files;
-    cache.entries = entries.filter((entry): entry is WorkspacePlanEntry => entry !== null);
+    cache.entries = orderCatalog(entries);
     cache.refreshedAt = this.now();
     return cache.entries;
   }
@@ -299,19 +314,66 @@ function toEntry(planName: string, plan: SupervisedPlan): WorkspacePlanEntry {
 }
 
 function toFallbackEntry(planName: string, source?: string): WorkspacePlanEntry {
+  const date = orgHeader('DATE', source);
   return {
     planName,
     title: fallbackTitle(planName, source),
+    ...(date === undefined ? {} : { date }),
     previewAvailable: false,
   };
 }
 
-function fallbackTitle(planName: string, source?: string): string {
-  const declaredTitle = source
+function orgHeader(key: 'TITLE' | 'DATE', source?: string): string | undefined {
+  const pattern = new RegExp(`^#\\+${key}:(?:[ \\t](.*))?$`, 'i');
+  return source
     ?.replace(/\r\n?/g, '\n')
     .split('\n')
-    .map((line) => /^#\+TITLE:(?:[ \t](.*))?$/i.exec(line)?.[1]?.trim())
-    .find((title) => title);
+    .map((line) => pattern.exec(line)?.[1]?.trim())
+    .find((value) => value);
+}
+
+function fallbackTitle(planName: string, source?: string): string {
   const filename = planName.split('/').at(-1) ?? planName;
-  return declaredTitle ?? filename.slice(0, -'.org'.length);
+  return orgHeader('TITLE', source) ?? filename.slice(0, -'.org'.length);
+}
+
+function catalogCopyKey(planName: string, source: string): string {
+  const parts = planName.split('/');
+  const owner = parts.slice(0, parts.indexOf('.gestalt')).join('/');
+  // A copied plan stays collapsed after archiving the selected original.
+  const digest = createHash('sha256').update(archiveOrgPlan(source)).digest('hex');
+  return JSON.stringify([owner, parts.at(-1), digest]);
+}
+
+function catalogDate(date: string | undefined, modifiedAt: number): number {
+  const day = /^(?:<|\[)?(\d{4}-\d{2}-\d{2})(?=$|[T \t>\]])/.exec(date ?? '')?.[1];
+  if (!day) return modifiedAt;
+  const parsed = new Date(`${day}T00:00:00Z`);
+  return parsed.toJSON()?.startsWith(day) ? parsed.getTime() : modifiedAt;
+}
+
+function orderCatalog(entries: readonly (CatalogFile | null)[]): WorkspacePlanEntry[] {
+  const unique = new Map<string, CatalogFile>();
+  for (const file of entries) {
+    if (!file) continue;
+    const key = file.copyKey ?? file.entry.planName;
+    const previous = unique.get(key);
+    if (
+      !previous ||
+      file.entry.planName.split('/').length < previous.entry.planName.split('/').length
+    )
+      unique.set(key, file);
+  }
+  const completed = (entry: WorkspacePlanEntry) => Boolean(entry.allDone || entry.archived);
+  return [...unique.values()]
+    .sort((left, right) => {
+      const leftDone = completed(left.entry);
+      const rightDone = completed(right.entry);
+      return (
+        Number(leftDone) - Number(rightDone) ||
+        (leftDone ? 0 : right.sortDate - left.sortDate) ||
+        left.entry.planName.localeCompare(right.entry.planName)
+      );
+    })
+    .map(({ entry }) => entry);
 }

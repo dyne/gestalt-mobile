@@ -260,9 +260,7 @@ test('refreshes only on Plan actions, keeps layout stable, and persists archivin
   await expect(progress).toHaveAttribute('value', '2');
   await expect(progress).toHaveAttribute('max', '3');
   await expect(row.getByText('2 / 3', { exact: true })).toBeVisible();
-  await expect(row.getByText('group/repository', { exact: true })).toBeVisible();
-  await expect(row.getByText('roadmap.org', { exact: true })).toBeVisible();
-  await expect(row.getByText('iterations', { exact: true })).toHaveCount(0);
+  await expect(row.getByText(planName, { exact: true })).toBeVisible();
 
   for (const [name, width, height, font] of [
     ['desktop', 1280, 900, '100%'],

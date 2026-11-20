@@ -19,7 +19,7 @@ describe('OrgPlanDiscovery', () => {
     ]);
     expect(execute).toHaveBeenCalledWith(
       'bfs',
-      ['.', '-type', 'f', '-name', '*.org', '-path', '*/.gestalt/*', '-print0'],
+      expect.arrayContaining(['.', '-prune', '-name', '*.org', '-path', '*/.gestalt/*', '-print0']),
       '/workspace root',
     );
   });

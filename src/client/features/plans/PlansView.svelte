@@ -155,12 +155,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </script>
 
 {#snippet planEntry(entry: WorkspacePlanEntry)}
-  {@const parts = entry.planName.split('/')}
-  {@const folders = parts.slice(0, -1)}
-  {@const prefix = folders
-    .slice(0, 2)
-    .filter((folder, index) => index === 0 || folder !== '.gestalt')
-    .join('/')}
   <li
     bind:this={rows[entry.planName]}
     class="plan-row"
@@ -168,10 +162,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   >
     <div class="plan-details">
       <strong>{entry.title}</strong>
-      <div class="plan-path" title={entry.planName}>
-        {#if prefix}<span>{prefix}</span>{/if}
-        <span>{parts.at(-1)}</span>
-      </div>
+      <div class="plan-path">{entry.planName}</div>
       {#if entry.previewAvailable !== false && entry.totalSteps !== undefined && entry.doneSteps !== undefined}
         <div class="catalog-progress">
           <progress
@@ -353,9 +344,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     min-inline-size: 0;
   }
   .plan-path {
-    display: flex;
-    flex-wrap: wrap;
-    column-gap: 0.75rem;
+    overflow-wrap: anywhere;
     color: var(--theme-text-muted);
     font-size: 0.875rem;
   }
