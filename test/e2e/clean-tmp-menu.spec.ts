@@ -26,12 +26,18 @@ const complete: CleanTmpResult = {
   workspaces: { cleaned: 0, removed: 2, skipped: 2, failed: 0, unavailable: 0 },
   reasons: { ...empty.reasons, protected: 2, unrecognized: 1 },
 };
+const failedFolder = {
+  workspaceName: 'my project',
+  relativePath:
+    'tmp/sessions/mobile-a09c2f24f9b6ee19735e42865c9e1122e5d6504f237a259a4f85d53c059bbeca',
+};
 const partial: CleanTmpResult = {
   ...complete,
   status: 'partial',
   folders: { removed: 1, skipped: 1, failed: 1 },
   workspaces: { cleaned: 0, removed: 1, skipped: 1, failed: 1, unavailable: 1 },
   reasons: { ...empty.reasons, protected: 1, io: 1, unavailable: 1 },
+  failedFolders: [failedFolder],
 };
 
 async function keyboardAction(page: Page, menu: Locator, label: string) {
@@ -244,7 +250,7 @@ for (const viewport of [
             status: 200,
             body: partial,
             kind: 'error',
-            text: 'Cleanup incomplete. Removed 1 temporary folder in 1 workspace. Kept 1 protected folder. Could not remove 1 folder. Could not check 1 workspace. Try Clean TMP again.',
+            text: `Cleanup incomplete. Removed 1 temporary folder in 1 workspace. Kept 1 protected folder. Could not remove “${failedFolder.relativePath}” in “${failedFolder.workspaceName}”. Could not check 1 workspace. Try Clean TMP again.`,
           },
           {
             name: 'request-error',

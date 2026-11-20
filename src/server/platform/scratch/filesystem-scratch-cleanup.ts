@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, open, readdir, realpath, rename, rm, rmdir } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { CLEAN_TMP_FAILED_FOLDER_LIMIT } from '../../../shared/contracts/tmp-cleanup.js';
 import {
   emptyScratchCounts,
   type ScratchCleanupStorage,
@@ -95,6 +96,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
   ) {
     await this.canonicalWorkspace(workspacePath);
     const counts = emptyScratchCounts();
+    const workspaceName = basename(workspacePath) || 'root workspace';
     const temporary = join(workspacePath, 'tmp');
     try {
       const info = await lstat(temporary);
@@ -291,6 +293,16 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
             }
             counts.reasons.io++;
           }
+        }
+        if (
+          outcome === 'failed' &&
+          (counts.failedFolders?.length ?? 0) < CLEAN_TMP_FAILED_FOLDER_LIMIT &&
+          !/[\\/\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(workspaceName)
+        ) {
+          (counts.failedFolders ??= []).push({
+            workspaceName,
+            relativePath: `tmp/sessions/${basename(directory)}`,
+          });
         }
       }
     }

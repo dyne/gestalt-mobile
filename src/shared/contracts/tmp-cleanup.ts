@@ -4,7 +4,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-/** Fixed counters only: paths and directory contents never cross the HTTP boundary. */
+export const CLEAN_TMP_FAILED_FOLDER_LIMIT = 3;
+
+export type CleanTmpFailedFolder = Readonly<{
+  workspaceName: string;
+  relativePath: string;
+}>;
+
 export type CleanTmpResult = Readonly<{
   status: 'complete' | 'partial';
   folders: Readonly<{ removed: number; skipped: number; failed: number }>;
@@ -24,4 +30,6 @@ export type CleanTmpResult = Readonly<{
       number
     >
   >;
+  /** Sample of failed managed folders. The folder counters still describe the full scan. */
+  failedFolders?: readonly CleanTmpFailedFolder[];
 }>;

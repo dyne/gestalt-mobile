@@ -308,7 +308,9 @@ counts. A workspace with a removal can also have skipped or failed candidates.
 `cleaned` means its scan completed without skipped or failed candidates. Discovery
 failures contribute to the unavailable reason without inventing folder or
 workspace counts. Partial/inaccessible results remain distinct from complete
-scans. Paths, directory listings and filesystem diagnostics are never returned.
+scans. The response can also name up to three failed managed folders using the
+workspace's base name and the folder path relative to that workspace. Absolute
+paths, directory listings and filesystem diagnostics stay on the server.
 Missing cleanup support or an unexpected operation failure returns a bounded 503;
 the response is not cached. The configuration menu's **Clean TMP** action calls
 this endpoint without a path or workspace option. The backend's complete durable
@@ -328,7 +330,8 @@ results. Protected folders are a subset of skipped folders; the UI reports other
 skips separately. Removed workspace counts mean workspaces with actual removals,
 not the sum of overlapping cleaned/skipped/failed categories. A partial outcome
 keeps successful removal counts and reports failed folders and unavailable
-workspaces. Discovery-only failures may have no known workspace count, so the
+workspaces. The error message includes available folder names and counts any
+remaining failures. Discovery-only failures may have no known workspace count, so the
 notification states that some locations could not be checked without inventing a
 count. Request errors make no removal claim. Partial and request failures use the
 shared error toast with retry guidance; completed results use the success toast.
