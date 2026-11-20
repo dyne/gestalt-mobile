@@ -523,12 +523,21 @@ describe('POST /api/maintenance/clean-tmp', () => {
           payload: {},
         })
       ).json();
+      const retired = (await readdir(container)).find((name) =>
+        name.startsWith(`.cleanup-${context.ownerId}-`),
+      );
+      expect(retired).toBeDefined();
       expect(result).toMatchObject({
         status: 'partial',
         folders: { removed: 0, failed: 1 },
         workspaces: { removed: 0, failed: 1 },
         reasons: { io: 1 },
+        failedFolders: [
+          { workspaceName: 'workspace with spaces', relativePath: `tmp/sessions/${retired}` },
+        ],
       });
+      expect(JSON.stringify(result)).not.toContain(f.workspacePath);
+      expect(JSON.stringify(result)).not.toContain('/blocked');
       await repair();
       expect(
         (

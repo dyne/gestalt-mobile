@@ -4,6 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import {
+  CLEAN_TMP_FAILED_FOLDER_LIMIT,
+  type CleanTmpFailedFolder,
+} from '../../../../shared/contracts/tmp-cleanup.js';
+
 export type ScratchCleanupReason =
   'protected' | 'busy' | 'lease' | 'unrecognized' | 'unsafe' | 'unavailable' | 'io';
 
@@ -12,6 +17,7 @@ export type ScratchFolderCounts = {
   skipped: number;
   failed: number;
   reasons: Record<ScratchCleanupReason, number>;
+  failedFolders?: CleanTmpFailedFolder[];
 };
 
 export function emptyScratchCounts(): ScratchFolderCounts {
@@ -97,6 +103,12 @@ export class CleanSessionScratch {
         if (counts.removed) result.workspaces.removed++;
         result.folders.skipped += counts.skipped;
         result.folders.failed += counts.failed;
+        if (counts.failedFolders?.length) {
+          const details = (result.folders.failedFolders ??= []);
+          details.push(
+            ...counts.failedFolders.slice(0, CLEAN_TMP_FAILED_FOLDER_LIMIT - details.length),
+          );
+        }
         for (const reason of Object.keys(counts.reasons) as ScratchCleanupReason[])
           result.folders.reasons[reason] += counts.reasons[reason];
         result.workspaces[counts.failed ? 'failed' : counts.skipped ? 'skipped' : 'cleaned']++;

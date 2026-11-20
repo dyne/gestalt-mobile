@@ -6,7 +6,10 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import type { CleanTmpResult } from '../../../../shared/contracts/tmp-cleanup.js';
+import {
+  CLEAN_TMP_FAILED_FOLDER_LIMIT,
+  type CleanTmpResult,
+} from '../../../../shared/contracts/tmp-cleanup.js';
 import type { ScratchCleanupResult } from './use-case.js';
 import { problem } from '../../../platform/http/problem.js';
 
@@ -35,6 +38,18 @@ const responseSchema = z.object({
     unavailable: counter,
     io: counter,
   }),
+  failedFolders: z
+    .array(
+      z.object({
+        workspaceName: z.string().min(1).max(255),
+        relativePath: z
+          .string()
+          .max(200)
+          .regex(/^tmp\/sessions\/(?:\.cleanup-)?[a-z0-9-]+$/),
+      }),
+    )
+    .max(CLEAN_TMP_FAILED_FOLDER_LIMIT)
+    .optional(),
 });
 
 export function registerCleanTmp(app: FastifyInstance, cleanup?: TmpCleanupPort): void {
@@ -68,6 +83,7 @@ export function registerCleanTmp(app: FastifyInstance, cleanup?: TmpCleanupPort)
           unavailable: result.workspaces.unavailable,
         },
         reasons: result.folders.reasons,
+        failedFolders: result.folders.failedFolders,
       });
       return reply.send(response);
     } catch {

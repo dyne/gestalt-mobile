@@ -81,6 +81,19 @@ describe('Clean TMP feedback', () => {
         'Cleanup incomplete. Removed 2 temporary folders in 1 workspace. Could not remove 1 folder. Try Clean TMP again.',
     });
   });
+  it('names reported folders and counts the remaining failures', () => {
+    const value = empty();
+    expect(
+      cleanTmpFeedback({
+        ...value,
+        status: 'partial',
+        folders: { ...value.folders, failed: 3 },
+        failedFolders: [{ workspaceName: 'my project', relativePath: 'tmp/sessions/cli-123' }],
+      }).message,
+    ).toBe(
+      'Cleanup incomplete. No temporary folders removed. Could not remove “tmp/sessions/cli-123” in “my project” and 2 other folders. Try Clean TMP again.',
+    );
+  });
   it('reports an unavailable workspace without inventing a failed folder', () => {
     const value = empty();
     expect(

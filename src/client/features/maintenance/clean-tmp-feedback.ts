@@ -11,7 +11,7 @@ const count = (value: number, noun: string): string => `${value} ${noun}${value 
 
 /** Workspace categories overlap; protected folders are already part of skipped. */
 export function cleanTmpFeedback(result: CleanTmpResult): ToastInput {
-  const { folders, workspaces, reasons } = result;
+  const { folders, workspaces, reasons, failedFolders } = result;
   const partial = result.status === 'partial';
   const parts: string[] = [];
   if (partial) parts.push('Cleanup incomplete.');
@@ -29,7 +29,16 @@ export function cleanTmpFeedback(result: CleanTmpResult): ToastInput {
   if (reasons.protected) parts.push(`Kept ${count(reasons.protected, 'protected folder')}.`);
   const otherSkipped = Math.max(0, folders.skipped - reasons.protected);
   if (otherSkipped) parts.push(`Skipped ${count(otherSkipped, 'other folder')}.`);
-  if (folders.failed) parts.push(`Could not remove ${count(folders.failed, 'folder')}.`);
+  if (failedFolders?.length) {
+    const locations = failedFolders.map(
+      ({ workspaceName, relativePath }) => `“${relativePath}” in “${workspaceName}”`,
+    );
+    const remaining = folders.failed - locations.length;
+    const more = remaining > 0 ? ` and ${count(remaining, 'other folder')}` : '';
+    parts.push(`Could not remove ${locations.join(', ')}${more}.`);
+  } else if (folders.failed) {
+    parts.push(`Could not remove ${count(folders.failed, 'folder')}.`);
+  }
   if (workspaces.unavailable) {
     parts.push(`Could not check ${count(workspaces.unavailable, 'workspace')}.`);
   }
