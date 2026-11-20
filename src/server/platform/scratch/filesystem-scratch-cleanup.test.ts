@@ -499,6 +499,32 @@ describe('managed scratch cleanup', () => {
     expect(result.folders.reasons.protected).toBe(1);
   });
 
+  it('reports a running session in another workspace as protected while removing unclaimed scratch', async () => {
+    const f = await fixture();
+    const unclaimed = await f.scratch.allocate(f.session('unclaimed'));
+    const workspacePath = join(f.root, 'other-workspace');
+    await mkdir(workspacePath);
+    const running = { ...f.session('running', 'turnActive'), workspacePath };
+    f.sessions.save(running);
+    const lease = await f.scratch.borrow(running);
+    try {
+      const result = await f.cleanup();
+      expect(result).toMatchObject({
+        status: 'complete',
+        folders: {
+          removed: 1,
+          skipped: 1,
+          failed: 0,
+          reasons: { protected: 1, lease: 0 },
+        },
+      });
+      await expect(lstat(lease.directory)).resolves.toBeDefined();
+      await expect(lstat(unclaimed.directory)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await lease.release();
+    }
+  });
+
   it('removes missing and explicitly forgotten owners while preserving forgotten workspace locators', async () => {
     const f = await fixture();
     const session = f.session();

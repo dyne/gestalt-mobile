@@ -378,7 +378,7 @@ describe('POST /api/maintenance/clean-tmp', () => {
         status: 'complete',
         folders: { removed: 1, skipped: 3, failed: 0 },
         workspaces: { unavailable: 0, failed: 0 },
-        reasons: { protected: 2, lease: 1, unavailable: 0, unsafe: 0, io: 0 },
+        reasons: { protected: 3, lease: 0, unavailable: 0, unsafe: 0, io: 0 },
       });
       await expect(
         readFile(join(orphan.directory, scratchMarkerName), 'utf8'),

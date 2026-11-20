@@ -202,9 +202,9 @@ fs.writeFileSync(path.join(root,'ready'),'yes');setInterval(()=>{},1000);`;
       reasons: { unsafe: 0, unavailable: 0, io: 0 },
     });
     expect((cleanupResult as CleanTmpResult).reasons).toEqual({
-      protected: 1,
+      protected: 2,
       busy: 0,
-      lease: 1,
+      lease: 0,
       unrecognized: 0,
       unsafe: 0,
       unavailable: 0,
@@ -215,7 +215,7 @@ fs.writeFileSync(path.join(root,'ready'),'yes');setInterval(()=>{},1000);`;
     expect(await exists(orphan.environment.TMPDIR!)).toBe(false);
     expect(await exists(firstOrphan.environment.TMPDIR!)).toBe(false);
     await expect(page.locator('.toast')).toContainText(
-      'Removed 2 temporary folders in 2 workspaces. Kept 1 protected folder. Skipped 1 other folder.',
+      'Removed 2 temporary folders in 2 workspaces. Kept 2 protected folders.',
     );
     expect(await readFile(join(firstRuntime, 'payload'), 'utf8')).toBe('first');
     expect(await readFile(join(secondRuntime, 'payload'), 'utf8')).toBe('second');
