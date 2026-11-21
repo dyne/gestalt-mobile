@@ -5,7 +5,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
@@ -25,6 +25,11 @@ import { SqliteWorkspaceLifecycle } from '../../../platform/persistence/sqlite-w
 import { FilesystemSessionScratch } from '../../../platform/scratch/filesystem-session-scratch.js';
 import { FilesystemScratchCleanup } from '../../../platform/scratch/filesystem-scratch-cleanup.js';
 import { FilesystemWorkspaceForget } from '../../../platform/scratch/filesystem-workspace-forget.js';
+import {
+  mobileScratchOwnerId,
+  scratchMarkerName,
+} from '../../../platform/scratch/scratch-filesystem.js';
+import { allocateRuntime } from '../../../platform/scratch/runtime-root.js';
 import { stopOwnedProcessGroup } from '../../../platform/scratch/owned-process-group.js';
 import { CodexSessionRuntime, type AppServer } from '../../../platform/codex/session-runtime.js';
 import type { ForgetPhase } from '../../../../shared/contracts/session-forget.js';
@@ -202,6 +207,91 @@ describe('durable Forget orchestration', () => {
     expect((await forget.execute(saved.id))?.phase).toBe('completed');
     await expect(lstat(join(f.workspacePath, 'tmp'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(source, 'utf8')).toBe('keep');
+  });
+
+  it('finishes explicit Forget for a runtime with more than 100,000 entries', async () => {
+    const f = await fixture();
+    const payload = join(f.context.environment.TMPDIR!, 'large-build');
+    roots.push(f.context.environment.TMPDIR!);
+    await mkdir(payload);
+    for (let batch = 0; batch < 100; batch++) {
+      const directory = join(payload, String(batch));
+      await mkdir(directory);
+      for (let file = 0; file < 1000; file++) writeFileSync(join(directory, String(file)), '');
+    }
+    expect(await f.make().execute(f.session.id)).toMatchObject({ phase: 'completed' });
+    expect(f.sessions.find(f.session.id)).toBeNull();
+    expect(existsSync(f.context.environment.TMPDIR!)).toBe(false);
+    expect(existsSync(join(f.workspacePath, 'tmp'))).toBe(false);
+  }, 120_000);
+
+  it('forgets the last session while prior forgotten sessions still have borrowers', async () => {
+    const f = await fixture();
+    const second = { ...f.session, id: 'second' };
+    const last = { ...f.session, id: 'last' };
+    f.sessions.save(second);
+    f.sessions.save(last);
+    // Historical v1 borrowers have no external runtime binding.
+    const ownerId = mobileScratchOwnerId(second.id);
+    const legacy = join(f.workspacePath, 'tmp', 'sessions', ownerId);
+    await mkdir(legacy, { mode: 0o700 });
+    await writeFile(
+      join(legacy, scratchMarkerName),
+      JSON.stringify({
+        schemaVersion: 1,
+        ownerKind: 'mobile-session',
+        ownerId,
+        workspacePath: f.workspacePath,
+        sessionId: second.id,
+        createdAt: new Date().toISOString(),
+        providerThreads: [],
+        authority: { kind: 'mobile-roster', sessionId: second.id },
+      }),
+      { mode: 0o600 },
+    );
+    const own = await f.scratch.allocate(last);
+    roots.push(f.context.environment.TMPDIR!, own.environment.TMPDIR!);
+    const borrowers = await Promise.all([f.scratch.borrow(f.session), f.scratch.borrow(second)]);
+    const forget = f.make();
+    for (const owner of [f.session, second]) {
+      expect(await forget.execute(owner.id)).toMatchObject({
+        phase: 'completed',
+        scratchRetained: true,
+      });
+    }
+    // An unrelated malformed lease must still block the operation.
+    const leases = join(own.directory, 'leases');
+    await mkdir(leases, { mode: 0o700 });
+    const invalid = join(leases, 'invalid.json');
+    await writeFile(invalid, '{}');
+    expect(await forget.execute(last.id)).toMatchObject({ phase: 'failed' });
+    await rm(invalid);
+    if (process.getuid) {
+      const orphan = await allocateRuntime({
+        workspacePath: f.workspacePath,
+        ownerId: 'unattributed-owner',
+      });
+      roots.push(orphan.directory);
+      expect(await forget.execute(last.id)).toMatchObject({ phase: 'failed' });
+      await rm(orphan.directory, { recursive: true });
+    }
+    expect(await forget.execute(last.id)).toMatchObject({
+      phase: 'completed',
+      scratchRetained: true,
+    });
+    expect(f.sessions.list()).toHaveLength(0);
+    expect(existsSync(own.directory)).toBe(false);
+    expect(existsSync(own.environment.TMPDIR!)).toBe(false);
+    expect(existsSync(join(f.workspacePath, '.gestalt-scratch-lock'))).toBe(false);
+    for (const borrower of borrowers) {
+      expect(existsSync(borrower.directory)).toBe(true);
+      await borrower.release();
+    }
+    expect(await f.cleanup.cleanWorkspace(f.workspacePath, () => [])).toMatchObject({
+      removed: 2,
+      skipped: 0,
+      failed: 0,
+    });
   });
 
   it('retries an interrupted final deletion using its durable retired path', async () => {

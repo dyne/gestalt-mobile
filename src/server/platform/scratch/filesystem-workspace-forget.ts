@@ -10,7 +10,10 @@ import type { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import type { ScratchSessionOwner } from '../../features/sessions/clean-tmp/use-case.js';
 import { WorkspaceSessionConflict } from '../../features/sessions/application/workspace-conflict.js';
-import { WorkspaceCleanupFailure } from '../../features/sessions/forget-session/use-case.js';
+import {
+  WorkspaceCleanupFailure,
+  type ForgetCleanupResult,
+} from '../../features/sessions/forget-session/use-case.js';
 import {
   canonicalSessionWorkspace,
   workspaceContains,
@@ -27,7 +30,7 @@ export class FilesystemWorkspaceForget {
     operationId: string,
     authorized: () => boolean,
     knownSessions: () => readonly ScratchSessionOwner[],
-  ): Promise<'retained' | void | { release(): Promise<void> }> {
+  ): Promise<ForgetCleanupResult> {
     const workspace = canonicalSessionWorkspace(session.workspacePath);
     const others = knownSessions().filter((other) => other.id !== session.id);
     if (others.some((other) => canonicalSessionWorkspace(other.workspacePath) === workspace))
@@ -68,6 +71,22 @@ export class FilesystemWorkspaceForget {
       if (counts.skipped || counts.failed) {
         if (counts.failedFolders?.length)
           cleanupFolders = counts.failedFolders.map(({ relativePath }) => relativePath);
+        // An earlier completed Forget may have left a borrower in this workspace.
+        // Its release is independent of the last session. Keep tmp in place.
+        if (
+          !counts.failed &&
+          counts.leasedMobileSessions.length === counts.skipped &&
+          counts.leasedMobileSessions.every(({ sessionId }) => this.previouslyRetained(sessionId))
+        ) {
+          const retained = new Set(
+            counts.leasedMobileSessions.flatMap(({ runtimeDirectory }) => runtimeDirectory ?? []),
+          );
+          if (
+            (!process.getuid || !(await hasRuntimeOwner({ workspacePath: workspace }, retained))) &&
+            authorized()
+          )
+            return { release, scratchRetained: true };
+        }
         throw new Error('SESSION_CLEANUP_FAILED');
       }
       cleanupFolders = [];
@@ -97,11 +116,15 @@ export class FilesystemWorkspaceForget {
     }
   }
 
-  private async assertRetired(
-    directory: string | Buffer,
-    depth = 0,
-    budget = { entries: 0 },
-  ): Promise<void> {
+  private previouslyRetained(id: string): boolean {
+    return !!this.db
+      .prepare(
+        "SELECT 1 FROM session_forget_operations WHERE session_id=? AND phase='completed' AND scratch_retained=1",
+      )
+      .get(id);
+  }
+
+  private async assertRetired(directory: string | Buffer, depth = 0): Promise<void> {
     if (depth > 128) throw new Error('SESSION_CLEANUP_FAILED');
     let entries;
     try {
@@ -112,7 +135,6 @@ export class FilesystemWorkspaceForget {
     }
     for (const entry of entries) {
       if (
-        ++budget.entries > 100000 ||
         [
           '.gestalt-owner.json',
           '.gestalt-runtime.json',
@@ -126,7 +148,6 @@ export class FilesystemWorkspaceForget {
         await this.assertRetired(
           Buffer.concat([Buffer.from(directory), Buffer.from('/'), entry.name]),
           depth + 1,
-          budget,
         );
     }
   }

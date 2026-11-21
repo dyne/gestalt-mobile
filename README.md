@@ -498,11 +498,13 @@ retires its saved entry. When the last known session for that workspace is
 forgotten, it deletes the **entire `<workspace>/tmp` directory**, including legacy
 output and old lease metadata. Reserve that directory for disposable data.
 While other saved sessions remain, workspace scratch is retained until final
-Forget. If another known session's
+Forget. If the only remaining blockers are active borrowers of previously
+forgotten sessions, Forget retires the last session and keeps the shared
+`tmp` directory. Clean Tmp can remove the borrowed folders after release.
+If another known session's
 workspace is inside `tmp`, forget that contained session first. New sessions are
 blocked throughout cleanup. Unconfirmed shutdown, unsafe paths and deletion
-failures retain a retryable entry; final Forget never reports success with files
-left behind. Reloading recovers the backend operation's state.
+failures retain a retryable entry. Reloading recovers the backend operation's state.
 
 Mobile allocates temporary storage in each selected workspace. The Launcher
 validates and forwards that ownership context to managed tools, and Agents uses

@@ -94,7 +94,10 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
     inherited?: InheritedContainment,
   ) {
     await this.canonicalWorkspace(workspacePath);
-    const counts = emptyScratchCounts();
+    const counts = {
+      ...emptyScratchCounts(),
+      leasedMobileSessions: [] as { sessionId: string; runtimeDirectory?: string }[],
+    };
     const workspaceName = basename(workspacePath) || 'root workspace';
     const temporary = join(workspacePath, 'tmp');
     try {
@@ -154,7 +157,18 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
           onlyOwnerId ??
             (authorizedSessionId ? mobileScratchOwnerId(authorizedSessionId) : undefined),
         );
-        await this.releasedLeases(directory, marker);
+        if ((await readdir(directory)).includes('.association-lock')) reject('busy');
+        const leases = await readManagedScratchLeases(directory, marker);
+        if (leases.some((lease) => lease.state !== 'released' || lease.consumers.length !== 0)) {
+          if (authorized && marker.ownerKind === 'mobile-session') {
+            if (marker.runtime) await validateRuntime(marker, marker.runtime, true);
+            counts.leasedMobileSessions.push({
+              sessionId: marker.sessionId,
+              runtimeDirectory: marker.runtime?.directory,
+            });
+          }
+          reject('lease');
+        }
         if (authorized) {
           await this.retireNestedNamespaces(
             directory,
@@ -172,7 +186,10 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
               containment,
             );
         }
-        await this.validatePayload(directory);
+        // Manual Clean Tmp bounds opportunistic inspection. Explicit Forget
+        // has to finish checking large owners before retiring the session.
+        const inspectionBudget = () => (authorized ? undefined : { entries: 0 });
+        await this.validatePayload(directory, inspectionBudget());
         if (marker.runtime) {
           const present = await validateRuntime(marker, marker.runtime, true);
           if (present) {
@@ -185,7 +202,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
               onlyOwnerId ??
                 (authorizedSessionId ? mobileScratchOwnerId(authorizedSessionId) : undefined),
             );
-            await this.validatePayload(marker.runtime.directory);
+            await this.validatePayload(marker.runtime.directory, inspectionBudget());
           }
         }
         await privateDirectory(directory, false);
@@ -308,13 +325,6 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
     return counts;
   }
 
-  private async releasedLeases(directory: string, marker: ManagedScratchOwner) {
-    if ((await readdir(directory)).includes('.association-lock')) reject('busy');
-    const leases = await readManagedScratchLeases(directory, marker);
-    if (leases.some((lease) => lease.state !== 'released' || lease.consumers.length !== 0))
-      reject('lease');
-  }
-
   /** Final workspace authority can retire positively attributed nested namespaces,
    * but every nested roster, lease, inode and fence still has to pass its gate. */
   async retireNestedNamespaces(
@@ -325,7 +335,6 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
     inherited?: InheritedContainment,
     skipContainer = false,
     depth = 0,
-    budget = { entries: 0 },
   ): Promise<void> {
     if (depth > 128 || !authorized()) reject('protected');
     let entries;
@@ -336,7 +345,6 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
       throw error;
     }
     for (const entry of entries) {
-      if (++budget.entries > 100000) reject('unrecognized');
       const name = entry.name.toString();
       if (skipContainer && name === 'sessions') continue;
       const path = payloadPath(directory, entry.name),
@@ -375,7 +383,6 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
         inherited,
         name === 'tmp',
         depth + 1,
-        budget,
       );
     }
   }
@@ -463,9 +470,9 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
 
   private async validatePayload(
     directory: string | Buffer,
+    budget?: { entries: number },
     root = directory,
     depth = 0,
-    budget = { entries: 0 },
   ): Promise<void> {
     if (depth > 128) reject('unrecognized');
     // Even an empty nested namespace is not authority to retire a workspace's
@@ -478,8 +485,8 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
       reject('unrecognized');
     for (const entry of await readdir(directory, { encoding: 'buffer', withFileTypes: true })) {
       const child = entry.name;
+      if (budget && ++budget.entries > 100_000) reject('unrecognized');
       if (child.toString() === workspacePublicationName) reject('busy');
-      if (++budget.entries > 100_000) reject('unrecognized');
       if (
         directory !== root &&
         [
@@ -502,7 +509,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
       // Payload symlinks (for example npm's .bin entries) are disposable links.
       // lstat never follows them, and rm unlinks them without deleting their targets.
       // Owner paths and authority metadata retain their separate no-link checks.
-      if (info.isDirectory()) await this.validatePayload(path, root, depth + 1, budget);
+      if (info.isDirectory()) await this.validatePayload(path, budget, root, depth + 1);
     }
   }
 }
