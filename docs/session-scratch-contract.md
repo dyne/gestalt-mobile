@@ -272,8 +272,9 @@ forgotten. Unregistered nested test fixtures are disposable during final Forget.
 Nested ownership markers, leases/fences and indeterminate nested `tmp/sessions`
 namespaces are retained conservatively, including empty nested containers. An
 outer cleanup does not recursively retire another workspace's namespace.
-Inspection stops with a retained outcome above 128 levels or 100,000 entries;
-these bounds grant no deletion authority. Unrelated eligible owners still clean.
+Inspection stops with a retained outcome above 128 levels. Clean Tmp also stops
+after 100,000 entries per payload. Explicit Forget checks every entry in a
+large payload before deletion. Unrelated eligible owners still clean.
 Payload and marker retirement precede release of the cleanup invocation's own
 fences; the empty retired directory is then removed without recursive deletion
 of a fence or replacement namespace.
@@ -394,7 +395,12 @@ that directory. A known workspace contained inside `tmp` blocks final deletion
 with `SESSION_NESTED_WORKSPACE` and `blockingSessionId`. Unsafe directory roots,
 unconfirmed runtime shutdown and I/O failures still fail cleanup. Failure returns 503 with
 `SESSION_FORGET_FAILED` and operation metadata, retaining the roster and original
-thread identity for recovery/retry. Repeated completed requests remain idempotent.
+thread identity for recovery/retry. A final operation can also complete with
+`scratchRetained: true` when all remaining blockers are validated borrowers of
+Mobile sessions whose completed Forget recorded retained scratch. It keeps the
+workspace publication fence through finalization and leaves shared `tmp` in
+place. Clean Tmp can retire those owners once their borrowers release them.
+Repeated completed requests remain idempotent.
 Promoting forgotten provider history creates a new relay identity and fresh
 scratch. Filesystem deletion and SQLite finalization are separate failure domains;
 no cross-resource transaction is claimed. The Sessions and roster/sidebar frames

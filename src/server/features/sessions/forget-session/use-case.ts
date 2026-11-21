@@ -28,6 +28,9 @@ export class WorkspaceCleanupFailure extends Error {
   }
 }
 
+export type ForgetCleanupResult =
+  void | 'retained' | { scratchRetained?: true; release(): Promise<void> };
+
 export class ForgetSession {
   private readonly pending = new Map<string, Promise<SessionForgetOperation | null>>();
   constructor(
@@ -35,10 +38,7 @@ export class ForgetSession {
       operations: ForgetOperationStore;
       find(id: string): RelaySessionSnapshot | null;
       release(session: RelaySessionSnapshot): Promise<void>;
-      clean(
-        session: RelaySessionSnapshot,
-        operationId: string,
-      ): Promise<'retained' | void | { release(): Promise<void> }>;
+      clean(session: RelaySessionSnapshot, operationId: string): Promise<ForgetCleanupResult>;
       changed(operation: SessionForgetOperation): void;
       now(): string;
     },
@@ -88,7 +88,10 @@ export class ForgetSession {
       if (advance('cleaning').phase === 'completed') return operation;
       const cleanup = await this.deps.clean(session, operation.operationId);
       if (cleanup && typeof cleanup === 'object') releaseCleanup = () => cleanup.release();
-      operation = { ...operation, scratchRetained: cleanup === 'retained' ? true : undefined };
+      operation = {
+        ...operation,
+        scratchRetained: cleanup === 'retained' ? true : cleanup?.scratchRetained,
+      };
       failureCode = 'SESSION_FORGET_FAILED';
       if (advance('finalizing').phase === 'completed') return operation;
       operation = this.deps.operations.finalize({ ...operation, updatedAt: this.deps.now() });

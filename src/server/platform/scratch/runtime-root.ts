@@ -125,6 +125,7 @@ export async function validateRuntime(
 /** A missing workspace does not authorize abandoning an external payload root. */
 export async function hasRuntimeOwner(
   owner: Readonly<{ workspacePath: string; ownerId?: string }>,
+  retainedDirectories?: ReadonlySet<string>,
 ): Promise<boolean> {
   const container = await runtimeContainer();
   try {
@@ -142,6 +143,7 @@ export async function hasRuntimeOwner(
       const record = (await readMarker(join(container, name, runtimeMarkerName))) as RuntimeOwner;
       if (
         record.workspacePath === owner.workspacePath &&
+        !retainedDirectories?.has(join(container, name)) &&
         (owner.ownerId === undefined || record.ownerId === owner.ownerId)
       )
         return true;
