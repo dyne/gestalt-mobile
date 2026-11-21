@@ -495,17 +495,21 @@ describe('POST /api/maintenance/clean-tmp', () => {
     }
   });
 
-  it('reports a real folder deletion failure and its workspace, then removes it after repair', async () => {
+  it('reports every failed folder and its workspace, then removes them after repair', async () => {
     const f = await fixture();
-    const context = await f.scratch.allocate(f.session('blocked-owner'));
-    const blocked = join(context.directory, 'blocked');
-    await mkdir(blocked);
-    await writeFile(join(blocked, 'payload'), 'fixture');
-    await chmod(blocked, 0o500);
+    const ownerIds: string[] = [];
+    for (let index = 0; index < 4; index++) {
+      const context = await f.scratch.allocate(f.session(`blocked-owner-${index}`));
+      ownerIds.push(context.ownerId);
+      const blocked = join(context.directory, 'blocked');
+      await mkdir(blocked);
+      await writeFile(join(blocked, 'payload'), 'fixture');
+      await chmod(blocked, 0o500);
+    }
     const container = join(f.workspacePath, 'tmp', 'sessions');
     const repair = async () => {
       for (const name of await readdir(container)) {
-        if (name === context.ownerId || name.startsWith(`.cleanup-${context.ownerId}-`))
+        if (ownerIds.some((ownerId) => name === ownerId || name.startsWith(`.cleanup-${ownerId}-`)))
           await chmod(join(container, name, 'blocked'), 0o700).catch(
             (error: NodeJS.ErrnoException) => {
               if (error.code !== 'ENOENT') throw error;
@@ -523,18 +527,21 @@ describe('POST /api/maintenance/clean-tmp', () => {
           payload: {},
         })
       ).json();
-      const retired = (await readdir(container)).find((name) =>
-        name.startsWith(`.cleanup-${context.ownerId}-`),
+      const retired = (await readdir(container)).filter((name) =>
+        ownerIds.some((ownerId) => name.startsWith(`.cleanup-${ownerId}-`)),
       );
-      expect(retired).toBeDefined();
+      expect(retired).toHaveLength(4);
       expect(result).toMatchObject({
         status: 'partial',
-        folders: { removed: 0, failed: 1 },
+        folders: { removed: 0, failed: 4 },
         workspaces: { removed: 0, failed: 1 },
-        reasons: { io: 1 },
-        failedFolders: [
-          { workspaceName: 'workspace with spaces', relativePath: `tmp/sessions/${retired}` },
-        ],
+        reasons: { io: 4 },
+        failedFolders: expect.arrayContaining(
+          retired.map((name) => ({
+            workspaceName: 'workspace with spaces',
+            relativePath: `tmp/sessions/${name}`,
+          })),
+        ),
       });
       expect(JSON.stringify(result)).not.toContain(f.workspacePath);
       expect(JSON.stringify(result)).not.toContain('/blocked');
@@ -550,7 +557,7 @@ describe('POST /api/maintenance/clean-tmp', () => {
         ).json(),
       ).toMatchObject({
         status: 'complete',
-        folders: { removed: 1, failed: 0 },
+        folders: { removed: 4, failed: 0 },
         workspaces: { removed: 1, failed: 0 },
       });
     } finally {

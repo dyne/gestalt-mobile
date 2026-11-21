@@ -4,8 +4,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-export const CLEAN_TMP_FAILED_FOLDER_LIMIT = 3;
-
 export type CleanTmpFailedFolder = Readonly<{
   workspaceName: string;
   relativePath: string;
@@ -30,6 +28,6 @@ export type CleanTmpResult = Readonly<{
       number
     >
   >;
-  /** Sample of failed managed folders. The folder counters still describe the full scan. */
+  /** Workspace-relative locations identified during the full scan. */
   failedFolders?: readonly CleanTmpFailedFolder[];
 }>;

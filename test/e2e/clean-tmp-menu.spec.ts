@@ -26,18 +26,17 @@ const complete: CleanTmpResult = {
   workspaces: { cleaned: 0, removed: 2, skipped: 2, failed: 0, unavailable: 0 },
   reasons: { ...empty.reasons, protected: 2, unrecognized: 1 },
 };
-const failedFolder = {
+const failedFolders = ['alpha', 'beta', 'gamma', 'delta'].map((name) => ({
   workspaceName: 'my project',
-  relativePath:
-    'tmp/sessions/mobile-a09c2f24f9b6ee19735e42865c9e1122e5d6504f237a259a4f85d53c059bbeca',
-};
+  relativePath: `tmp/sessions/mobile-${name}`,
+}));
 const partial: CleanTmpResult = {
   ...complete,
   status: 'partial',
-  folders: { removed: 1, skipped: 1, failed: 1 },
+  folders: { removed: 1, skipped: 1, failed: 4 },
   workspaces: { cleaned: 0, removed: 1, skipped: 1, failed: 1, unavailable: 1 },
-  reasons: { ...empty.reasons, protected: 1, io: 1, unavailable: 1 },
-  failedFolders: [failedFolder],
+  reasons: { ...empty.reasons, protected: 1, io: 4, unavailable: 1 },
+  failedFolders,
 };
 
 async function keyboardAction(page: Page, menu: Locator, label: string) {
@@ -250,7 +249,7 @@ for (const viewport of [
             status: 200,
             body: partial,
             kind: 'error',
-            text: `Cleanup incomplete. Removed 1 temporary folder in 1 workspace. Kept 1 protected folder. Could not remove “${failedFolder.relativePath}” in “${failedFolder.workspaceName}”. Could not check 1 workspace. Try Clean TMP again.`,
+            text: 'Could not remove “tmp/sessions/mobile-alpha” in “my project”, “tmp/sessions/mobile-beta” in “my project”, “tmp/sessions/mobile-gamma” in “my project” and 1 other folder.',
           },
           {
             name: 'request-error',
@@ -287,6 +286,7 @@ for (const viewport of [
             outcome.kind === 'error' ? 'alert' : 'status',
           );
           await expect(toast).toContainText(outcome.text);
+          await expect(toast).not.toContainText('mobile-delta');
           await expect(toast).not.toContainText('private server path');
           await page.getByRole('button', { name: `Dismiss ${outcome.kind} notification` }).click();
         }
@@ -303,6 +303,12 @@ for (const viewport of [
           diagnostics.consoleErrors.filter((value) => value === expectedError).length,
         ).toBeLessThanOrEqual(1);
         expectCleanThemeDiagnostics(diagnostics, { expectedConsoleErrors: [expectedError] });
+        await page.getByRole('button', { name: 'Open configuration', exact: true }).click();
+        await page.getByRole('button', { name: 'Notifications', exact: true }).click();
+        const folders = page.getByRole('list', { name: 'Affected folders' });
+        await expect(folders.getByRole('listitem')).toHaveCount(4);
+        for (const folder of failedFolders)
+          await expect(folders).toContainText(folder.relativePath);
       } finally {
         requests.forEach((pending) =>
           pending.resolve({ status: 503, body: { code: 'TMP_CLEANUP_UNAVAILABLE' } }),

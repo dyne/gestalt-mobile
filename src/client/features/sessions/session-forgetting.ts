@@ -81,7 +81,16 @@ export class SessionForgetting {
     }
     this.#set(id, { phase: operation.phase, operation });
     if (operation.phase === 'failed') {
-      this.#error(id, operation.failureCode, `${operation.operationId}:${operation.updatedAt}`);
+      const workspaceName = this.#sessions
+        .get(id)
+        ?.workspacePath?.split(/[/\\]/)
+        .filter(Boolean)
+        .at(-1);
+      const error =
+        operation.failureCode === 'SESSION_CLEANUP_FAILED'
+          ? { code: operation.failureCode, cleanupFolders: operation.cleanupFolders, workspaceName }
+          : operation.failureCode;
+      this.#error(id, error, `${operation.operationId}:${operation.updatedAt}`);
     }
   }
 

@@ -7,7 +7,10 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { ForgetOperationStore } from '../../features/sessions/forget-session/use-case.js';
-import type { SessionForgetOperation } from '../../../shared/contracts/session-forget.js';
+import {
+  isForgetCleanupFolder,
+  type SessionForgetOperation,
+} from '../../../shared/contracts/session-forget.js';
 import { canonicalSessionWorkspace } from './sqlite-workspace-lifecycle.js';
 import { WorkspaceSessionConflict } from '../../features/sessions/application/workspace-conflict.js';
 
@@ -25,8 +28,13 @@ export class SqliteForgetOperationStore implements ForgetOperationStore {
           failure_code: SessionForgetOperation['failureCode'] | null;
           scratch_retained: number;
           blocking_session_id: string | null;
+          cleanup_folders_json: string | null;
         }
       | undefined;
+    const folders: unknown = row?.cleanup_folders_json
+      ? JSON.parse(row.cleanup_folders_json)
+      : null;
+    const cleanupFolders = Array.isArray(folders) ? folders.filter(isForgetCleanupFolder) : [];
     return row
       ? {
           operationId: row.operation_id,
@@ -36,6 +44,7 @@ export class SqliteForgetOperationStore implements ForgetOperationStore {
           ...(row.failure_code ? { failureCode: row.failure_code } : {}),
           ...(row.scratch_retained ? { scratchRetained: true as const } : {}),
           ...(row.blocking_session_id ? { blockingSessionId: row.blocking_session_id } : {}),
+          ...(cleanupFolders.length ? { cleanupFolders } : {}),
         }
       : null;
   }
@@ -89,7 +98,7 @@ export class SqliteForgetOperationStore implements ForgetOperationStore {
   update(operation: SessionForgetOperation): SessionForgetOperation {
     this.db
       .prepare(
-        `UPDATE session_forget_operations SET phase = ?, updated_at = ?, failure_code = ?, scratch_retained = ?, blocking_session_id = ?
+        `UPDATE session_forget_operations SET phase = ?, updated_at = ?, failure_code = ?, scratch_retained = ?, blocking_session_id = ?, cleanup_folders_json = ?
       WHERE session_id = ? AND operation_id = ? AND phase != 'completed'`,
       )
       .run(
@@ -98,6 +107,7 @@ export class SqliteForgetOperationStore implements ForgetOperationStore {
         operation.failureCode ?? null,
         operation.scratchRetained ? 1 : 0,
         operation.blockingSessionId ?? null,
+        operation.cleanupFolders?.length ? JSON.stringify(operation.cleanupFolders) : null,
         operation.sessionId,
         operation.operationId,
       );

@@ -13,5 +13,17 @@ export type SessionForgetOperation = Readonly<{
   /** Forget completed while ownership checks retained disposable files. */
   scratchRetained?: true;
   blockingSessionId?: string;
+  /** Workspace-relative cleanup locations identified by the failed stage. */
+  cleanupFolders?: readonly string[];
   failureCode?: 'SESSION_RELEASE_UNCONFIRMED' | 'SESSION_CLEANUP_FAILED' | 'SESSION_FORGET_FAILED';
 }>;
+
+export function isForgetCleanupFolder(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length <= 200 &&
+    /^(?:tmp(?:\/sessions(?:\/(?:\.cleanup-)?[a-z0-9-]+)?)?|\.gestalt\/forgotten-tmp\/[0-9a-f-]{36})$/.test(
+      value,
+    )
+  );
+}

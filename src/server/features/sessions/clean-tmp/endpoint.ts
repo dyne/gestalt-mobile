@@ -6,10 +6,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import {
-  CLEAN_TMP_FAILED_FOLDER_LIMIT,
-  type CleanTmpResult,
-} from '../../../../shared/contracts/tmp-cleanup.js';
+import type { CleanTmpResult } from '../../../../shared/contracts/tmp-cleanup.js';
 import type { ScratchCleanupResult } from './use-case.js';
 import { problem } from '../../../platform/http/problem.js';
 
@@ -48,7 +45,6 @@ const responseSchema = z.object({
           .regex(/^tmp\/sessions\/(?:\.cleanup-)?[a-z0-9-]+$/),
       }),
     )
-    .max(CLEAN_TMP_FAILED_FOLDER_LIMIT)
     .optional(),
 });
 

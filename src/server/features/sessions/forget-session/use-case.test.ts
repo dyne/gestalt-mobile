@@ -211,18 +211,24 @@ describe('durable Forget orchestration', () => {
         throw Object.assign(new Error('disk failure'), { code: 'EIO' });
     };
     const failed = await f.make().execute(f.session.id);
-    expect(failed).toMatchObject({ phase: 'failed', failureCode: 'SESSION_CLEANUP_FAILED' });
+    expect(failed).toMatchObject({
+      phase: 'failed',
+      failureCode: 'SESSION_CLEANUP_FAILED',
+      cleanupFolders: [`.gestalt/forgotten-tmp/${failed?.operationId}`],
+    });
     expect(f.sessions.find(f.session.id)).not.toBeNull();
     const guarded = new SqliteSessionRepository(f.db, new SqliteWorkspaceLifecycle(f.db));
     expect(() => guarded.save({ ...f.session, id: 'new' })).toThrow('being forgotten');
     gates.remove = undefined;
     const reopened = new DatabaseSync(f.databasePath);
     databases.push(reopened);
-    expect(
-      await f
-        .make(undefined, undefined, new SqliteForgetOperationStore(reopened))
-        .execute(f.session.id),
-    ).toMatchObject({ phase: 'completed', operationId: failed?.operationId });
+    const operations = new SqliteForgetOperationStore(reopened);
+    expect(operations.find(f.session.id)?.cleanupFolders).toEqual(failed?.cleanupFolders);
+    expect(await f.make(undefined, undefined, operations).execute(f.session.id)).toMatchObject({
+      phase: 'completed',
+      operationId: failed?.operationId,
+    });
+    expect(operations.find(f.session.id)?.cleanupFolders).toBeUndefined();
     await expect(lstat(join(f.workspacePath, 'tmp'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 

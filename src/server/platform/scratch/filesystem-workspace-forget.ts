@@ -10,6 +10,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import type { ScratchSessionOwner } from '../../features/sessions/clean-tmp/use-case.js';
 import { WorkspaceSessionConflict } from '../../features/sessions/application/workspace-conflict.js';
+import { WorkspaceCleanupFailure } from '../../features/sessions/forget-session/use-case.js';
 import {
   canonicalSessionWorkspace,
   workspaceContains,
@@ -46,6 +47,7 @@ export class FilesystemWorkspaceForget {
     // Keep the physical publication fence through durable finalization. It is
     // outside tmp, so a retiring namespace cannot hide it from new publishers.
     const release = await claimWorkspacePublication(workspace);
+    let cleanupFolders = ['tmp'];
     try {
       const cleanup = new FilesystemScratchCleanup();
       await cleanup.retireNestedNamespaces(
@@ -63,14 +65,22 @@ export class FilesystemWorkspaceForget {
         authorized,
         session.id,
       );
-      if (counts.skipped || counts.failed) throw new Error('SESSION_CLEANUP_FAILED');
+      if (counts.skipped || counts.failed) {
+        if (counts.failedFolders?.length)
+          cleanupFolders = counts.failedFolders.map(({ relativePath }) => relativePath);
+        throw new Error('SESSION_CLEANUP_FAILED');
+      }
+      cleanupFolders = [];
       if (process.getuid && (await hasRuntimeOwner({ workspacePath: workspace })))
         throw new Error('SESSION_CLEANUP_FAILED');
+      cleanupFolders = ['tmp'];
       const retired = this.retire(session, operationId, workspace, temporary, authorized);
       if (retired) {
+        cleanupFolders = [`.gestalt/forgotten-tmp/${operationId}`];
         await this.assertRetired(retired);
         await rm(retired, { recursive: true, force: true, maxRetries: 3 });
       }
+      cleanupFolders = ['tmp'];
       // A non-cooperating external publisher must not turn retained files into a
       // successful final Forget. New Mobile starts remain durably fenced.
       try {
@@ -82,6 +92,7 @@ export class FilesystemWorkspaceForget {
       throw new Error('SESSION_CLEANUP_FAILED');
     } catch (error) {
       await release();
+      if (cleanupFolders.length) throw new WorkspaceCleanupFailure(cleanupFolders, error);
       throw error;
     }
   }

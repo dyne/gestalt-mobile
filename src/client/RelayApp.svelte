@@ -443,7 +443,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       });
     },
     onError: (error) => {
-      shellStatus = reportRelayError(error, 'SESSION_FORGET_FAILED');
+      // SessionForgetting already deduplicates notifications for each operation.
+      shellStatus = reportRelayError(error, 'SESSION_FORGET_FAILED', false);
     },
   });
   const autopilotController = new AutopilotController(relay, (next) => (autopilotState = next));
@@ -1902,9 +1903,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     return error instanceof Error ? error.message : 'Unknown relay error.';
   }
 
-  function reportRelayError(error: unknown, fallbackCode: RelayFeedbackCode): string {
-    const feedback = relayFeedback(error, fallbackCode);
-    toastQueue.enqueue({ kind: 'error', ...feedback });
+  function reportRelayError(
+    error: unknown,
+    fallbackCode: RelayFeedbackCode,
+    deduplicate = true,
+  ): string {
+    const { code, ...feedback } = relayFeedback(error, fallbackCode);
+    toastQueue.enqueue({ kind: 'error', ...feedback, ...(deduplicate ? { code } : {}) });
     return feedback.message;
   }
 
