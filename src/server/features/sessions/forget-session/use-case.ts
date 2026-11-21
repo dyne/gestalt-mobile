@@ -4,7 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { SessionForgetOperation } from '../../../../shared/contracts/session-forget.js';
+import {
+  isForgetCleanupFolder,
+  type SessionForgetOperation,
+} from '../../../../shared/contracts/session-forget.js';
 import type { RelaySessionSnapshot } from '../model/relay-session.js';
 import { WorkspaceSessionConflict } from '../application/workspace-conflict.js';
 
@@ -14,6 +17,15 @@ export interface ForgetOperationStore {
   update(operation: SessionForgetOperation): SessionForgetOperation;
   /** Atomically retire the roster row and complete this exact operation. */
   finalize(operation: SessionForgetOperation): SessionForgetOperation;
+}
+
+export class WorkspaceCleanupFailure extends Error {
+  constructor(
+    readonly folders: readonly string[],
+    cause: unknown,
+  ) {
+    super('SESSION_CLEANUP_FAILED', { cause });
+  }
 }
 
 export class ForgetSession {
@@ -83,6 +95,10 @@ export class ForgetSession {
       this.deps.changed(operation);
       return operation;
     } catch (error) {
+      const cleanupFolders =
+        failureCode === 'SESSION_CLEANUP_FAILED' && error instanceof WorkspaceCleanupFailure
+          ? error.folders.filter(isForgetCleanupFolder)
+          : [];
       operation = this.deps.operations.update({
         ...operation,
         phase: 'failed',
@@ -91,6 +107,7 @@ export class ForgetSession {
         ...(error instanceof WorkspaceSessionConflict
           ? { blockingSessionId: error.sessionId }
           : {}),
+        ...(cleanupFolders.length ? { cleanupFolders } : {}),
       });
       this.deps.changed(operation);
       return operation;

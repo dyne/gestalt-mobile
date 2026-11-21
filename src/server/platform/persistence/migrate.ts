@@ -77,6 +77,10 @@ export function migrate(database: DatabaseSync): void {
   );`);
   if (!forgetColumns.some((column) => column.name === 'blocking_session_id'))
     database.exec('ALTER TABLE session_forget_operations ADD COLUMN blocking_session_id TEXT');
+  if (!forgetColumns.some((column) => column.name === 'cleanup_folders_json'))
+    database.exec(
+      'ALTER TABLE session_forget_operations ADD COLUMN cleanup_folders_json TEXT CHECK(cleanup_folders_json IS NULL OR json_valid(cleanup_folders_json))',
+    );
   const workspaceLockColumns = database
     .prepare('PRAGMA table_info(workspace_forget_locks)')
     .all() as Array<{ name: string }>;

@@ -6,6 +6,7 @@
 
 import type { CleanTmpResult } from '../../../shared/contracts/tmp-cleanup.js';
 import type { ToastInput } from '../feedback/toast-queue.js';
+import { cleanupFolderPreview } from '../feedback/cleanup-folder-feedback.js';
 
 const count = (value: number, noun: string): string => `${value} ${noun}${value === 1 ? '' : 's'}`;
 
@@ -29,16 +30,8 @@ export function cleanTmpFeedback(result: CleanTmpResult): ToastInput {
   if (reasons.protected) parts.push(`Kept ${count(reasons.protected, 'protected folder')}.`);
   const otherSkipped = Math.max(0, folders.skipped - reasons.protected);
   if (otherSkipped) parts.push(`Skipped ${count(otherSkipped, 'other folder')}.`);
-  if (failedFolders?.length) {
-    const locations = failedFolders.map(
-      ({ workspaceName, relativePath }) => `“${relativePath}” in “${workspaceName}”`,
-    );
-    const remaining = folders.failed - locations.length;
-    const more = remaining > 0 ? ` and ${count(remaining, 'other folder')}` : '';
-    parts.push(`Could not remove ${locations.join(', ')}${more}.`);
-  } else if (folders.failed) {
-    parts.push(`Could not remove ${count(folders.failed, 'folder')}.`);
-  }
+  const failureIndex = parts.length;
+  if (folders.failed) parts.push(`Could not remove ${count(folders.failed, 'folder')}.`);
   if (workspaces.unavailable) {
     parts.push(`Could not check ${count(workspaces.unavailable, 'workspace')}.`);
   }
@@ -48,5 +41,12 @@ export function cleanTmpFeedback(result: CleanTmpResult): ToastInput {
   }
   if (partial) parts.push('Try Clean TMP again.');
   // Do not deduplicate by a fixed code: a later run can have different counts.
-  return { kind: partial ? 'error' : 'success', message: parts.join(' ') };
+  const kind = partial ? 'error' : 'success';
+  const message = parts.join(' ');
+  if (!folders.failed || !failedFolders?.length) return { kind, message };
+  const details = failedFolders.map(
+    ({ workspaceName, relativePath }) => `“${relativePath}” in “${workspaceName}”`,
+  );
+  parts[failureIndex] = `Could not remove ${cleanupFolderPreview(details, folders.failed)}.`;
+  return { kind, message: parts.join(' '), history: { message, details } };
 }

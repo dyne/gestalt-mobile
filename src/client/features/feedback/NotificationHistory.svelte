@@ -49,6 +49,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             </time>
           </div>
           <p>{item.message}</p>
+          {#if item.details?.length}
+            <ul aria-label="Affected folders">
+              {#each item.details as detail}
+                <li>{detail}</li>
+              {/each}
+            </ul>
+          {/if}
           {#if item.occurrences > 1}<small>Repeated {item.occurrences} times.</small>{/if}
         </li>
       {/each}
@@ -104,15 +111,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     border-block: 1px solid var(--theme-border);
   }
 
-  li {
+  ol > li {
     display: grid;
     gap: 0.4rem;
     padding: 1rem 0.75rem;
     border-block-end: 1px solid var(--theme-border);
   }
 
-  li:last-child {
+  ol > li:last-child {
     border-block-end: 0;
+  }
+
+  ul {
+    margin: 0;
+    padding-inline-start: 1.25rem;
+    overflow-wrap: anywhere;
   }
 
   .notification-meta {

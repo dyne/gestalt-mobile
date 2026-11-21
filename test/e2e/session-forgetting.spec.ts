@@ -270,7 +270,12 @@ for (const viewport of [
           operationId: 'durable-operation',
           phase,
           updatedAt: new Date().toISOString(),
-          ...(phase === 'failed' ? { failureCode: 'SESSION_CLEANUP_FAILED' } : {}),
+          ...(phase === 'failed'
+            ? {
+                failureCode: 'SESSION_CLEANUP_FAILED',
+                cleanupFolders: ['tmp/sessions/mobile-fixture'],
+              }
+            : {}),
         };
       };
       await page.route(/\/api\/sessions\/(forget-owner|other-owner)$/, async (route) => {
@@ -391,7 +396,9 @@ for (const viewport of [
         setPhase('failed');
         await expect(frame()).toHaveAttribute('aria-busy', 'false');
         await expect(frame().getByRole('button', { name: 'Retry Forget' })).toBeEnabled();
-        await expect(page.getByRole('alert')).toContainText('Temporary files could not be removed');
+        await expect(page.getByRole('alert')).toContainText(
+          `Could not finish cleaning “tmp/sessions/mobile-fixture” in “${target.workspacePath?.split('/').at(-1)}”.`,
+        );
         await expect(frame().getByRole('status')).toContainText(
           'Could not forget this session. Try again.',
         );

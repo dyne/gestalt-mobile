@@ -7,7 +7,6 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, open, readdir, realpath, rename, rm, rmdir } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { CLEAN_TMP_FAILED_FOLDER_LIMIT } from '../../../shared/contracts/tmp-cleanup.js';
 import {
   emptyScratchCounts,
   type ScratchCleanupStorage,
@@ -295,8 +294,8 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
           }
         }
         if (
-          outcome === 'failed' &&
-          (counts.failedFolders?.length ?? 0) < CLEAN_TMP_FAILED_FOLDER_LIMIT &&
+          (outcome === 'failed' ||
+            (outcome === 'skipped' && authorized && managedScratchOwnerId(name))) &&
           !/[\\/\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(workspaceName)
         ) {
           (counts.failedFolders ??= []).push({

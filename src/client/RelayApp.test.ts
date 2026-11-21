@@ -588,7 +588,12 @@ describe('RelayApp chat controller composition', () => {
             sessionId: owner.id,
             phase,
             updatedAt: '2026-11-04T10:00:00.000Z',
-            ...(phase === 'failed' ? { failureCode: 'SESSION_CLEANUP_FAILED' as const } : {}),
+            ...(phase === 'failed'
+              ? {
+                  failureCode: 'SESSION_CLEANUP_FAILED' as const,
+                  cleanupFolders: ['tmp/sessions/mobile-fixture'],
+                }
+              : {}),
           }
         : undefined;
     const roster = () => [...(removed ? [] : [{ ...owner, forgetOperation: operation() }]), other];
@@ -699,7 +704,7 @@ describe('RelayApp chat controller composition', () => {
         expect(screen.getByRole('button', { name: 'Retry Forget' })).toBeTruthy(),
       );
       expect(screen.getByRole('alert').textContent).toContain(
-        'Temporary files could not be removed',
+        'Could not finish cleaning “tmp/sessions/mobile-fixture” in “forget-me”.',
       );
       const row = document.querySelector('[data-session-id="a"]') as HTMLElement;
       expect(row.getAttribute('aria-busy')).toBe('false');
@@ -746,7 +751,7 @@ describe('RelayApp chat controller composition', () => {
         );
         if (phase === 'failed')
           expect(screen.getByRole('alert').textContent).toContain(
-            'Temporary files could not be removed',
+            'Could not finish cleaning “tmp/sessions/mobile-fixture” in “forget-me”.',
           );
       } finally {
         f.view.unmount();

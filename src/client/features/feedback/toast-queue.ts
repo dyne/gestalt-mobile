@@ -18,9 +18,11 @@ export type Toast = {
 export type NotificationHistoryItem = Toast & {
   createdAt: number;
   updatedAt: number;
+  details?: readonly string[];
 };
 
-export type ToastInput = Omit<Toast, 'id' | 'occurrences'>;
+export type NotificationDetails = Readonly<{ message: string; details: readonly string[] }>;
+export type ToastInput = Omit<Toast, 'id' | 'occurrences'> & { history?: NotificationDetails };
 
 export type ToastQueue = {
   enqueue(input: ToastInput): string;
@@ -79,6 +81,9 @@ function readHistory(
           typeof item.id === 'string' &&
           ['error', 'success', 'warning', 'info'].includes(String(item.kind)) &&
           typeof item.message === 'string' &&
+          (item.details === undefined ||
+            (Array.isArray(item.details) &&
+              item.details.every((detail: unknown) => typeof detail === 'string'))) &&
           typeof item.occurrences === 'number' &&
           typeof item.createdAt === 'number' &&
           typeof item.updatedAt === 'number',
@@ -161,11 +166,13 @@ export function createToastQueue(options: QueueOptions = {}): ToastQueue {
 
       const timestamp = now();
       const id = `toast-${timestamp}-${++sequence}`;
-      const toast: Toast = { ...input, id, occurrences: 1 };
+      const { history: notification, ...visible } = input;
+      const toast: Toast = { ...visible, id, occurrences: 1 };
       toasts = [...toasts, toast];
-      history = [...history, { ...toast, createdAt: timestamp, updatedAt: timestamp }].slice(
-        -historyLimit,
-      );
+      history = [
+        ...history,
+        { ...toast, ...notification, createdAt: timestamp, updatedAt: timestamp },
+      ].slice(-historyLimit);
       const timeout = toastTimeouts[input.kind];
       if (timeout !== null) {
         timers.set(id, {

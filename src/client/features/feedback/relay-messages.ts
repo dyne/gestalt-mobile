@@ -4,6 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { isForgetCleanupFolder } from '../../../shared/contracts/session-forget.js';
+import { cleanupFolderPreview } from './cleanup-folder-feedback.js';
+import type { NotificationDetails } from './toast-queue.js';
+
 const relayMessages = {
   SESSION_WORKSPACE_BUSY:
     'A session is already running in this workspace. Open it or stop it first.',
@@ -100,7 +104,7 @@ export type RelayFeedbackCode = keyof typeof relayMessages;
 export function relayFeedback(
   error: unknown,
   fallbackCode: RelayFeedbackCode,
-): { code: RelayFeedbackCode; message: string; retryable: boolean } {
+): { code: RelayFeedbackCode; message: string; retryable: boolean; history?: NotificationDetails } {
   const candidate = error instanceof Error ? error.message : '';
   const problemCode =
     typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
@@ -115,9 +119,33 @@ export function relayFeedback(
     typeof error === 'object' && error !== null && 'retryable' in error
       ? error.retryable === true
       : true;
-  const message =
+  let message =
     fallbackCode === 'SESSION_START_FAILED' && code === 'SESSION_WORKSPACE_UNAVAILABLE'
       ? 'The selected workspace is busy or its temporary ownership could not be confirmed. Retry shortly; if this persists, use Self DEBUG to inspect workspace ownership.'
       : relayMessages[code];
+  if (code === 'SESSION_CLEANUP_FAILED' && typeof error === 'object' && error !== null) {
+    const workspace =
+      'workspaceName' in error &&
+      typeof error.workspaceName === 'string' &&
+      error.workspaceName.length > 0 &&
+      error.workspaceName.length <= 255 &&
+      !/[\\/\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(error.workspaceName)
+        ? ` in “${error.workspaceName}”`
+        : '';
+    const folders =
+      'cleanupFolders' in error && Array.isArray(error.cleanupFolders)
+        ? error.cleanupFolders.filter(isForgetCleanupFolder)
+        : [];
+    message = `Temporary files could not be removed${workspace}. The session is retained. Try Forget again.`;
+    if (folders.length) {
+      const details = folders.map((folder) => `“${folder}”${workspace}`);
+      return {
+        code,
+        message: `Could not finish cleaning ${cleanupFolderPreview(details)}. The session is retained. Try Forget again.`,
+        retryable,
+        history: { message, details },
+      };
+    }
+  }
   return { code, message, retryable };
 }
