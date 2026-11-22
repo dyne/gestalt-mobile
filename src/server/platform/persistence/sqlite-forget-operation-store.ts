@@ -6,7 +6,10 @@
 
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import type { ForgetOperationStore } from '../../features/sessions/forget-session/use-case.js';
+import {
+  ForgetRecoveryUnavailable,
+  type ForgetOperationStore,
+} from '../../features/sessions/forget-session/use-case.js';
 import {
   isForgetCleanupFolder,
   type SessionForgetOperation,
@@ -26,6 +29,7 @@ export class SqliteForgetOperationStore implements ForgetOperationStore {
           phase: SessionForgetOperation['phase'];
           updated_at: string;
           failure_code: SessionForgetOperation['failureCode'] | null;
+          keep_files_requested: number;
           scratch_retained: number;
           blocking_session_id: string | null;
           cleanup_folders_json: string | null;
@@ -42,6 +46,7 @@ export class SqliteForgetOperationStore implements ForgetOperationStore {
           phase: row.phase,
           updatedAt: row.updated_at,
           ...(row.failure_code ? { failureCode: row.failure_code } : {}),
+          ...(row.keep_files_requested ? { keepFilesRequested: true as const } : {}),
           ...(row.scratch_retained ? { scratchRetained: true as const } : {}),
           ...(row.blocking_session_id ? { blockingSessionId: row.blocking_session_id } : {}),
           ...(cleanupFolders.length ? { cleanupFolders } : {}),
@@ -58,9 +63,27 @@ export class SqliteForgetOperationStore implements ForgetOperationStore {
         .all() as { session_id: string }[]
     ).map((row) => row.session_id);
   }
-  begin(id: string): SessionForgetOperation | null {
+  begin(id: string, keepFilesFor?: string): SessionForgetOperation | null {
     this.db.exec('SAVEPOINT begin_forget');
     try {
+      if (keepFilesFor !== undefined) {
+        const existing = this.find(id);
+        if (
+          existing?.operationId !== keepFilesFor ||
+          (!existing.keepFilesRequested &&
+            !(
+              existing.phase === 'failed' &&
+              existing.failureCode === 'SESSION_CLEANUP_FAILED' &&
+              !existing.blockingSessionId
+            ))
+        )
+          throw new ForgetRecoveryUnavailable();
+        this.db
+          .prepare(
+            'UPDATE session_forget_operations SET keep_files_requested=1 WHERE session_id=? AND operation_id=?',
+          )
+          .run(id, keepFilesFor);
+      }
       this.db
         .prepare(
           `INSERT INTO session_forget_operations (session_id, operation_id, phase, updated_at)

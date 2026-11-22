@@ -8,7 +8,17 @@ import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import fastify from 'fastify';
@@ -504,7 +514,15 @@ describe('POST /api/maintenance/clean-tmp', () => {
       const blocked = join(context.directory, 'blocked');
       await mkdir(blocked);
       await writeFile(join(blocked, 'payload'), 'fixture');
-      await chmod(blocked, 0o500);
+      // Model a previous partial retirement whose contents cannot be inspected.
+      const retired = join(
+        f.workspacePath,
+        'tmp',
+        'sessions',
+        `.cleanup-${context.ownerId}-${randomUUID()}`,
+      );
+      await rename(context.directory, retired);
+      await chmod(join(retired, 'blocked'), 0);
     }
     const container = join(f.workspacePath, 'tmp', 'sessions');
     const repair = async () => {

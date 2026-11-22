@@ -12,6 +12,8 @@ export type SessionForgetOperation = Readonly<{
   updatedAt: string;
   /** Forget completed while ownership checks retained disposable files. */
   scratchRetained?: true;
+  /** Durable user choice after an incomplete cleanup. */
+  keepFilesRequested?: true;
   blockingSessionId?: string;
   /** Workspace-relative cleanup locations identified by the failed stage. */
   cleanupFolders?: readonly string[];

@@ -227,10 +227,17 @@ deletion failure releases this invocation's fence and permits a later validated
 retry. Crashes with a held fence or incomplete metadata stay indeterminate and
 are retained; a directory name alone never authorizes their removal. Restored
 roster protection covers both stable owners and their pending removal directories.
-Cleanup skips any owner containing symlinks, foreign UID, hard-linked files,
+Cleanup skips owners containing foreign UIDs, regular files with links outside the validated payload root,
 special files, invalid metadata or unreleased/unknown leases. It returns fixed
 category counts without exposing paths or contents. One unavailable workspace
 does not prevent cleanup of another available workspace.
+
+Forget can remove owner-read-only package cache directories after validation and retirement.
+If temporary file cleanup fails, the session row offers **Retry Forget** and
+**Forget and keep temporary files**. The latter records the choice for the failed
+operation, confirms runtime release again, and finalizes the roster entry and
+workspace lock without retrying deletion. This also applies after relay restart.
+Unreleased scratch leases continue to protect their folders during Clean TMP.
 
 ### Contained workspace and owner protection
 

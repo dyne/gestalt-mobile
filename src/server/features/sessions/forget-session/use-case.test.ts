@@ -8,13 +8,24 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  link,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fastify from 'fastify';
 import { ForgetSession } from './use-case.js';
 import { registerForgetSession } from './endpoint.js';
+import { registerSessionRoutes } from '../register-routes.js';
 import { RelaySession } from '../model/relay-session.js';
 import { promoteRecentThread } from '../promote-recent-thread/use-case.js';
 import { migrate } from '../../../platform/persistence/migrate.js';
@@ -161,6 +172,95 @@ async function fixture() {
 }
 
 describe('durable Forget orchestration', () => {
+  it('removes read-only package caches with internal hard links on normal Forget', async () => {
+    const f = await fixture();
+    const cache = join(f.context.environment.TMPDIR!, 'module-cache');
+    await mkdir(cache);
+    await writeFile(join(cache, 'binary'), 'build');
+    await link(join(cache, 'binary'), join(cache, 'alias'));
+    await chmod(cache, 0o555);
+    try {
+      expect(await f.make().execute(f.session.id)).toMatchObject({ phase: 'completed' });
+      expect(existsSync(f.context.environment.TMPDIR!)).toBe(false);
+    } finally {
+      if (existsSync(cache)) await chmod(cache, 0o700);
+      roots.push(f.context.environment.TMPDIR!);
+    }
+  });
+
+  it('recovers a failed cleanup through the API while retaining external links and freeing the workspace', async () => {
+    const f = await fixture();
+    roots.push(f.context.environment.TMPDIR!);
+    const outside = join(f.root, 'keep');
+    await writeFile(outside, 'preserved');
+    const inside = join(f.context.directory, 'linked');
+    await link(outside, inside);
+    const release = vi.fn(async () => {});
+    const forget = f.make(release);
+    const app = fastify();
+    registerSessionRoutes(app, {
+      sessionRoutes: {
+        createId: randomUUID,
+        workspaces: { resolve: vi.fn() },
+        profiles: { require: vi.fn() },
+        skillProfiles: { readGlobalProfile: vi.fn(), readWorkspaceDefault: vi.fn() },
+        skillCatalog: () => ({ list: vi.fn() }),
+        find: (id) => f.sessions.find(id),
+        forgetOperation: (id) => f.operations.find(id),
+        forget: (id, keep) => forget.execute(id, keep),
+        save: (session) => f.sessions.save(session),
+        now: () => new Date().toISOString(),
+      },
+      logger: console,
+    });
+    try {
+      const url = '/api/sessions/' + f.session.id;
+      const remove = (suffix = '') => app.inject({ method: 'DELETE', url: url + suffix });
+      expect((await remove('/keep-temporary-files/stale')).statusCode).toBe(409);
+      expect(f.operations.find(f.session.id)).toBeNull();
+      expect((await remove()).statusCode).toBe(503);
+      const failed = f.operations.find(f.session.id)!;
+      expect(failed.failureCode).toBe('SESSION_CLEANUP_FAILED');
+      const recovery = '/keep-temporary-files/' + failed.operationId;
+      expect((await remove(recovery)).statusCode).toBe(204);
+      expect((await remove(recovery)).statusCode).toBe(204);
+      expect(release).toHaveBeenCalledTimes(2);
+      expect(f.sessions.find(f.session.id)).toBeNull();
+      expect(f.operations.find(f.session.id)).toMatchObject({
+        phase: 'completed',
+        scratchRetained: true,
+      });
+      expect(f.db.prepare('SELECT 1 FROM workspace_forget_locks').get()).toBeUndefined();
+      expect(await readFile(inside, 'utf8')).toBe('preserved');
+      expect(await readFile(outside, 'utf8')).toBe('preserved');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rechecks release and preserves the keep-files decision across restart', async () => {
+    const f = await fixture();
+    roots.push(f.context.environment.TMPDIR!);
+    const borrower = await f.scratch.borrow(f.session);
+    const failed = await f.make().execute(f.session.id);
+    expect(failed?.failureCode).toBe('SESSION_CLEANUP_FAILED');
+    const clean = vi.fn(async () => {});
+    const stopping = f.make(async () => {
+      throw new Error('busy');
+    }, clean);
+    expect(await stopping.execute(f.session.id, failed!.operationId)).toMatchObject({
+      phase: 'failed',
+      failureCode: 'SESSION_RELEASE_UNCONFIRMED',
+    });
+    expect(f.sessions.find(f.session.id)).not.toBeNull();
+    expect(await f.make(async () => {}, clean).execute(f.session.id)).toMatchObject({
+      phase: 'completed',
+      scratchRetained: true,
+    });
+    expect(clean).not.toHaveBeenCalled();
+    await borrower.release();
+  });
+
   it('holds the shared publication fence through durable finalization and removes physical payload', async () => {
     const f = await fixture();
     const runtime = await readFile(

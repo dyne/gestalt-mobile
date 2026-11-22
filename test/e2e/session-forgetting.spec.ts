@@ -548,3 +548,39 @@ for (const viewport of [
     });
   }
 }
+
+test('forgets a saved session through the keep-files action after a cleanup failure', async ({
+  page,
+}) => {
+  await mockAuthenticatedStatus(page);
+  const fixture = new ChatRelayFixture(page);
+  await fixture.install([
+    {
+      id: 'stuck',
+      state: 'released',
+      threadId: 'stuck-thread',
+      workspaceId: 'workspace-1',
+      workspacePath: '/workspace/stuck',
+      forgetOperation: {
+        sessionId: 'stuck',
+        operationId: 'failed-operation',
+        phase: 'failed',
+        failureCode: 'SESSION_CLEANUP_FAILED',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    },
+  ]);
+  const path = '**/api/sessions/stuck/keep-temporary-files/failed-operation';
+  await page.route(path, async (route) => {
+    expect(route.request().method()).toBe('DELETE');
+    fixture.sessions.splice(0);
+    await route.fulfill({ status: 204 });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+  const row = page.locator('[data-session-id="stuck"]').last();
+  const response = page.waitForResponse(path);
+  await row.getByRole('button', { name: 'Forget and keep temporary files' }).click();
+  expect((await response).status()).toBe(204);
+  await expect(row).toHaveCount(0);
+});

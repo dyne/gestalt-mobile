@@ -5,6 +5,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
 import { lstat, mkdir, open, readdir, realpath, rename, rm, rmdir } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
@@ -43,6 +44,40 @@ function reject(reason: ScratchCleanupReason): never {
 /** POSIX payload names need not be UTF-8. Keep their bytes for filesystem calls. */
 function payloadPath(directory: string | Buffer, name: Buffer): Buffer {
   return Buffer.concat([Buffer.from(directory), Buffer.from(sep), name]);
+}
+
+type ReadOnlyPayloadDirectory = {
+  relativePath: Buffer;
+  dev: bigint;
+  ino: bigint;
+  birthtimeNs: bigint;
+};
+
+/** Restore owner write access only to the directories inspected before retirement. */
+async function prepareReadOnlyDirectories(
+  root: string,
+  directories: readonly ReadOnlyPayloadDirectory[],
+) {
+  for (const directory of directories) {
+    const path = payloadPath(root, directory.relativePath);
+    const handle = await open(
+      path,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+    try {
+      const info = await handle.stat({ bigint: true });
+      if (
+        info.uid !== BigInt(process.getuid!()) ||
+        info.dev !== directory.dev ||
+        info.ino !== directory.ino ||
+        info.birthtimeNs !== directory.birthtimeNs
+      )
+        reject('unsafe');
+      await handle.chmod(Number(info.mode & 0o7777n) | 0o300);
+    } finally {
+      await handle.close();
+    }
+  }
 }
 
 /** Only the managed namespace is traversed. There are no prefix/age/PID legacy recognizers. */
@@ -189,7 +224,8 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
         // Manual Clean Tmp bounds opportunistic inspection. Explicit Forget
         // has to finish checking large owners before retiring the session.
         const inspectionBudget = () => (authorized ? undefined : { entries: 0 });
-        await this.validatePayload(directory, inspectionBudget());
+        const readOnlyDirectories = await this.validatePayload(directory, inspectionBudget());
+        let readOnlyRuntimeDirectories: ReadOnlyPayloadDirectory[] = [];
         if (marker.runtime) {
           const present = await validateRuntime(marker, marker.runtime, true);
           if (present) {
@@ -202,7 +238,10 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
               onlyOwnerId ??
                 (authorizedSessionId ? mobileScratchOwnerId(authorizedSessionId) : undefined),
             );
-            await this.validatePayload(marker.runtime.directory, inspectionBudget());
+            readOnlyRuntimeDirectories = await this.validatePayload(
+              marker.runtime.directory,
+              inspectionBudget(),
+            );
           }
         }
         await privateDirectory(directory, false);
@@ -243,6 +282,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
           onlyOwnerId ??
             (authorizedSessionId ? mobileScratchOwnerId(authorizedSessionId) : undefined),
         );
+        await prepareReadOnlyDirectories(directory, readOnlyDirectories);
         // Keep authority metadata until disposable payload has been removed. A failed
         // payload deletion is retryable; an interrupted metadata retirement is unknown.
         for (const child of await readdir(directory, { encoding: 'buffer' })) {
@@ -254,7 +294,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
             continue;
           await rm(payloadPath(directory, child), { recursive: true });
         }
-        await this.retireRuntime(directory, marker);
+        await this.retireRuntime(directory, marker, readOnlyRuntimeDirectories);
         if ((await readdir(directory)).includes('leases'))
           await rm(join(directory, 'leases'), { recursive: true });
         await rm(join(directory, scratchMarkerName));
@@ -387,7 +427,11 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
     }
   }
 
-  private async retireRuntime(directory: string, marker: ManagedScratchOwner) {
+  private async retireRuntime(
+    directory: string,
+    marker: ManagedScratchOwner,
+    readOnlyDirectories: readonly ReadOnlyPayloadDirectory[],
+  ) {
     if (!marker.runtime) return;
     const runtime = marker.runtime;
     if (!(await validateRuntime(marker, runtime, true))) return;
@@ -411,6 +455,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
     if (!attributed && children.length) reject('unrecognized');
     if (attributed) {
       await validateRuntime(marker, marker.runtime, true);
+      await prepareReadOnlyDirectories(runtime.directory, readOnlyDirectories);
       for (const child of children) {
         if (child.toString() !== runtimeMarkerName)
           await rm(payloadPath(runtime.directory, child), { recursive: true });
@@ -468,48 +513,64 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
     }
   }
 
-  private async validatePayload(
-    directory: string | Buffer,
-    budget?: { entries: number },
-    root = directory,
-    depth = 0,
-  ): Promise<void> {
-    if (depth > 128) reject('unrecognized');
-    // Even an empty nested namespace is not authority to retire a workspace's
-    // contents recursively as another owner's payload.
-    if (
-      directory !== root &&
-      basename(directory.toString()) === 'sessions' &&
-      basename(dirname(directory.toString())) === 'tmp'
-    )
-      reject('unrecognized');
-    for (const entry of await readdir(directory, { encoding: 'buffer', withFileTypes: true })) {
-      const child = entry.name;
-      if (budget && ++budget.entries > 100_000) reject('unrecognized');
-      if (child.toString() === workspacePublicationName) reject('busy');
+  private async validatePayload(root: string, budget?: { entries: number }) {
+    const links = new Map<string, bigint>();
+    const readOnlyDirectories: ReadOnlyPayloadDirectory[] = [];
+    const prefixLength = Buffer.byteLength(root) + 1;
+    async function visit(directory: string | Buffer, depth: number): Promise<void> {
+      if (depth > 128) reject('unrecognized');
+      // Even an empty nested namespace is not authority to retire a workspace's
+      // contents recursively as another owner's payload.
       if (
         directory !== root &&
-        [
-          scratchMarkerName,
-          runtimeMarkerName,
-          '.controller-lock',
-          '.association-lock',
-          containmentFenceName,
-        ].includes(child.toString())
+        basename(directory.toString()) === 'sessions' &&
+        basename(dirname(directory.toString())) === 'tmp'
       )
         reject('unrecognized');
-      const path = payloadPath(directory, child);
-      const info = await lstat(path);
-      if (
-        (process.getuid && info.uid !== process.getuid()) ||
-        (!info.isDirectory() && !info.isFile() && !info.isSymbolicLink() && !info.isSocket()) ||
-        (info.isFile() && info.nlink !== 1)
-      )
-        reject('unsafe');
-      // Payload symlinks (for example npm's .bin entries) are disposable links.
-      // lstat never follows them, and rm unlinks them without deleting their targets.
-      // Owner paths and authority metadata retain their separate no-link checks.
-      if (info.isDirectory()) await this.validatePayload(path, budget, root, depth + 1);
+      for (const entry of await readdir(directory, { encoding: 'buffer', withFileTypes: true })) {
+        const child = entry.name;
+        if (budget && ++budget.entries > 100_000) reject('unrecognized');
+        if (child.toString() === workspacePublicationName) reject('busy');
+        if (
+          directory !== root &&
+          [
+            scratchMarkerName,
+            runtimeMarkerName,
+            '.controller-lock',
+            '.association-lock',
+            containmentFenceName,
+          ].includes(child.toString())
+        )
+          reject('unrecognized');
+        const path = payloadPath(directory, child);
+        const info = await lstat(path, { bigint: true });
+        if (
+          (process.getuid && info.uid !== BigInt(process.getuid())) ||
+          (!info.isDirectory() && !info.isFile() && !info.isSymbolicLink() && !info.isSocket())
+        )
+          reject('unsafe');
+        // Every name for a multiply-linked inode must be inside this validated root.
+        if (info.isFile() && info.nlink > 1n) {
+          const key = `${info.dev}:${info.ino}`;
+          links.set(key, (links.get(key) ?? info.nlink) - 1n);
+        }
+        // Payload symlinks (for example npm's .bin entries) are disposable links.
+        // lstat never follows them, and rm unlinks them without deleting their targets.
+        // Owner paths and authority metadata retain their separate no-link checks.
+        if (info.isDirectory()) {
+          if (process.getuid && (info.mode & 0o300n) !== 0o300n)
+            readOnlyDirectories.push({
+              relativePath: path.subarray(prefixLength),
+              dev: info.dev,
+              ino: info.ino,
+              birthtimeNs: info.birthtimeNs,
+            });
+          await visit(path, depth + 1);
+        }
+      }
     }
+    await visit(root, 0);
+    for (const remaining of links.values()) if (remaining !== 0n) reject('unsafe');
+    return readOnlyDirectories;
   }
 }

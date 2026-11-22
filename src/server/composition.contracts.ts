@@ -9864,6 +9864,12 @@ describe('production composition', () => {
         ['HEAD', '/api/sessions/recent-threads', '/api/sessions/recent-threads', 'protected'],
         ['GET', '/api/sessions/:id', '/api/sessions/session-1', 'protected'],
         ['DELETE', '/api/sessions/:id', '/api/sessions/session-1', 'protected'],
+        [
+          'DELETE',
+          '/api/sessions/:id/keep-temporary-files/:keepFilesFor',
+          '/api/sessions/session-1/keep-temporary-files/operation-1',
+          'protected',
+        ],
         ['GET', '/api/sessions/:id/attention', '/api/sessions/session-1/attention', 'protected'],
         [
           'POST',
