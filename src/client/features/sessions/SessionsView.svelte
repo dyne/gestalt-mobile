@@ -499,10 +499,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             value={selectedSkillProfile}
             onchange={(event) => onskillprofilechange(event.currentTarget.value)}
           >
-            <option value="">Default</option>
             {#each skillProfiles as profile (profile.name)}<option value={profile.name}
                 >{profile.name}</option
               >{/each}
+            <option value="">None</option>
           </select>
         </label>
         <label for="model"

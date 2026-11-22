@@ -566,7 +566,7 @@ describe('SessionsView session base tree', () => {
     expandAdvanced();
     const select = screen.getByLabelText('Skills profile');
     expect((select as HTMLSelectElement).value).toBe('');
-    expect((select as HTMLSelectElement).options[0]?.text).toBe('Default');
+    expect(Array.from((select as HTMLSelectElement).options).at(-1)?.text).toBe('None');
     expect((screen.getByLabelText('Sandbox') as HTMLSelectElement).value).toBe('workspace-git');
     expect((screen.getByLabelText('Approval policy') as HTMLSelectElement).value).toBe('never');
     expect(

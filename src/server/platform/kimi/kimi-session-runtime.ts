@@ -413,7 +413,7 @@ export class KimiSessionRuntime {
     const selection = effective?.skills ?? [];
     if (effective?.selectedProfileName)
       return normalizeSkillProfileName(effective.selectedProfileName);
-    if (!selection.length) return 'default';
+    if (!selection.length && !effective?.mandatorySkillsOnly) return 'default';
     const canonical = JSON.stringify([...selection].sort((a, b) => a.path.localeCompare(b.path)));
     return `sel-${createHash('sha256').update(canonical).digest('hex').slice(0, 12)}`;
   }

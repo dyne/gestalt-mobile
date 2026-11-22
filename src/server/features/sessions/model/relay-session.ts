@@ -15,6 +15,7 @@ import type { SessionModelSettings } from '../../../../shared/contracts/session-
 import type { SelfDebugSession } from '../../../../shared/contracts/self-debug.js';
 import {
   createSkillSelection,
+  isMandatoryGestaltSkill,
   normalizeSkillProfileName,
   type SkillSelection,
 } from '../../skills/model/skill-profile.js';
@@ -64,6 +65,7 @@ export type PendingInteraction = {
 export type EffectiveSkillSelection = {
   capabilities?: ProfileCapabilities;
   selectedProfileName?: string;
+  mandatorySkillsOnly?: true;
   /** Legacy persisted field; Serena availability is now automatic. */
   serenaSelected?: boolean;
   skills: SkillSelection;
@@ -123,6 +125,16 @@ export function createSessionExecutionPolicy(input: {
 export function createEffectiveSkillSelection(
   input: EffectiveSkillSelection,
 ): EffectiveSkillSelection {
+  if (input.mandatorySkillsOnly) {
+    return {
+      mandatorySkillsOnly: true,
+      skills: createSkillSelection(
+        input.skills
+          .filter(({ name }) => isMandatoryGestaltSkill(name))
+          .map((skill) => ({ ...skill, enabled: true })),
+      ),
+    };
+  }
   const warnings = (input.warnings ?? []).filter(
     (warning): warning is string => typeof warning === 'string' && warning.length > 0,
   );

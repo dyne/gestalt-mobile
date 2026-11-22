@@ -98,10 +98,12 @@ export type SkillCatalogResult = { skills: AvailableSkill[]; errors: SkillDiscov
  * executors load declared and other relevant skills on demand.
  */
 export function isAlwaysAdvertisedSkill(skill: Pick<AvailableSkill, 'name' | 'enabled'>): boolean {
-  return (
-    isGestaltSkillName(skill.name) &&
-    (!['gestalt:serena', 'gestalt:playwright'].includes(skill.name) || skill.enabled)
-  );
+  return isMandatoryGestaltSkill(skill.name) || (isGestaltSkillName(skill.name) && skill.enabled);
+}
+
+/** Gestalt infrastructure remains available when all optional skills are off. */
+export function isMandatoryGestaltSkill(name: string): boolean {
+  return isGestaltSkillName(name) && !['gestalt:serena', 'gestalt:playwright'].includes(name);
 }
 
 export function isGestaltSkillName(name: string): boolean {
@@ -321,7 +323,18 @@ export function compileSkillOverride(input: {
   discovered: readonly AvailableSkill[];
   explicit?: SkillSelection;
   project?: SkillSelection;
+  mandatorySkillsOnly?: true;
 }): CompiledSkillOverride {
+  if (input.mandatorySkillsOnly) {
+    return {
+      source: 'explicit',
+      skillsConfig: input.discovered.map(({ path, name }) => ({
+        path,
+        enabled: isMandatoryGestaltSkill(name),
+      })),
+      warnings: [],
+    };
+  }
   const effective = selectEffectiveSkillSelection(input);
   const reconciled = reconcileSkillSelectionSnapshot(input.discovered, effective.selection);
   return {

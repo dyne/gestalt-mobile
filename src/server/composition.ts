@@ -139,7 +139,11 @@ import { CodexCapabilities } from './platform/codex/codex-capabilities.js';
 import { CodexPlaywright, type PlaywrightAuthority } from './platform/codex/codex-playwright.js';
 import { ManagedPlaywright } from './platform/codex/managed-playwright.js';
 import { isManagedPlaywrightCall } from '../shared/contracts/managed-playwright.js';
-import { compileSkillOverride, type SkillProfile } from './features/skills/model/skill-profile.js';
+import {
+  compileSkillOverride,
+  isMandatoryGestaltSkill,
+  type SkillProfile,
+} from './features/skills/model/skill-profile.js';
 import { SupervisedPlanRegistry } from './features/plans/application/supervised-plan-registry.js';
 import { planAttachmentSupervision } from './features/plans/application/plan-attachment-supervision.js';
 import { prepareOrgPlanSupervision } from './features/plans/application/prepare-org-plan-supervision.js';
@@ -907,6 +911,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       return compileSkillOverride({
         discovered: catalog.skills,
         explicit: session.effectiveSkillSelection.skills,
+        mandatorySkillsOnly: session.effectiveSkillSelection.mandatorySkillsOnly,
       }).skillsConfig;
     const project = await skillProfiles.readWorkspaceDefault(session.workspacePath);
     return compileSkillOverride({
@@ -1896,27 +1901,34 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               options.launchAppServer ?? launchCodexAppServer,
               Math.max(1, deadline - Date.now()),
             ).list(session.workspacePath);
-            const project = await skillProfiles.readWorkspaceDefault(session.workspacePath);
+            const mandatorySkillsOnly = session.effectiveSkillSelection?.mandatorySkillsOnly;
+            const project = mandatorySkillsOnly
+              ? undefined
+              : await skillProfiles.readWorkspaceDefault(session.workspacePath);
             const selected = compileSkillOverride({
               discovered: catalog.skills,
               explicit:
                 session.effectiveSkillSelection?.skills ?? options.explicitSkillProfile?.skills,
               project: project?.skills,
+              mandatorySkillsOnly,
             });
+            const availableSkills = mandatorySkillsOnly
+              ? catalog.skills.filter(({ name }) => isMandatoryGestaltSkill(name))
+              : catalog.skills;
             const state = await capabilities.prepare({
               cwd: session.workspacePath,
               approvalPolicy: session.executionPolicy?.approvalPolicy ?? 'on-request',
               rpc,
               config,
               deadline,
-              skills: catalog.skills,
+              skills: availableSkills,
               skillsConfig: selected.skillsConfig,
               start: true,
               startup: !session.threadId,
             });
             return playwright.prepare(state, playwrightAuthority(session), {
               rpc,
-              skills: catalog.skills,
+              skills: availableSkills,
               deadline: Date.now() + 5_000,
               current: () => playwrightAuthority(sessions.find(session.id) ?? session),
             });

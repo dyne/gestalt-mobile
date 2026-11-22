@@ -54,6 +54,7 @@ export class SkillsState {
   private capabilitiesBaseline = false;
   private defaultPlaywrightEnabled = false;
   private defaultExplicitCapabilities = false;
+  private emptyDraft = false;
   private baseline = new Map<string, boolean>();
   private missingBaseline = new Map<string, { name: string; path: string; enabled: boolean }>();
   private removedMissingPaths = new Set<string>();
@@ -171,6 +172,7 @@ export class SkillsState {
       return;
     }
     this.selectedProfileName = selected.name;
+    this.emptyDraft = false;
     this.removedMissingPaths.clear();
     this.saveAsName = selected.name;
     this.playwrightEnabled = selected.capabilities?.playwright.enabled ?? false;
@@ -194,14 +196,18 @@ export class SkillsState {
         : { kind: 'empty' };
   }
 
-  selectDefaultProfile(): void {
+  selectDefaultProfile(empty = false): void {
     this.removedMissingPaths.clear();
+    this.emptyDraft = empty;
     this.selectedProfileName = '';
     this.saveAsName = '';
-    this.playwrightEnabled = this.defaultPlaywrightEnabled;
-    this.explicitCapabilities = this.defaultExplicitCapabilities;
+    this.playwrightEnabled = !empty && this.defaultPlaywrightEnabled;
+    this.explicitCapabilities = !empty && this.defaultExplicitCapabilities;
     this.missingSkills = [];
-    this.skills = this.skills.map((skill) => ({ ...skill, enabled: skill.effectiveEnabled }));
+    this.skills = this.skills.map((skill) => ({
+      ...skill,
+      enabled: !empty && skill.effectiveEnabled,
+    }));
     this.captureBaseline();
     this.status = this.skills.length ? { kind: 'ready' } : { kind: 'empty' };
   }
@@ -260,6 +266,7 @@ export class SkillsState {
         saved,
       ].sort((left, right) => left.name.localeCompare(right.name));
       this.selectedProfileName = saved.name;
+      this.emptyDraft = false;
       this.saveAsName = saved.name;
       this.captureBaseline();
       this.status = { kind: 'saved' };
@@ -287,6 +294,7 @@ export class SkillsState {
         (profile) => 'error' in profile || profile.name !== name,
       );
       this.selectedProfileName = '';
+      this.emptyDraft = false;
       this.saveAsName = '';
       this.playwrightEnabled = this.defaultPlaywrightEnabled;
       this.explicitCapabilities = this.defaultExplicitCapabilities;
@@ -354,6 +362,7 @@ export class SkillsState {
     this.defaultExplicitCapabilities = available.capabilities !== undefined;
     if (
       !this.selectedProfileName &&
+      !this.emptyDraft &&
       this.playwrightEnabled === this.browserBaseline &&
       this.explicitCapabilities === this.capabilitiesBaseline
     ) {
@@ -378,7 +387,7 @@ export class SkillsState {
           ? false
           : selectedByPath
             ? (selectedByPath.get(skill.path) ?? false)
-            : skill.effectiveEnabled),
+            : !this.emptyDraft && skill.effectiveEnabled),
     }));
     const availablePaths = new Set(optionalSkills.map((skill) => skill.path));
     this.missingSkills = selectedSkills
@@ -396,7 +405,9 @@ export class SkillsState {
       optionalSkills.map((skill) => [
         skill.path,
         this.baseline.get(skill.path) ??
-          (selectedByPath ? (selectedByPath.get(skill.path) ?? false) : skill.effectiveEnabled),
+          (selectedByPath
+            ? (selectedByPath.get(skill.path) ?? false)
+            : !this.emptyDraft && skill.effectiveEnabled),
       ]),
     );
   }

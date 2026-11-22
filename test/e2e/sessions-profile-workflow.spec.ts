@@ -106,7 +106,7 @@ async function open(
   ]);
   const skillProfile = page.getByLabel('Skills profile');
   await expect(skillProfile).toBeVisible();
-  await expect(skillProfile.locator('option').first()).toHaveText('Default');
+  await expect(skillProfile.locator('option').last()).toHaveText('None');
   await expect(
     page.getByText('The selected skill set is fixed after this session is created.'),
   ).toHaveCount(0);
@@ -231,9 +231,9 @@ test('refreshes new-session profile choices after create, replace, and delete', 
   await page.getByRole('button', { name: 'Save profile' }).click();
   await page.getByRole('button', { name: 'Close skill profile editor' }).click();
   await expect(page.getByLabel('Skills profile').locator('option')).toHaveText([
-    'Default',
     'team',
     'fresh',
+    'None',
   ]);
 
   await page.getByRole('button', { name: 'Manage skill profiles' }).click();
@@ -251,5 +251,5 @@ test('refreshes new-session profile choices after create, replace, and delete', 
     .getByRole('button', { name: 'Delete profile' })
     .click();
   await page.getByRole('button', { name: 'Close skill profile editor' }).click();
-  await expect(page.getByLabel('Skills profile').locator('option')).toHaveText(['Default', 'team']);
+  await expect(page.getByLabel('Skills profile').locator('option')).toHaveText(['team', 'None']);
 });

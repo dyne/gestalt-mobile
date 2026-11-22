@@ -18,13 +18,28 @@ import { SkillProfileError } from '../../skills/model/errors.js';
 
 /** Same immutable profile/capability snapshot for ordinary starts and read-only preparation. */
 export async function resolveSessionSkillSelection(
-  input: { workspacePath: string; provider: LlmProvider; profile: string; skillProfile?: string },
+  input: {
+    workspacePath: string;
+    provider: LlmProvider;
+    profile: string;
+    skillProfile?: string;
+    mandatorySkillsOnly?: true;
+  },
   deps: {
     skillProfiles: Pick<SkillProfileStore, 'readGlobalProfile' | 'readWorkspaceDefault'>;
     skillCatalog(provider: LlmProvider, profile: string): Pick<SkillCatalog, 'list'>;
     defaultSkillProfile?: SkillProfile;
   },
 ): Promise<EffectiveSkillSelection> {
+  if (input.mandatorySkillsOnly) {
+    const catalog = await deps
+      .skillCatalog(input.provider, input.profile)
+      .list(input.workspacePath);
+    return createEffectiveSkillSelection({
+      mandatorySkillsOnly: true,
+      skills: catalog.skills.map(({ name, path, enabled }) => ({ name, path, enabled })),
+    });
+  }
   const selectedProfile = input.skillProfile
     ? await deps.skillProfiles.readGlobalProfile(input.skillProfile)
     : deps.defaultSkillProfile;
