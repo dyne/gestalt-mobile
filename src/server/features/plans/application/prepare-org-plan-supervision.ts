@@ -8,6 +8,7 @@ import type {
   OrgPlanPreparation,
   OrgPlanReference,
   OrgPlanWorkspace,
+  OrgPlanWorkspaceSession,
 } from '../../../../shared/contracts/org-plan-execution.js';
 import type { SupervisedPlan, PlanUnavailableReason } from '../domain/supervised-plan.js';
 import { assessModelPolicyAdmission } from '../domain/model-policy-admission.js';
@@ -21,6 +22,7 @@ export type ExecutionPlanRead =
   | Readonly<{ kind: 'unavailable' }>;
 
 export type PrepareOrgPlanDependencies = {
+  workspaceSession?(workspacePath: string): Promise<OrgPlanWorkspaceSession | null>;
   resolveReference(
     reference: OrgPlanReference,
   ): Promise<{ workspacePath: string; planName: string } | null>;
@@ -35,7 +37,7 @@ export type PrepareOrgPlanDependencies = {
   owner(
     canonicalPath: string,
     workspacePath: string,
-  ): Promise<{ sessionId?: string; reason?: string } | null>;
+  ): Promise<{ sessionId?: string; reason?: string; workspaceConflict?: true } | null>;
   policy(plan: SupervisedPlan): ReturnType<typeof assessModelPolicyAdmission>;
   settings(workspacePath: string, skillProfile?: string): Promise<OrgPlanSettingsRead>;
 };
@@ -100,15 +102,22 @@ export async function prepareOrgPlanSupervision(
   const policy = deps.policy(file.plan);
   if (!policy.allowed) return blocked('MODEL_POLICY_UNAVAILABLE', policy.action);
   let owner: Awaited<ReturnType<PrepareOrgPlanDependencies['owner']>>;
+  let workspaceSession: OrgPlanWorkspaceSession | null | undefined;
   try {
     owner = await deps.owner(file.canonicalPath, context.workspace.path);
+    workspaceSession = await deps.workspaceSession?.(context.workspace.path);
   } catch {
     return blocked(
       'WORKSPACE_UNAVAILABLE',
       'Plan and workspace ownership could not be verified. Refresh and retry.',
     );
   }
-  if (owner)
+  if (
+    owner &&
+    (!owner.workspaceConflict ||
+      !workspaceSession ||
+      owner.sessionId !== workspaceSession.sessionId)
+  )
     return {
       kind: 'blocked',
       code: 'ACTIVE_SUPERVISION',
@@ -134,6 +143,7 @@ export async function prepareOrgPlanSupervision(
     title: file.plan.title,
     sourcePath: file.canonicalPath,
     workspace: context.workspace,
+    ...(workspaceSession ? { workspaceSession } : {}),
     revision: context.revision,
     settings: settings.settings,
     skillProfiles: settings.skillProfiles,

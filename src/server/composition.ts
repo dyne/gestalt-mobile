@@ -71,7 +71,10 @@ import { SimpleWebAuthnAdapter } from './platform/auth/simple-webauthn-adapter.j
 import type { WebAuthnCeremonyService } from './features/auth/application/ports.js';
 import { authorizationSessionId, authorizedDeviceId } from './features/auth/domain/identifiers.js';
 import { SqliteSessionRepository } from './platform/persistence/sqlite-session-repository.js';
-import { SqliteWorkspaceLifecycle } from './platform/persistence/sqlite-workspace-lifecycle.js';
+import {
+  canonicalSessionWorkspace,
+  SqliteWorkspaceLifecycle,
+} from './platform/persistence/sqlite-workspace-lifecycle.js';
 import { FilesystemWorkspaceForget } from './platform/scratch/filesystem-workspace-forget.js';
 import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
 import { SqlitePendingInteractionStore } from './platform/persistence/sqlite-pending-interaction-store.js';
@@ -312,7 +315,13 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const orgPlanLaunches = new SqliteOrgPlanLaunchStore(database);
   // Admission spans asynchronous provider calls so Execute cannot reserve a workspace mid-start.
   const workspaceAdmissions = new Map<string, number>();
+  const replacingWorkspaceSessions = new Map<string, { sessionId: string; closing: boolean }>();
   const assertWorkspaceOwner = (session: Pick<RelaySessionSnapshot, 'id' | 'workspacePath'>) => {
+    if (
+      replacingWorkspaceSessions.size &&
+      replacingWorkspaceSessions.has(canonicalSessionWorkspace(session.workspacePath))
+    )
+      throw new WriterAcquisitionError('workspaceLocked');
     let owner = orgPlanLaunches.workspaceOwner(session.workspacePath);
     while (
       owner &&
@@ -2488,26 +2497,33 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     forgetOperations.find(record.sessionId)?.phase === 'completed' &&
     !sessions.find(record.sessionId) &&
     !runtime?.ownsWriter(record.sessionId);
-  const workspaceBusy = (workspacePath: string) => {
+  const sessionHasWorkspaceWork = (
+    session: RelaySessionSnapshot,
+    snapshot = activity.snapshot(session.id, new Date().toISOString()),
+  ) =>
+    Boolean(
+      session.activeTurnId ||
+      pendingRootTurn(session.id) ||
+      workspaceAdmissions.has(session.id) ||
+      orgPlanStarting.has(session.id) ||
+      snapshot.subagents.some(
+        (agent) =>
+          ['working', 'awaitingAgent'].includes(agent.state) ||
+          agent.ownedProcesses?.some((process) =>
+            ['running', 'detached-active'].includes(process.state),
+          ),
+      ),
+    );
+  const workspaceBusy = (workspacePath: string, skipExact = false) => {
     const session = sessions.list().find((session) => {
       if (
         !within(workspacePath, session.workspacePath) &&
         !within(session.workspacePath, workspacePath)
       )
         return false;
-      const snapshot = activity.snapshot(session.id, new Date().toISOString());
-      return Boolean(
-        session.activeTurnId ||
-        pendingRootTurn(session.id) ||
-        workspaceAdmissions.has(session.id) ||
-        orgPlanStarting.has(session.id) ||
-        snapshot.subagents.some(
-          (agent) =>
-            ['working', 'awaitingAgent'].includes(agent.state) ||
-            agent.ownedProcesses?.some((process) =>
-              ['running', 'detached-active'].includes(process.state),
-            ),
-        ),
+      return (
+        (!skipExact || canonicalSessionWorkspace(session.workspacePath) !== workspacePath) &&
+        sessionHasWorkspaceWork(session)
       );
     });
     return session
@@ -2517,6 +2533,96 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             'Another session is working in this workspace. Stop its work before starting a supervisor.',
         }
       : null;
+  };
+  const workspaceSession = (workspacePath: string) => {
+    const replacing = replacingWorkspaceSessions.get(workspacePath);
+    if (replacing)
+      return {
+        sessionId: replacing.sessionId,
+        replaceAllowed: !replacing.closing,
+        retryClose: true as const,
+      };
+    const session = sessions
+      .list()
+      .find(
+        (candidate) =>
+          candidate.desiredState === 'active' &&
+          !['stopped', 'released'].includes(candidate.state) &&
+          canonicalSessionWorkspace(candidate.workspacePath) === workspacePath,
+      );
+    if (!session) return null;
+    const snapshot = activity.snapshot(session.id, new Date().toISOString());
+    const automatic = autopilot.snapshot(session.id);
+    return {
+      sessionId: session.id,
+      replaceAllowed:
+        session.state === 'ready' &&
+        snapshot.confidence === 'fresh' &&
+        snapshot.root.state === 'idle' &&
+        !sessionHasWorkspaceWork(session, snapshot) &&
+        !session.pendingInteractions?.length &&
+        !blockingInteractions(session.id).length &&
+        automatic?.state !== 'attentionRequired' &&
+        !automatic?.health?.healthy &&
+        !forgetOperations.find(session.id) &&
+        !hostTests?.supervisionSummary(session.id).running,
+    };
+  };
+  const releaseSessionSnapshot = (session: RelaySessionSnapshot) => {
+    providerRecovery.cancel(session.id);
+    autopilot.cancel(session.id, 'sessionEnded');
+    return RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot;
+  };
+  const closeReleasedSession = async (id: string) => {
+    providerRecovery.cancel(id);
+    autopilot.cancel(id, 'sessionEnded');
+    await hostTests?.cancelSession(id);
+    planMeasurementRefresh?.stop(id);
+    dismissPendingInteractions(id, new Date().toISOString());
+    activity.dispose(id);
+    const session = sessions.find(id);
+    const owner = session ? ownerRuntime(session) : null;
+    if (session && owner) await owner.releaseForForget(session);
+    await playwright.waitForRelease(id);
+    const current = sessions.find(id);
+    if (current?.desiredState === 'stopped' && ['stopped', 'released'].includes(current.state)) {
+      orgPlanLaunches.releaseSession(id);
+      takeoverStore.releaseSession(id);
+      if (replacingWorkspaceSessions.size) {
+        const workspacePath = canonicalSessionWorkspace(current.workspacePath);
+        if (replacingWorkspaceSessions.get(workspacePath)?.sessionId === id)
+          replacingWorkspaceSessions.delete(workspacePath);
+      }
+    }
+  };
+  const replaceIdleSession = async (workspacePath: string, id: string): Promise<boolean> => {
+    const initial = workspaceSession(workspacePath);
+    if (initial?.sessionId !== id || !initial.replaceAllowed) return false;
+    if (!initial.retryClose) await activity.refresh(id);
+    const occupant = workspaceSession(workspacePath);
+    const session = sessions.find(id);
+    if (
+      !session ||
+      forgetOperations.find(id) ||
+      workspaceBusy(workspacePath, true) ||
+      occupant?.sessionId !== id ||
+      !occupant.replaceAllowed
+    )
+      return false;
+    // Recheck and mark the saved session as released before yielding to provider teardown.
+    const replacement = { sessionId: id, closing: true };
+    replacingWorkspaceSessions.set(workspacePath, replacement);
+    try {
+      if (!occupant.retryClose) saveSession(releaseSessionSnapshot(session));
+      await closeReleasedSession(id);
+      return !replacingWorkspaceSessions.has(workspacePath);
+    } catch {
+      if (sessions.find(id)?.desiredState === 'active')
+        replacingWorkspaceSessions.delete(workspacePath);
+      return false;
+    } finally {
+      replacement.closing = false;
+    }
   };
   const prepareOrgPlan = (
     reference: import('../shared/contracts/org-plan-execution.js').OrgPlanReference,
@@ -2528,6 +2634,19 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       reference,
       {
         resolveReference: (ref) => orgPlanContext.resolveReference(ref),
+        workspaceSession: async (workspacePath) => {
+          const occupant = workspaceSession(workspacePath);
+          if (
+            expectedRevision &&
+            occupant &&
+            !occupant.replaceAllowed &&
+            sessions.find(occupant.sessionId)?.state === 'ready'
+          ) {
+            await activity.refresh(occupant.sessionId);
+            return workspaceSession(workspacePath);
+          }
+          return occupant;
+        },
         workspace: (path, revision) => orgPlanContext.workspace(path, revision),
         read: (workspacePath, planName) =>
           workspacePlanCatalog.readExecution(workspacePath, planName),
@@ -2564,14 +2683,17 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             !sessions.find(pending.sessionId) &&
             !runtime?.ownsWriter(pending.sessionId) &&
             ['reserved', 'creating'].includes(pending.phase);
+          const busy = workspaceBusy(workspacePath, true);
+          if (busy && busy.sessionId !== pending?.sessionId) return busy;
           if (pending && !reclaimableLaunchOwner(pending) && !ownUnpublished)
             return {
               ...(sessions.find(pending.sessionId) ? { sessionId: pending.sessionId } : {}),
+              ...(pending.canonicalPath !== canonicalPath
+                ? { workspaceConflict: true as const }
+                : {}),
               reason:
                 'This plan or an overlapping workspace is reserved by another supervisor. Open its session to continue, or close it to release the reservation.',
             };
-          const busy = workspaceBusy(workspacePath);
-          if (busy && busy.sessionId !== pending?.sessionId) return busy;
           const identity = createHash('sha256').update(canonicalPath).digest('hex');
           const owner = sessions.list().find((session) => {
             if (
@@ -2602,6 +2724,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       createId: randomUUID,
       launches: orgPlanLaunches,
       workspaceBusy,
+      replaceIdleSession,
       reclaimForgottenOwner: (path, workspacePath) => {
         const record = orgPlanLaunches.owner(path);
         if (record && reclaimableLaunchOwner(record)) orgPlanLaunches.releaseOwner(record);
@@ -3031,11 +3154,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                       : recentThreads.executionPolicy(candidate.id),
                 })
             : undefined,
-        release: (session) => {
-          providerRecovery.cancel(session.id);
-          autopilot.cancel(session.id, 'sessionEnded');
-          return RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot;
-        },
+        release: releaseSessionSnapshot,
         remove: (id) => {
           providerRecovery.cancel(id);
           autopilot.cancel(id, 'sessionEnded');
@@ -3043,29 +3162,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           sessions.remove(id);
         },
         idempotency,
-        close:
-          runtime || kimiRuntime
-            ? async (id) => {
-                providerRecovery.cancel(id);
-                autopilot.cancel(id, 'sessionEnded');
-                await hostTests?.cancelSession(id);
-                planMeasurementRefresh?.stop(id);
-                dismissPendingInteractions(id, new Date().toISOString());
-                activity.dispose(id);
-                const session = sessions.find(id);
-                const owner = session ? ownerRuntime(session) : null;
-                if (session && owner) await owner.releaseForForget(session);
-                await playwright.waitForRelease(id);
-                const current = sessions.find(id);
-                if (
-                  current?.desiredState === 'stopped' &&
-                  ['stopped', 'released'].includes(current.state)
-                ) {
-                  orgPlanLaunches.releaseSession(id);
-                  takeoverStore.releaseSession(id);
-                }
-              }
-            : undefined,
+        close: runtime || kimiRuntime ? closeReleasedSession : undefined,
         replyInteraction:
           runtime || kimiRuntime
             ? async (sessionId, requestId, value) => {

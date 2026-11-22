@@ -283,6 +283,108 @@ async function fixture() {
   return { open, request, context, calls, faults, controls, planPath, source };
 }
 
+it.each([
+  { confirmed: undefined, replaceAllowed: true },
+  { confirmed: 'stale-session', replaceAllowed: true },
+  { confirmed: 'open-session', replaceAllowed: false },
+])(
+  'requires explicit confirmation of the exact idle session (%j)',
+  async ({ confirmed, replaceAllowed }) => {
+    const f = await fixture();
+    const run = f.open();
+    const replaceIdleSession = vi.fn(async () => true);
+    const result = await startOrgPlanSupervision(
+      { ...f.request, replaceSessionId: confirmed },
+      {
+        ...run.deps,
+        prepare: async () => ({
+          ...f.context,
+          workspaceSession: { sessionId: 'open-session', replaceAllowed },
+        }),
+        replaceIdleSession,
+      },
+    );
+    expect(result).toMatchObject({
+      kind: 'blocked',
+      code: 'WORKSPACE_BUSY',
+      existingSessionId: 'open-session',
+    });
+    expect(replaceIdleSession).not.toHaveBeenCalled();
+    expect(f.calls.creates).toBe(0);
+  },
+);
+
+it('closes the confirmed idle session before publication and preserves its saved record', async () => {
+  const f = await fixture();
+  const run = f.open();
+  const existing = RelaySession.create({
+    id: 'open-session',
+    workspaceId: f.context.workspace.id,
+    workspacePath: f.context.workspace.path,
+    provider: 'codex',
+    profile: f.context.settings.profile,
+    effectiveSkillSelection: { skills: [] },
+    now: '2026-11-08T12:00:00Z',
+  }).bindThread('existing-thread', '2026-11-08T12:00:00Z').snapshot;
+  run.sessions.save(existing);
+  const replaceIdleSession = vi.fn(async (_path: string, id: string) => {
+    expect(f.calls.creates).toBe(0);
+    expect(id).toBe(existing.id);
+    run.sessions.save(RelaySession.rehydrate(existing).release('2026-11-08T12:00:00Z').snapshot);
+    return true;
+  });
+  const result = await startOrgPlanSupervision(
+    { ...f.request, replaceSessionId: existing.id },
+    {
+      ...run.deps,
+      prepare: async () => ({
+        ...f.context,
+        workspaceSession:
+          run.sessions.find(existing.id)?.desiredState === 'active'
+            ? { sessionId: existing.id, replaceAllowed: true }
+            : undefined,
+      }),
+      replaceIdleSession,
+    },
+  );
+  expect(result).toMatchObject({ kind: 'started', session: { id: 'session-1' } });
+  expect(replaceIdleSession).toHaveBeenCalledExactlyOnceWith(f.context.workspace.path, existing.id);
+  expect(run.sessions.find(existing.id)).toMatchObject({
+    state: 'released',
+    threadId: 'existing-thread',
+  });
+});
+
+it.each([false, true])(
+  'stops before publication if replacement was unsafe or the occupant changed (%s)',
+  async (closed) => {
+    const f = await fixture();
+    const run = f.open();
+    const replaceIdleSession = vi.fn(async () => closed);
+    const result = await startOrgPlanSupervision(
+      { ...f.request, replaceSessionId: 'open-session' },
+      {
+        ...run.deps,
+        prepare: async () => ({
+          ...f.context,
+          workspaceSession: {
+            sessionId: replaceIdleSession.mock.calls.length ? 'new-session' : 'open-session',
+            replaceAllowed: true,
+          },
+        }),
+        replaceIdleSession,
+      },
+    );
+    expect(result).toMatchObject({
+      kind: 'blocked',
+      code: 'WORKSPACE_BUSY',
+      existingSessionId: closed ? 'new-session' : 'open-session',
+    });
+    expect(replaceIdleSession).toHaveBeenCalledTimes(1);
+    expect(f.calls.creates).toBe(0);
+  },
+);
+
 it('rechecks workspace work after asynchronous skill capture before reserving or creating a session', async () => {
   const f = await fixture();
   const run = f.open();

@@ -8,7 +8,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { planFileReferences } from './plan-file-references.js';
   import AppControl from '../../components/AppControl.svelte';
   import PlanView from './PlanView.svelte';
-  import ExecutePlanAction from './ExecutePlanAction.svelte';
+  import ExecutePlanAction, { type ExecutePlanTransport } from './ExecutePlanAction.svelte';
   import DownloadPlanAction from './DownloadPlanAction.svelte';
   import type {
     OrgPlanReference,
@@ -32,10 +32,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   type Props = {
     executeReference?: OrgPlanReference;
-    executeTransport?: Pick<
-      ReturnType<typeof createRelayClient>,
-      'prepareOrgPlanSupervision' | 'startOrgPlanSupervision'
-    >;
+    executeTransport?: ExecutePlanTransport;
     onexecuteerror?: (message: string) => void;
     downloadTransport?: Pick<ReturnType<typeof createRelayClient>, 'downloadOrgPlan'>;
     ondownloaderror?: (message: string) => void;

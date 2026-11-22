@@ -7,7 +7,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import { onDestroy, tick, untrack } from 'svelte';
   import AppControl from '../../components/AppControl.svelte';
-  import type { createRelayClient } from '../sessions/relay-client.js';
+  import type { createRelayClient, RelaySession } from '../sessions/relay-client.js';
+  import { displayWorkspacePath } from '../sessions/session-list.js';
+  import { isSessionStatus } from '../sessions/session-status.js';
+  import SessionActivityStatus from '../sessions/SessionActivityStatus.svelte';
   import type {
     OrgPlanReference,
     OrgPlanPreparation,
@@ -16,13 +19,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { OrgPlanLaunchController } from './org-plan-launch-controller.js';
 
   type Eligible = Extract<OrgPlanPreparation, { kind: 'eligible' }>;
+  export type ExecutePlanTransport = Pick<
+    ReturnType<typeof createRelayClient>,
+    'prepareOrgPlanSupervision' | 'startOrgPlanSupervision'
+  > &
+    Partial<Pick<ReturnType<typeof createRelayClient>, 'getSession'>>;
   type Props = {
     reference?: OrgPlanReference;
     sourceVersion?: unknown;
-    transport?: Pick<
-      ReturnType<typeof createRelayClient>,
-      'prepareOrgPlanSupervision' | 'startOrgPlanSupervision'
-    >;
+    transport?: ExecutePlanTransport;
     onerror?: (message: string) => void;
     onresult?: (result: OrgPlanLaunchResult) => void;
   };
@@ -34,6 +39,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let submitting = $state(false);
   let selected = $state('');
   let confirmed = $state<Eligible | null>(null);
+  let existingSession = $state<RelaySession | null>(null);
   let problem = $state('');
   let blocked = $state(false);
   let dialog = $state<HTMLDialogElement>();
@@ -52,6 +58,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     },
   );
   let busy = $derived(validating || submitting);
+  let existingStatus = $derived(
+    isSessionStatus(existingSession?.sessionStatus) ? existingSession.sessionStatus : undefined,
+  );
+  let canReplace = $derived(
+    confirmed?.workspaceSession?.replaceAllowed &&
+      existingSession?.id === confirmed.workspaceSession.sessionId &&
+      existingStatus?.state === 'idle',
+  );
   let reason = $derived(
     loading
       ? 'Checking whether this plan can be executed…'
@@ -85,6 +99,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       initialFocusPending = false;
       ++dialogGeneration;
       confirmed = null;
+      existingSession = null;
       blocked = true;
       if (dialog?.open) dialog.close();
       if (!ref || !api) {
@@ -116,6 +131,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (preparation?.kind !== 'eligible' || busy) return;
     trigger = event.currentTarget;
     confirmed = preparation;
+    existingSession = null;
     selected = preparation.settings.skillProfile;
     problem = '';
     blocked = false;
@@ -148,6 +164,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         snapshot.revision,
         selected,
       );
+      const occupant =
+        fresh.kind === 'eligible' && fresh.workspaceSession && transport.getSession
+          ? await transport.getSession(fresh.workspaceSession.sessionId)
+          : null;
       if (
         current !== generation ||
         validation !== validationGeneration ||
@@ -164,6 +184,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           };
       } else {
         confirmed = fresh;
+        existingSession = occupant?.id === fresh.workspaceSession?.sessionId ? occupant : null;
         problem = '';
         blocked = false;
       }
@@ -193,8 +214,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     await tick();
     if (trigger?.isConnected) trigger.focus();
   }
-  async function confirm(): Promise<void> {
+  async function confirm(replaceSessionId?: string): Promise<void> {
     if (busy || blocked || !confirmed || !transport || !validSelection) return;
+    const occupant = confirmed.workspaceSession;
+    if (occupant && (!canReplace || occupant.sessionId !== replaceSessionId)) return;
     const current = generation;
     const snapshot = confirmed;
     const validation = ++validationGeneration;
@@ -204,6 +227,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         reference: snapshot.reference,
         expectedRevision: snapshot.revision,
         skillProfile: selected,
+        ...(replaceSessionId ? { replaceSessionId } : {}),
       });
       if (disposed || current !== generation) return;
       if (!result) {
@@ -283,6 +307,31 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       >{/each}
   </select>
   {#each confirmed?.warnings ?? [] as warning}<p class="guidance">{warning}</p>{/each}
+  {#if confirmed?.workspaceSession}
+    <section class="workspace-conflict" aria-labelledby={`${id}-workspace-conflict`}>
+      <h3 id={`${id}-workspace-conflict`}>Session open in this workspace</h3>
+      <p>{displayWorkspacePath(existingSession?.workspacePath ?? confirmed.workspace.path)}</p>
+      {#if existingSession?.model}<p>Model: {existingSession.model}</p>{/if}
+      {#if existingStatus}
+        <SessionActivityStatus status={existingStatus} />
+      {:else}
+        <p>{validating ? 'Checking session status…' : 'Session status unavailable.'}</p>
+      {/if}
+      {#if confirmed.workspaceSession.retryClose}
+        <p>
+          The previous session is saved. Gestalt must confirm it has closed before starting the
+          supervisor.
+        </p>
+      {:else if canReplace}
+        <p>
+          Replace closes this idle session and starts the supervisor. The previous session and its
+          history stay saved.
+        </p>
+      {:else}
+        <p>Replacement requires a confirmed idle session. Refresh to check again.</p>
+      {/if}
+    </section>
+  {/if}
   {#if problem}<p class="guidance" role="status">{problem}</p>{/if}
   {#if !validSelection}<p class="guidance">Choose an available skill profile.</p>{/if}
   {#if submitting}<p class="guidance" role="status">
@@ -293,12 +342,25 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     </p>{/if}
   <div class="dialog-actions">
     <AppControl onclick={dismiss}>{submitting ? 'Close' : 'Cancel'}</AppControl>
-    {#if problem}<AppControl disabled={busy} onclick={() => void refreshProfiles()}
-        >Refresh</AppControl
+    {#if problem || (confirmed?.workspaceSession && !canReplace)}<AppControl
+        disabled={busy}
+        onclick={() => void refreshProfiles()}>Refresh</AppControl
       >{/if}
-    <AppControl primary disabled={busy || blocked || !validSelection} onclick={() => void confirm()}
-      >{submitting ? 'Starting…' : 'OK'}</AppControl
-    >
+    {#if confirmed?.workspaceSession}
+      {@const occupant = confirmed.workspaceSession}
+      <AppControl
+        primary
+        disabled={busy || blocked || !validSelection || !canReplace}
+        onclick={() => void confirm(occupant.sessionId)}
+        >{submitting ? 'Starting…' : 'Replace and execute'}</AppControl
+      >
+    {:else}
+      <AppControl
+        primary
+        disabled={busy || blocked || !validSelection}
+        onclick={() => void confirm()}>{submitting ? 'Starting…' : 'OK'}</AppControl
+      >
+    {/if}
   </div>
 </dialog>
 
@@ -318,6 +380,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     color: var(--theme-text-muted);
     font-size: 0.8rem;
     overflow-wrap: anywhere;
+  }
+  .workspace-conflict {
+    margin-block: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid var(--theme-border);
+    border-radius: var(--theme-radius);
+    overflow-wrap: anywhere;
+  }
+  .workspace-conflict :is(h3, p) {
+    margin: 0 0 0.4rem;
   }
   dialog {
     box-sizing: border-box;

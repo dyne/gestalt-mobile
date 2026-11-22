@@ -589,6 +589,7 @@ async function orgPlanActivationFixture(
   const controls = {
     failInitialize: false,
     failThread: false,
+    threadBusy: false,
     initializationGate: null as Promise<void> | null,
     threadGate: null as Promise<void> | null,
     catalogGate: null as Promise<void> | null,
@@ -646,6 +647,14 @@ async function orgPlanActivationFixture(
               controls.failThread = false;
               throw new Error('INJECTED_THREAD_RECEIPT_LOSS');
             }
+          }
+          if (method === 'thread/read' && controls.threadBusy) {
+            return {
+              thread: {
+                id: (params as { threadId: string }).threadId,
+                status: { type: 'active' },
+              },
+            };
           }
           if (method === 'skills/list') {
             const gate = !runtime && controls.catalogGate;
@@ -7794,11 +7803,69 @@ describe('production composition', () => {
         ).json();
         expect(launch).toMatchObject({
           kind: 'blocked',
-          code: 'ACTIVE_SUPERVISION',
+          code: 'WORKSPACE_BUSY',
           existingSessionId: id,
         });
-        expect(launch.reason).toContain('Stop its work');
+        expect(launch.reason).toContain('idle');
         expect((await app.inject('/api/sessions')).json()).toHaveLength(1);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('rechecks the confirmed session before replacement and keeps its saved thread', async () => {
+      const f = await orgPlanActivationFixture('codex-cli 0.167.0');
+      const app = await f.open();
+      try {
+        const id = await createComposedSession(app);
+        const { threadId } = (await app.inject(`/api/sessions/${id}`)).json();
+        const payload = await f.prepare(app);
+        const reference = {
+          kind: 'session',
+          sessionId: id,
+          planName: payload.reference.planName,
+        };
+        const prepare = async () =>
+          (
+            await app.inject({
+              method: 'POST',
+              url: '/api/plans/prepare',
+              payload: { ...reference, expectedRevision: payload.expectedRevision },
+            })
+          ).json();
+        await expect.poll(prepare).toMatchObject({
+          kind: 'eligible',
+          workspaceSession: { sessionId: id, replaceAllowed: true },
+        });
+
+        const execute = async () =>
+          (
+            await app.inject({
+              method: 'POST',
+              url: '/api/plans/execute',
+              payload: { ...payload, reference, replaceSessionId: id },
+            })
+          ).json();
+        // Simulate provider work beginning after the user saw the idle status.
+        f.controls.threadBusy = true;
+        expect(await execute()).toMatchObject({
+          kind: 'blocked',
+          code: 'WORKSPACE_BUSY',
+          existingSessionId: id,
+        });
+        expect((await app.inject(`/api/sessions/${id}`)).json()).toMatchObject({
+          state: 'ready',
+          threadId,
+        });
+        expect(f.requests('thread/start')).toHaveLength(1);
+
+        f.controls.threadBusy = false;
+        expect(await execute()).toMatchObject({ kind: 'started', bootstrap: { kind: 'accepted' } });
+        expect((await app.inject(`/api/sessions/${id}`)).json()).toMatchObject({
+          state: 'released',
+          threadId,
+        });
+        expect(f.requests('thread/start')).toHaveLength(2);
       } finally {
         await app.close();
       }
