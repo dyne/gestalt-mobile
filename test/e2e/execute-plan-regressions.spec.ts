@@ -24,6 +24,7 @@ test('native modal keeps background inert, preserves keyboard order and Escape/C
   const select = page.getByRole('combobox', { name: 'Supervisor Skill profile' });
   const ok = page.getByRole('button', { name: 'OK', exact: true });
   const cancel = page.getByRole('button', { name: 'Cancel', exact: true });
+  const executeDialog = page.getByRole('dialog', { name: 'Execute plan' });
   const focusTransitions: unknown[] = [];
   const snapshot = async (label: string) => {
     const value = await page.evaluate(
@@ -41,9 +42,7 @@ test('native modal keeps background inert, preserves keyboard order and Escape/C
     return value;
   };
   await expect(select).toBeFocused();
-  expect(await page.getByRole('dialog').evaluate((element) => element.matches(':modal'))).toBe(
-    true,
-  );
+  expect(await executeDialog.evaluate((element) => element.matches(':modal'))).toBe(true);
   // Native showModal makes background controls inert even to programmatic focus.
   expect(
     await page.getByRole('button', { name: 'Execute', exact: true }).evaluate((button) => {
@@ -69,7 +68,7 @@ test('native modal keeps background inert, preserves keyboard order and Escape/C
   await expect(select).toBeFocused();
   await snapshot('Tab re-entry');
   await page.keyboard.press('Escape');
-  await expect(page.getByRole('dialog')).toBeHidden();
+  await expect(executeDialog).toBeHidden();
   await expect(page.getByRole('button', { name: 'Execute', exact: true })).toBeFocused();
   await dialog(page);
   await cancel.click();

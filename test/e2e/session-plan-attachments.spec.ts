@@ -114,13 +114,13 @@ for (const width of [320, 1280]) {
       if (new URL(request.url()).pathname.endsWith('/history'))
         historyReads.push(new URL(request.url()).pathname);
     });
-    await saved.getByRole('button', { name: 'Plan for Saved session plan' }).click();
-    await expect(
-      page.getByRole('heading', { name: 'Saved session plan', exact: true }),
-    ).toBeVisible();
+    const savedPlanButton = saved.getByRole('button', { name: 'Plan for Saved session plan' });
+    const viewer = page.getByRole('dialog', { name: 'Plan viewer' });
+    await savedPlanButton.click();
+    await expect(viewer.getByRole('heading', { name: 'Saved session plan' })).toBeVisible();
     expect(historyReads).not.toContain('/api/sessions/saved/history');
-    await page.getByRole('button', { name: 'Close plan and return to list' }).click();
-    await expect(page.getByRole('heading', { name: 'ORG Plans' })).toBeVisible();
+    await viewer.getByRole('button', { name: 'Close plan and return to sessions' }).click();
+    await expect(savedPlanButton).toBeFocused();
 
     if (width === 1280) {
       await page.setViewportSize({ width: 1600, height: 900 });
@@ -129,11 +129,14 @@ for (const width of [320, 1280]) {
         .getByRole('button', { name: 'Chat', exact: true })
         .click();
       const sidebar = page.getByRole('complementary', { name: 'Chat sessions and usage' });
-      await sidebar.getByRole('button', { name: 'Plan for Saved session plan' }).click();
+      const sidebarPlan = sidebar.getByRole('button', { name: 'Plan for Saved session plan' });
+      await sidebarPlan.click();
       await expect(
-        page.getByRole('heading', { name: 'Saved session plan', exact: true }),
+        viewer.getByRole('heading', { name: 'Saved session plan', exact: true }),
       ).toBeVisible();
       expect(historyReads).not.toContain('/api/sessions/saved/history');
+      await viewer.getByRole('button', { name: 'Close plan and return to chat' }).click();
+      await expect(sidebarPlan).toBeFocused();
 
       await page.goto('/?chat-session=open');
       await page.getByRole('button', { name: 'Plan for this session' }).click();
