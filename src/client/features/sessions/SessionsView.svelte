@@ -222,7 +222,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   {@const local = forgettingStates.get(session.id)}
   {@const operation = local ? local.operation : session.forgetOperation}
   {#if operation?.phase === 'failed' && operation.failureCode === 'SESSION_CLEANUP_FAILED' && !operation.blockingSessionId && !operation.keepFilesRequested}
-    <AppControl compact full onclick={() => onforget(session.id, operation.operationId)}
+    <AppControl
+      class="keep-temporary-files"
+      compact
+      full
+      onclick={() => onforget(session.id, operation.operationId)}
       >Forget and keep temporary files</AppControl
     >
   {/if}
@@ -857,6 +861,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     flex-direction: column;
     gap: 0.5rem;
     min-inline-size: 0;
+  }
+
+  .session-actions > :global(.keep-temporary-files) {
+    max-inline-size: 8rem;
   }
 
   .session-actions > :global(*) {
