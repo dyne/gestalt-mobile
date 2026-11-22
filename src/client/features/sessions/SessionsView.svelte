@@ -96,7 +96,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       guidance?: string,
     ) => void;
     onopenrecent: (session: RecentSession) => void;
-    onforget: (id: string) => void;
+    onforget: (id: string, keepFilesFor?: string) => void;
     oncopyresume: (command: string) => void;
     onstart: () => void;
     savingDefaults?: boolean;
@@ -215,6 +215,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               : 'Forgetting session…'}
       </span>
     </p>
+  {/if}
+{/snippet}
+
+{#snippet keepTemporaryFiles(session: RelaySession)}
+  {@const local = forgettingStates.get(session.id)}
+  {@const operation = local ? local.operation : session.forgetOperation}
+  {#if operation?.phase === 'failed' && operation.failureCode === 'SESSION_CLEANUP_FAILED' && !operation.blockingSessionId && !operation.keepFilesRequested}
+    <AppControl compact full onclick={() => onforget(session.id, operation.operationId)}
+      >Forget and keep temporary files</AppControl
+    >
   {/if}
 {/snippet}
 
@@ -341,6 +351,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                   >{forgetState.phase === 'failed' ? 'Retry Forget' : 'Forget'}</AppControl
                 >
               {/if}
+              {@render keepTemporaryFiles(session)}
               {#if session.forgetOperation?.blockingSessionId}
                 <AppControl
                   compact
@@ -424,6 +435,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <AppControl compact full disabled={forgetting} onclick={() => onforget(session.id)}
               >{forgetState?.phase === 'failed' ? 'Retry Forget' : 'Forget'}</AppControl
             >
+            {@render keepTemporaryFiles(session)}
             {#if session.forgetOperation?.blockingSessionId}
               <AppControl
                 compact

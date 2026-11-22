@@ -4,10 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { RelaySessionSnapshot } from '../model/relay-session.js';
 import type { SessionForgetOperation } from '../../../../shared/contracts/session-forget.js';
+
+import { ForgetRecoveryUnavailable } from './use-case.js';
+
+export const keepTemporaryFilesRoute = '/api/sessions/:id/keep-temporary-files/:keepFilesFor';
 
 export function registerForgetSession(
   app: FastifyInstance,
@@ -15,13 +19,20 @@ export function registerForgetSession(
     find(id: string): RelaySessionSnapshot | null;
     close?(id: string): void | Promise<void>;
     remove?(id: string): void;
-    forget?(id: string): Promise<SessionForgetOperation | null>;
+    forget?(id: string, keepFilesFor?: string): Promise<SessionForgetOperation | null>;
   },
 ): void {
-  app.delete('/api/sessions/:id', async (request, reply) => {
-    const id = (request.params as { id: string }).id;
+  const remove = async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id, keepFilesFor } = request.params as { id: string; keepFilesFor?: string };
     if (deps.forget) {
-      const operation = await deps.forget(id);
+      let operation;
+      try {
+        operation = await deps.forget(id, keepFilesFor);
+      } catch (error) {
+        if (error instanceof ForgetRecoveryUnavailable)
+          return reply.code(409).send({ code: 'SESSION_FORGET_RECOVERY_UNAVAILABLE' });
+        throw error;
+      }
       if (!operation) return reply.code(404).send({ code: 'SESSION_NOT_FOUND' });
       if (operation.phase === 'failed' && operation.blockingSessionId)
         return reply.code(409).send({
@@ -38,5 +49,7 @@ export function registerForgetSession(
     await deps.close?.(id);
     deps.remove?.(id);
     return reply.code(204).send();
-  });
+  };
+  app.delete('/api/sessions/:id', remove);
+  if (deps.forget) app.delete(keepTemporaryFilesRoute, remove);
 }

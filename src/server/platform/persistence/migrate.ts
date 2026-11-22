@@ -66,6 +66,10 @@ export function migrate(database: DatabaseSync): void {
   const forgetColumns = database
     .prepare('PRAGMA table_info(session_forget_operations)')
     .all() as Array<{ name: string }>;
+  if (!forgetColumns.some((column) => column.name === 'keep_files_requested'))
+    database.exec(
+      'ALTER TABLE session_forget_operations ADD COLUMN keep_files_requested INTEGER NOT NULL DEFAULT 0',
+    );
   if (!forgetColumns.some((column) => column.name === 'scratch_retained'))
     database.exec(
       'ALTER TABLE session_forget_operations ADD COLUMN scratch_retained INTEGER NOT NULL DEFAULT 0',

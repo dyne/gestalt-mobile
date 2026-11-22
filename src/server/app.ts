@@ -112,6 +112,7 @@ export type AppDependencies = {
     close?(id: string): void | Promise<void>;
     forget?(
       id: string,
+      keepFilesFor?: string,
     ): Promise<import('../shared/contracts/session-forget.js').SessionForgetOperation | null>;
     forgetOperation?(
       id: string,

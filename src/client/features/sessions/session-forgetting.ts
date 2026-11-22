@@ -40,7 +40,7 @@ export class SessionForgetting {
   constructor(
     private readonly options: {
       relay: {
-        forgetSession(id: string): Promise<void>;
+        forgetSession(id: string, keepFilesFor?: string): Promise<void>;
         getSession(id: string): Promise<RelaySession>;
       };
       publish(states: ReadonlyMap<string, SessionForgetState>): void;
@@ -94,7 +94,7 @@ export class SessionForgetting {
     }
   }
 
-  forget(session: RelaySession): Promise<void> {
+  forget(session: RelaySession, keepFilesFor?: string): Promise<void> {
     if (this.#disposed || this.#completed.has(session.id)) return Promise.resolve();
     const running = this.#requests.get(session.id);
     if (running) return running;
@@ -102,15 +102,15 @@ export class SessionForgetting {
     this.#sessions.set(session.id, session);
     this.#announcedFailures.delete(`${session.id}:request`);
     this.#set(session.id, { phase: 'requesting' });
-    const task = this.#request(session.id);
+    const task = this.#request(session.id, keepFilesFor);
     this.#requests.set(session.id, task);
     void task.finally(() => this.#requests.delete(session.id));
     return task;
   }
 
-  async #request(id: string): Promise<void> {
+  async #request(id: string, keepFilesFor?: string): Promise<void> {
     try {
-      await this.options.relay.forgetSession(id);
+      await this.options.relay.forgetSession(id, keepFilesFor);
       this.#finish(id);
     } catch (error) {
       if (this.#disposed || this.#completed.has(id)) return;

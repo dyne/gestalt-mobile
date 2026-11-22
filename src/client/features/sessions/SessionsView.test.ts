@@ -179,6 +179,14 @@ describe.each([false, true])('forgetting in the session frame (rosterOnly=%s)', 
     expect(row.getAttribute('aria-busy')).toBe('true');
   });
 
+  it('offers to keep files after a cleanup failure and sends the matching operation ID', async () => {
+    const onforget = vi.fn();
+    const failed = { ...operation('failed'), failureCode: 'SESSION_CLEANUP_FAILED' as const };
+    renderView({ rosterOnly, sessions: [{ ...session, forgetOperation: failed }], onforget });
+    await fireEvent.click(screen.getByRole('button', { name: 'Forget and keep temporary files' }));
+    expect(onforget).toHaveBeenCalledExactlyOnceWith(session.id, failed.operationId);
+  });
+
   it('also fences an open session while a recovered backend operation is stopping', () => {
     renderView({
       rosterOnly,

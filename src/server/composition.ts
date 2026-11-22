@@ -2186,7 +2186,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         operationId,
         () => {
           const operation = forgetOperations.find(session.id);
-          return operation?.operationId === operationId && operation.phase === 'cleaning';
+          return (
+            operation?.operationId === operationId &&
+            operation.phase === 'cleaning' &&
+            !operation.keepFilesRequested
+          );
         },
         () => sessions.list(),
       ),
@@ -3054,7 +3058,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         : undefined,
       sessionRoutes: {
         ...ordinarySessionLifecycle,
-        forget: (id) => forgetSessions.execute(id),
+        forget: (id, keepFilesFor) => forgetSessions.execute(id, keepFilesFor),
         forgetOperation: (id) => forgetOperations.find(id),
         createId: randomUUID,
         now: () => new Date().toISOString(),

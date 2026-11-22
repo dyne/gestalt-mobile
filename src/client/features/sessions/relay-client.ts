@@ -527,12 +527,13 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       request<RestoreSessionResult>(`/api/sessions/${encodeURIComponent(sessionId)}/restore`, {}),
     releaseSession: (sessionId: string) =>
       request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/release`, {}),
-    forgetSession: (sessionId: string) =>
-      fetcher(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }).then(
-        async (response) => {
-          if (!response.ok) throw await failure(response);
-        },
-      ),
+    forgetSession: (sessionId: string, keepFilesFor?: string) =>
+      fetcher(
+        `/api/sessions/${encodeURIComponent(sessionId)}${keepFilesFor ? '/keep-temporary-files/' + encodeURIComponent(keepFilesFor) : ''}`,
+        { method: 'DELETE' },
+      ).then(async (response) => {
+        if (!response.ok) throw await failure(response);
+      }),
     getHistory: async (sessionId: string, observation?: HistoryObservation) => {
       const response = await fetcher(
         `/api/sessions/${encodeURIComponent(sessionId)}/history`,

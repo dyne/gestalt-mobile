@@ -11,9 +11,11 @@ import {
 import type { RelaySessionSnapshot } from '../model/relay-session.js';
 import { WorkspaceSessionConflict } from '../application/workspace-conflict.js';
 
+export class ForgetRecoveryUnavailable extends Error {}
+
 export interface ForgetOperationStore {
   find(id: string): SessionForgetOperation | null;
-  begin(id: string): SessionForgetOperation | null;
+  begin(id: string, keepFilesFor?: string): SessionForgetOperation | null;
   update(operation: SessionForgetOperation): SessionForgetOperation;
   /** Atomically retire the roster row and complete this exact operation. */
   finalize(operation: SessionForgetOperation): SessionForgetOperation;
@@ -44,10 +46,17 @@ export class ForgetSession {
     },
   ) {}
 
-  execute(id: string): Promise<SessionForgetOperation | null> {
+  execute(id: string, keepFilesFor?: string): Promise<SessionForgetOperation | null> {
     const prior = this.pending.get(id);
-    if (prior) return prior;
-    const operation = this.run(id);
+    if (prior) {
+      if (keepFilesFor !== undefined) {
+        const current = this.deps.operations.find(id);
+        if (current?.operationId !== keepFilesFor || !current.keepFilesRequested)
+          return Promise.reject(new ForgetRecoveryUnavailable());
+      }
+      return prior;
+    }
+    const operation = this.run(id, keepFilesFor);
     this.pending.set(id, operation);
     void operation
       .finally(() => {
@@ -61,8 +70,8 @@ export class ForgetSession {
     await Promise.allSettled([...this.pending.values()]);
   }
 
-  private async run(id: string) {
-    const initial = this.deps.operations.begin(id);
+  private async run(id: string, keepFilesFor?: string) {
+    const initial = this.deps.operations.begin(id, keepFilesFor);
     if (!initial || initial.phase === 'completed') return initial;
     let operation: SessionForgetOperation = initial;
     const advance = (phase: SessionForgetOperation['phase']) => {
@@ -85,8 +94,11 @@ export class ForgetSession {
       if (advance('stopping').phase === 'completed') return operation;
       await this.deps.release(session);
       failureCode = 'SESSION_CLEANUP_FAILED';
-      if (advance('cleaning').phase === 'completed') return operation;
-      const cleanup = await this.deps.clean(session, operation.operationId);
+      let cleanup: ForgetCleanupResult = 'retained';
+      if (!initial.keepFilesRequested) {
+        if (advance('cleaning').phase === 'completed') return operation;
+        cleanup = await this.deps.clean(session, operation.operationId);
+      }
       if (cleanup && typeof cleanup === 'object') releaseCleanup = () => cleanup.release();
       operation = {
         ...operation,

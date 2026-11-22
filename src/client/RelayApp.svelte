@@ -1233,9 +1233,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
   }
 
-  async function forgetSession(id: string) {
+  async function forgetSession(id: string, keepFilesFor?: string) {
     const forgottenSession = sessions.find((session) => session.id === id);
-    if (forgottenSession) await sessionForgetting.forget(forgottenSession);
+    if (forgottenSession) await sessionForgetting.forget(forgottenSession, keepFilesFor);
   }
 
   async function copyResumeCommand(command: string) {
@@ -2162,7 +2162,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onattentiondebug={(id, requestId, trigger) => void openDebug(requestId, id, trigger)}
     debugPending={debugLoading}
     onopenrecent={(session) => void openRecentSession(session)}
-    onforget={(id) => void forgetSession(id)}
+    onforget={forgetSession}
     oncopyresume={(command) => void copyResumeCommand(command)}
     onstart={() => void startSession()}
     ondebugtrace={(session, trigger) => void openDebugTrace(session, trigger)}

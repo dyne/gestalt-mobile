@@ -9,7 +9,7 @@ import type { FastifyInstance } from 'fastify';
 import type { AppDependencies } from '../../app.js';
 import { authorizationSessionDevice } from '../../platform/http/authorization-boundary.js';
 import { stopSession } from './lifecycle/use-case.js';
-import { registerForgetSession } from './forget-session/endpoint.js';
+import { keepTemporaryFilesRoute, registerForgetSession } from './forget-session/endpoint.js';
 import { registerGetHistory } from './get-history/endpoint.js';
 import { registerGetSession } from './get-session/endpoint.js';
 import { registerInterruptTurn } from './interrupt-turn/endpoint.js';
@@ -76,7 +76,11 @@ export function registerSessionRoutes(
     const conflict = (request: import('fastify').FastifyRequest) => {
       if (!request.routeOptions.url?.startsWith('/api/sessions/:id')) return null;
       if (['GET', 'HEAD'].includes(request.method)) return null;
-      if (request.method === 'DELETE' && request.routeOptions.url === '/api/sessions/:id')
+      if (
+        request.method === 'DELETE' &&
+        (request.routeOptions.url === '/api/sessions/:id' ||
+          request.routeOptions.url === keepTemporaryFilesRoute)
+      )
         return null;
       const id = (request.params as { id?: string } | undefined)?.id;
       return id ? sessions.forgetOperation?.(id) : null;

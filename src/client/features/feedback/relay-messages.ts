@@ -59,6 +59,8 @@ const relayMessages = {
   SESSION_CLOSE_FAILED: 'The session could not be closed. Try again.',
   SESSION_FORGET_FAILED:
     'The session could not be forgotten. It remains in Sessions; try Forget again.',
+  SESSION_FORGET_RECOVERY_UNAVAILABLE:
+    'The cleanup operation changed. Refresh Sessions to see the available actions.',
   SESSION_RELEASE_UNCONFIRMED:
     'Session work could not be stopped. The session is retained; try Forget again.',
   SESSION_CLEANUP_FAILED:
