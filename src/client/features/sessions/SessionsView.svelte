@@ -86,6 +86,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onmanageprofiles: (trigger: HTMLButtonElement) => void;
     onopen: (id: string) => void;
     onselectopen: (id: string) => void;
+    onplan?: (id: string) => void;
     onclose: (id: string) => void;
     onautopilottoggle?: (id: string, enabled: boolean) => void;
     onactivityopen?: (id: string) => void;
@@ -151,6 +152,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onmanageprofiles,
     onopen,
     onselectopen,
+    onplan,
     onclose,
     onautopilottoggle = () => {},
     onactivityopen = () => {},
@@ -213,6 +215,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               : 'Forgetting session…'}
       </span>
     </p>
+  {/if}
+{/snippet}
+
+{#snippet sessionPlanAction(session: RelaySession | undefined, compact = true)}
+  {#if session && onplan && hasAssignedOrgPlan(session)}
+    <AppControl
+      {compact}
+      full={compact}
+      label={`Plan for ${session.plan?.title ?? session.lastOrgPlan?.title ?? 'session'}`}
+      onclick={() => onplan?.(session.id)}>Plan</AppControl
+    >
   {/if}
 {/snippet}
 
@@ -294,6 +307,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 disabled={forgetting}
                 onclick={() => onselectopen(session.id)}>Open</AppControl
               >
+              {@render sessionPlanAction(session)}
               {#if session.resumeCommand && session.provider !== 'kimi'}
                 <AppControl compact full onclick={() => oncopyresume(session.resumeCommand!)}
                   >Copy CLI</AppControl
@@ -426,6 +440,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             >
               {openingSessionId === session.id ? 'Opening…' : 'Open'}
             </AppControl>
+            {@render sessionPlanAction(session)}
             {#if session.resumeCommand && session.provider !== 'kimi'}
               <AppControl compact full onclick={() => oncopyresume(session.resumeCommand!)}
                 >Copy CLI</AppControl
@@ -677,6 +692,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {#if otherRecentSessions.length}
         <ul class="session-list recent-session-list" aria-label="Recent sessions">
           {#each otherRecentSessions as session ((session.provider ?? 'codex') + ':' + session.id)}
+            {@const managed = savedSessions.find(
+              (owner) =>
+                owner.threadId === session.id &&
+                (owner.provider ?? 'codex') === (session.provider ?? 'codex') &&
+                hasAssignedOrgPlan(owner),
+            )}
             <li class="recent-session">
               <div class="session-details">
                 {#if session.recencyAt !== null}
@@ -698,6 +719,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               </div>
               <div class="session-actions">
                 <AppControl onclick={() => onopenrecent(session)}>Open</AppControl>
+                {@render sessionPlanAction(managed, false)}
                 {#if session.resumeCommand}
                   <AppControl onclick={() => oncopyresume(session.resumeCommand!)}
                     >Copy to CLI</AppControl

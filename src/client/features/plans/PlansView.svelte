@@ -44,6 +44,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     state: PlanState | WorkspaceOrgPreview | null;
     onopen: (planName: string) => void;
     onclose: () => void;
+    closeLabel?: string;
     checkreferences?: (paths: string[], signal: AbortSignal) => Promise<string[]>;
     onreference?: (path: string) => void;
     onarchive?: (planName: string) => void;
@@ -63,6 +64,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     state: planState,
     onopen,
     onclose,
+    closeLabel,
     onarchive,
     onreference,
     checkreferences,
@@ -228,6 +230,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <PlanView
     state={planState}
     onclose={close}
+    {closeLabel}
     {onreference}
     {verifiedReferences}
     {sourcePath}

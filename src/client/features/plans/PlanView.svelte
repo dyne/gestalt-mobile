@@ -19,6 +19,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   type Props = {
     state: PlanState;
     onclose?: () => void;
+    closeLabel?: string;
     compact?: boolean;
     onopenfull?: () => void;
     verifiedReferences?: ReadonlySet<string>;
@@ -42,6 +43,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let {
     state: viewState,
     onclose = () => {},
+    closeLabel = 'Close plan and return to list',
     compact = false,
     onopenfull,
     onreference,
@@ -200,8 +202,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {#if compact}
         {#if onopenfull}<button type="button" onclick={onopenfull}>Full plan</button>{/if}
       {:else}
-        <button class="close" aria-label="Close plan and return to list" onclick={onclose}>×</button
-        >
+        <button class="close" aria-label={closeLabel} onclick={onclose}>×</button>
       {/if}
     </header>
     <PlanProgress {plan} {compact} />

@@ -28,6 +28,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   } = $props();
 
   import AppHeader from './components/AppHeader.svelte';
+  import AppControl from './components/AppControl.svelte';
   import { waitForUpgrade } from './features/maintenance/upgrade.js';
   import { cleanTmpFeedback } from './features/maintenance/clean-tmp-feedback.js';
   import DebugDialog from './features/self-debug/DebugDialog.svelte';
@@ -301,6 +302,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   >;
   const pendingDraftSubmissions = new Map<string, PendingDraftSubmission>();
   let planState = $state<PlanState>({ kind: 'unavailable', sessionId: null });
+  let sessionPlanViewer = $state<PlanState | null>(null);
+  let sessionPlanOwner = $derived(
+    sessions.find((session) => session.id === sessionPlanViewer?.sessionId) ?? null,
+  );
   let plansCatalog = $state.raw<PlansCatalogState>({ kind: 'no-workspace' });
   let passivePlan = $state.raw<SupervisedPlan | WorkspaceOrgPreview | null>(null);
   let passivePlanName = $state<string | null>(null);
@@ -371,6 +376,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     return detachedSessionId ? active.filter((session) => session.id === sessionId) : active;
   }
   let visiblePlanState = $derived.by<PlanState | WorkspaceOrgPreview | null>(() => {
+    if (sessionPlanViewer) return sessionPlanViewer;
     if (passivePlan && isWorkspaceOrgPreview(passivePlan)) return passivePlan;
     if (passivePlan) return { kind: 'ready', sessionId: 'catalog', plan: passivePlan };
     if (hideLivePlan) return null;
@@ -589,6 +595,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           latestSessionPlans.get(next.sessionId)?.detached,
         );
       }
+    },
+  );
+  const sessionPlanController = createPlanController(
+    { getPlan: relay.getPlan, closePlan: relay.closePlan },
+    (next) => {
+      sessionPlanViewer = next.sessionId ? next : null;
+      if (next.sessionId && (next.kind === 'unavailable' || next.kind === 'error'))
+        toastQueue.enqueue({
+          kind: 'error',
+          code: `SESSION_PLAN_VIEW_${next.sessionId}`,
+          message: 'The plan for this session could not be opened.',
+        });
     },
   );
   const sessionCache = createSessionCache();
@@ -838,6 +856,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     activityController.dispose();
     autopilotController.dispose();
     planController.dispose();
+    sessionPlanController.dispose();
     gitController.dispose();
     sessionStartController.dispose();
     skillsState?.dispose();
@@ -1381,8 +1400,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       } else if (gitWorkspaceId) void gitController.refresh();
     }
     if (next === 'plan') {
-      if (sessionId) planController.refresh(sessionId);
       if (!changedTab) refreshPlanSurface();
+      else if (sessionId) planController.refresh(sessionId);
     }
     if (next === 'sessions') {
       if (sessionSubview === 'profile-manager') void closeProfileManager(false);
@@ -1393,7 +1412,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   $effect(() => {
     const workspaceId = plansWorkspaceId;
-    if (tab !== 'plan') return;
+    if (tab !== 'plan') {
+      untrack(() => {
+        if (sessionPlanViewer) sessionPlanController.select(null);
+      });
+      return;
+    }
+    if (detachedSessionId) return;
     untrack(() => loadPlansCatalog(workspaceId));
   });
 
@@ -1499,6 +1524,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     sessionPresentation.invalidate();
     const workspaceId = sessionRelative ? selectedSession?.workspaceId : plansWorkspaceId;
     if (!workspaceId) return;
+    if (sessionPlanViewer) sessionPlanController.select(null);
     passivePlanRequest?.abort();
     const request = new AbortController();
     passivePlanRequest = request;
@@ -1558,6 +1584,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function closePlanViewer(): void {
     sessionPresentation.invalidate();
+    if (sessionPlanViewer) sessionPlanController.select(null);
+    if (detachedSessionId) {
+      enterChatContext();
+      return;
+    }
     passivePlan = null;
     passivePlanName = null;
     hideLivePlan = true;
@@ -1565,6 +1596,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function openSelectedPlan(): void {
+    if (sessionPlanViewer) sessionPlanController.select(null);
     passivePlanRequest?.abort();
     ++passivePlanGeneration;
     passivePlan = null;
@@ -1573,7 +1605,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     selectTab('plan');
   }
 
+  function openSessionPlanViewer(id: string): void {
+    if (!hasAssignedOrgPlan(sessions.find((session) => session.id === id))) return;
+    sessionPresentation.invalidate();
+    passivePlanRequest?.abort();
+    ++passivePlanGeneration;
+    passivePlan = null;
+    passivePlanName = null;
+    sessionPlanController.select(id);
+    tab = 'plan';
+    scrollTabIntoInitialPosition('plan');
+  }
+
   function refreshPlanSurface(): void {
+    if (sessionPlanViewer?.sessionId) sessionPlanController.refresh(sessionPlanViewer.sessionId);
     if (sessionId) planController.refresh(sessionId);
     if (passivePlanName) openWorkspacePlan(passivePlanName, passivePlanSessionRelative, false);
     loadPlansCatalog(plansWorkspaceId, true);
@@ -1687,7 +1732,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   async function checkPlanFileReferences(paths: string[], signal: AbortSignal): Promise<string[]> {
     const sessionRelative = !passivePlanName || passivePlanSessionRelative;
-    const workspaceId = sessionRelative ? selectedSession?.workspaceId : plansWorkspaceId;
+    const workspaceId = sessionPlanViewer
+      ? sessionPlanOwner?.workspaceId
+      : sessionRelative
+        ? selectedSession?.workspaceId
+        : plansWorkspaceId;
     const planName = passivePlanName ?? '';
     if (!workspaceId) return [];
     const resolve = (path: string) => (sessionRelative ? path : planFileReference(planName, path));
@@ -1711,7 +1760,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function openPlanFileReference(path: string): void {
     const sessionRelative = !passivePlanName || passivePlanSessionRelative;
-    const workspaceId = sessionRelative ? selectedSession?.workspaceId : plansWorkspaceId;
+    const workspaceId = sessionPlanViewer
+      ? sessionPlanOwner?.workspaceId
+      : sessionRelative
+        ? selectedSession?.workspaceId
+        : plansWorkspaceId;
     if (!workspaceId) return;
     fileViewerTarget = {
       workspaceId,
@@ -1963,6 +2016,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (event.type !== 'plan.updated' && event.type !== 'plan.closed') return;
     const previous = planState;
     planController.applyEvent(selectedId, event);
+    sessionPlanController.applyEvent(selectedId, event);
     // applyEvent publishes synchronously only when its session/sequence fences
     // accept the event. Never reapply a rejected replay outside that authority.
     if (event.type === 'plan.closed' && planState !== previous) {
@@ -2031,6 +2085,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onmanageprofiles={(trigger) => void openProfileManager(trigger)}
     onopen={openSession}
     onselectopen={openSession}
+    onplan={openSessionPlanViewer}
     onclose={(id) => void closeSession(id)}
     onautopilottoggle={toggleAutopilot}
     onactivityopen={(id) => void activityController.resync(id)}
@@ -2112,7 +2167,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {#if detachedSessionId}
       <header class="detached-chat-header">
         <div class="detached-chat-context">
-          <span>Chat</span>
+          <span>{tab === 'plan' ? 'Plan' : 'Chat'}</span>
           <strong title={selectedSessionPath || detachedSessionId}
             >{selectedSessionPath || detachedSessionId}</strong
           >
@@ -2120,6 +2175,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         {#if selectedSession?.model}
           <span class="detached-chat-model"
             >{selectedSession.provider === 'kimi' ? 'Kimi · ' : ''}{selectedSession.model}</span
+          >
+        {/if}
+        {#if tab === 'plan'}
+          <AppControl compact label="Return to chat" onclick={closePlanViewer}>Chat</AppControl>
+        {:else if selectedSession && hasAssignedOrgPlan(selectedSession)}
+          <AppControl
+            compact
+            label="Plan for this session"
+            onclick={() => openSessionPlanViewer(selectedSession!.id)}>Plan</AppControl
           >
         {/if}
       </header>
@@ -2202,6 +2266,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 />
                 {#if hasAssignedOrgPlan(selectedSession)}
                   <div class="chat-controls" aria-label="Chat controls">
+                    {#if !detachedSessionId}
+                      <AppControl
+                        compact
+                        label="Plan for this session"
+                        onclick={() => openSessionPlanViewer(sessionId!)}>Plan</AppControl
+                      >
+                    {/if}
                     {#if selectedSession?.provider !== 'kimi'}
                       <AutopilotControl
                         compact
@@ -2286,21 +2357,28 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <PlansView
           catalog={plansCatalog}
           state={visiblePlanState}
-          executeReference={passivePlanName
-            ? passivePlanSessionRelative && sessionId
-              ? { kind: 'session', sessionId, planName: passivePlanName }
-              : plansWorkspaceId
-                ? { kind: 'workspace', workspaceId: plansWorkspaceId, planName: passivePlanName }
-                : undefined
-            : sessionId
-              ? { kind: 'retained-session', sessionId }
-              : undefined}
-          executeTransport={relay}
+          closeLabel={detachedSessionId ? 'Close plan and return to chat' : undefined}
+          executeReference={sessionPlanViewer?.sessionId
+            ? { kind: 'retained-session', sessionId: sessionPlanViewer.sessionId }
+            : passivePlanName
+              ? passivePlanSessionRelative && sessionId
+                ? { kind: 'session', sessionId, planName: passivePlanName }
+                : plansWorkspaceId
+                  ? { kind: 'workspace', workspaceId: plansWorkspaceId, planName: passivePlanName }
+                  : undefined
+              : sessionId
+                ? { kind: 'retained-session', sessionId }
+                : undefined}
+          executeTransport={detachedSessionId ? undefined : relay}
           downloadTransport={relay}
           ondownloaderror={(message) => toastQueue.enqueue({ kind: 'error', message })}
           onexecuteerror={(message) => toastQueue.enqueue({ kind: 'error', message })}
           onexecuteresult={(result) => void acceptPlanLaunch(result)}
-          sourcePath={passivePlan ? undefined : selectedSession?.lastOrgPlan?.path}
+          sourcePath={sessionPlanViewer
+            ? sessionPlanOwner?.lastOrgPlan?.path
+            : passivePlan
+              ? undefined
+              : selectedSession?.lastOrgPlan?.path}
           oncopyresult={(copied) =>
             toastQueue.enqueue(
               copied
