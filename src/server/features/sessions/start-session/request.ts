@@ -12,6 +12,7 @@ const schema = z.object({
   provider: z.enum(['codex', 'kimi']),
   profile: z.string().min(1),
   skillProfile: z.string().trim().min(1).optional(),
+  mandatorySkillsOnly: z.literal(true).optional(),
   model: z
     .string()
     .trim()
@@ -31,5 +32,6 @@ export type StartSessionRequest = z.infer<typeof schema>;
 /** Parses only settings that are safe to send directly to Codex thread/start. */
 export function parseStartSessionRequest(input: unknown): StartSessionRequest | null {
   const result = schema.safeParse(input);
-  return result.success ? result.data : null;
+  if (!result.success || (result.data.mandatorySkillsOnly && result.data.skillProfile)) return null;
+  return result.data;
 }

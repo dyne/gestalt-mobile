@@ -114,6 +114,7 @@ test('starts a kimi session from the provider picker and adapts the form', async
       model: 'k2-thinking',
       sandbox: 'workspace-git',
       approvalPolicy: 'never',
+      mandatorySkillsOnly: true,
     });
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
 });

@@ -19,7 +19,12 @@ import { defaultProviderModel } from '../../../../shared/contracts/session-defau
 import { resolveSessionSkillSelection } from '../application/resolve-session-skills.js';
 
 export async function startSession(
-  input: { workspaceId: string; profile: string; skillProfile?: string } & StartSessionSettings,
+  input: {
+    workspaceId: string;
+    profile: string;
+    skillProfile?: string;
+    mandatorySkillsOnly?: true;
+  } & StartSessionSettings,
   deps: {
     createId(): string;
     now(): string;

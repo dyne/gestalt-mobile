@@ -920,7 +920,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             executorReasoningEffort: sessionExecutorReasoningEffort,
           }
         : {}),
-      skillProfile: selectedSessionSkillProfile || undefined,
+      ...(selectedSessionSkillProfile
+        ? { skillProfile: selectedSessionSkillProfile }
+        : { mandatorySkillsOnly: true }),
     });
     if (!session) return;
     try {

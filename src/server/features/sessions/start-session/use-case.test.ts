@@ -236,6 +236,44 @@ describe('startSession', () => {
     expect(activated).toMatchObject({ effectiveSkillSelection: result.effectiveSkillSelection });
   });
 
+  it('persists only mandatory Gestalt skills for None without reading the profile defaults', async () => {
+    const result = await startSession(
+      { workspaceId: 'w', profile: 'default', provider: 'codex', mandatorySkillsOnly: true },
+      {
+        ...skills,
+        skillCatalog: () => ({
+          list: async () => ({
+            skills: [
+              { name: 'gestalt:org-plan', path: '/skills/org-plan/SKILL.md', enabled: false },
+              { name: 'gestalt:serena', path: '/skills/serena/SKILL.md', enabled: true },
+              { name: 'my-optional-skill', path: '/skills/optional/SKILL.md', enabled: true },
+            ],
+            errors: [],
+          }),
+        }),
+        createId: () => 's',
+        now: () => 't',
+        save: () => {},
+        workspaces: {
+          resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/relay/workspace' }),
+        },
+        profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+        skillProfiles: {
+          readGlobalProfile: async () => {
+            throw new Error('Unexpected global profile lookup');
+          },
+          readWorkspaceDefault: async () => {
+            throw new Error('Unexpected workspace profile lookup');
+          },
+        },
+      },
+    );
+    expect(result.effectiveSkillSelection).toEqual({
+      mandatorySkillsOnly: true,
+      skills: [{ name: 'gestalt:org-plan', path: '/skills/org-plan/SKILL.md', enabled: true }],
+    });
+  });
+
   it('keeps a missing saved skill disabled without blocking session activation', async () => {
     let activated: unknown;
     const result = await startSession(

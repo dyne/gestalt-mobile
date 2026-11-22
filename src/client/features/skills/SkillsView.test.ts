@@ -75,6 +75,19 @@ async function renderedAlwaysAdvertised() {
 }
 
 describe('SkillsView', () => {
+  it('lists None last and starts an empty draft when it is selected', async () => {
+    const state = await rendered();
+    const selector = screen.getByLabelText('Skill profile');
+    expect(
+      within(selector)
+        .getAllByRole('option')
+        .map((option) => option.textContent?.trim()),
+    ).toEqual(['New profile', 'team', 'None']);
+    await fireEvent.change(selector, { target: { value: '__none__' } });
+    expect(state.skills.every((skill) => !skill.enabled)).toBe(true);
+    expect(screen.getByText('0 of 1 skills enabled.')).toBeTruthy();
+  });
+
   it('badges only verified optional skills and preserves count, disable, save and reload', async () => {
     const verified = {
       name: 'nuklear-gui',
@@ -278,7 +291,7 @@ describe('SkillsView', () => {
   it('uses a profile selector, path-keyed checkboxes, and compact safe skill details', async () => {
     const state = await rendered();
     expect(screen.getByLabelText('Skill profile')).toBeTruthy();
-    expect(screen.getByRole('option', { name: 'Default' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'None' })).toBeTruthy();
     expect(screen.getByRole('checkbox', { name: /Alpha tool/ })).toBeTruthy();
     expect(screen.getByText('<strong>Plain text only</strong>')).toBeTruthy();
     expect(screen.queryByText('Plain text only', { selector: 'strong' })).toBeNull();

@@ -46,8 +46,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function selectSavedProfile(event: Event): void {
     profileChoice = (event.currentTarget as HTMLSelectElement).value;
-    if (profileChoice === '__new__' || profileChoice === '__default__')
-      snapshot.selectDefaultProfile();
+    if (profileChoice === '__new__' || profileChoice === '__none__')
+      snapshot.selectDefaultProfile(profileChoice === '__none__');
     else snapshot.selectProfile(profileChoice);
     changed();
   }
@@ -120,10 +120,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         onchange={selectSavedProfile}
       >
         <option value="__new__">New profile</option>
-        <option value="__default__">Default</option>
         {#each validProfiles as profile (profile.name)}
           <option value={profile.name}>{profile.name}</option>
         {/each}
+        <option value="__none__">None</option>
       </select>
 
       <label for="skills-save-as">Save as</label>

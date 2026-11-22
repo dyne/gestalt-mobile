@@ -242,6 +242,7 @@ for (const width of [1280, 390]) {
           executorReasoningEffort: 'high',
           sandbox: 'workspace-git',
           approvalPolicy: 'on-request',
+          mandatorySkillsOnly: true,
         });
         await route.fulfill({ contentType: 'application/json', body: JSON.stringify(session) });
         return;
@@ -759,6 +760,7 @@ test('starts a session with sandbox and approval settings', async ({ page }) => 
       executorReasoningEffort: 'high',
       sandbox: 'workspace-write',
       approvalPolicy: 'never',
+      mandatorySkillsOnly: true,
     });
     await route.fulfill({
       status: 202,
