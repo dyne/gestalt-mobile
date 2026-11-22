@@ -37,6 +37,7 @@ export class OrgPlanLaunchController {
       reference.kind === 'retained-session' ? null : reference.planName,
       intent.expectedRevision,
       intent.skillProfile ?? null,
+      intent.replaceSessionId ?? null,
     ]);
     if (identity !== this.#intent) {
       this.#intent = identity;

@@ -168,7 +168,7 @@ async function execute(page: Page) {
   await page.getByLabel('Primary').getByRole('button', { name: 'Plan', exact: true }).click();
   await page.getByRole('button', { name: 'Open Launch roadmap' }).click();
   await page.getByRole('button', { name: 'Execute', exact: true }).click();
-  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Execute plan' })).toBeVisible();
   await expect(page.getByRole('combobox', { name: 'Supervisor Skill profile' })).toHaveValue(
     'supervisor',
   );
@@ -244,7 +244,11 @@ test('a launch response after leaving the viewer stays in Sessions without forci
     await page.goto('/');
     await execute(page);
     await expect.poll(state.created).toBe(true);
-    await page.getByRole('button', { name: 'Close', exact: true }).click();
+    await page
+      .getByRole('dialog', { name: 'Execute plan' })
+      .getByRole('button', { name: 'Close', exact: true })
+      .click();
+    await page.getByRole('button', { name: 'Close plan and return to list' }).click();
     await page.getByLabel('Primary').getByRole('button', { name: 'Sessions', exact: true }).click();
     const received = page.waitForResponse('**/api/plans/execute');
     release();

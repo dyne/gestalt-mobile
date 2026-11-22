@@ -21,6 +21,11 @@ export type OrgPlanReference = Readonly<
 >;
 
 export type OrgPlanWorkspace = Readonly<{ id: string; name: string; path: string }>;
+export type OrgPlanWorkspaceSession = Readonly<{
+  sessionId: string;
+  replaceAllowed: boolean;
+  retryClose?: true;
+}>;
 
 const identity = z.string().min(1).max(1024);
 export const orgPlanLaunchRequestSchema = z
@@ -34,6 +39,7 @@ export const orgPlanLaunchRequestSchema = z
     ]),
     expectedRevision: identity,
     skillProfile: z.string().max(256).optional(),
+    replaceSessionId: identity.optional(),
     launchId: z.string().min(1).max(256),
   })
   .strict();
@@ -101,6 +107,7 @@ export type OrgPlanPreparation =
       revision: string;
       sourcePath: string;
       workspace: OrgPlanWorkspace;
+      workspaceSession?: OrgPlanWorkspaceSession;
       settings: OrgPlanLaunchSettings;
       skillProfiles: readonly OrgPlanSkillProfileOption[];
       warnings: readonly string[];

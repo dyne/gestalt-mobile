@@ -14,6 +14,54 @@ async function dialog(page: import('@playwright/test').Page) {
   await expect(page.getByRole('button', { name: 'OK', exact: true })).toBeEnabled();
 }
 
+test('Execute shows the existing session and requires confirmation once it is idle', async ({
+  page,
+}) => {
+  const { state, source } = await installExecuteFixture(page);
+  state.workspaceSession = { sessionId: source.id, replaceAllowed: false };
+  source.sessionStatus = {
+    state: 'working',
+    reason: 'rootTurn',
+    confidence: 'fresh',
+    observedAt: '2026-11-08T00:00:00Z',
+    nextExpectedAction: 'Wait for the turn to finish.',
+  };
+  await page.goto('/');
+  await openExecuteEntry(page, 'catalog');
+  const execute = page.getByRole('button', { name: 'Execute', exact: true });
+  const confirmation = page.getByRole('dialog', { name: 'Execute plan' });
+  await execute.click();
+  const status = confirmation.getByRole('region', { name: 'Session open in this workspace' });
+  const replace = confirmation.getByRole('button', { name: 'Replace and execute' });
+  await expect(status.getByText('Working', { exact: true })).toBeVisible();
+  await expect(replace).toBeDisabled();
+  await confirmation.getByRole('button', { name: 'Cancel' }).click();
+  expect(state.launchRequests).toHaveLength(0);
+
+  await execute.click();
+  await expect(status.getByText('Working', { exact: true })).toBeVisible();
+  state.workspaceSession = { sessionId: source.id, replaceAllowed: true };
+  // The status read can observe new work after an eligible preparation.
+  const refresh = confirmation.getByRole('button', { name: 'Refresh' });
+  await refresh.click();
+  await expect(refresh).toBeEnabled();
+  await expect(status.getByText('Working', { exact: true })).toBeVisible();
+  await expect(replace).toBeDisabled();
+  source.sessionStatus = {
+    ...source.sessionStatus,
+    state: 'idle',
+    reason: 'complete',
+    nextExpectedAction: 'Ready for the next request.',
+  };
+  await confirmation.getByRole('button', { name: 'Refresh' }).click();
+  await expect(status.getByText('Idle', { exact: true })).toBeVisible();
+  await expect(status.getByText(/history stay saved/)).toBeVisible();
+  await expect(replace).toBeEnabled();
+  expect(state.launchRequests).toHaveLength(0);
+  await replace.click();
+  await expect.poll(() => state.launchRequests).toMatchObject([{ replaceSessionId: source.id }]);
+});
+
 test('native modal keeps background inert, preserves keyboard order and Escape/Cancel restore Execute', async ({
   page,
 }, testInfo) => {

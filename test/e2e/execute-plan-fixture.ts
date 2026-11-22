@@ -118,6 +118,10 @@ export async function installExecuteFixture(
     profiles: ['supervisor'],
     defaultProfile: options.defaultProfile ?? '',
     readError: false,
+    workspaceSession: undefined as Extract<
+      OrgPlanPreparation,
+      { kind: 'eligible' }
+    >['workspaceSession'],
     blocked: null as Extract<OrgPlanPreparation, { kind: 'blocked' }> | null,
     published: false,
     activated: false,
@@ -251,6 +255,7 @@ export async function installExecuteFixture(
           profile: 'default',
           skillProfile: state.defaultProfile,
         },
+        workspaceSession: state.workspaceSession,
         skillProfiles: state.profiles.map((name) => ({ name })),
         warnings: [],
       },

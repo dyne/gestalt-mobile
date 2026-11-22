@@ -36,6 +36,7 @@ export type StartOrgPlanSupervisionDependencies = {
   ): Promise<EffectiveSkillSelection>;
   reclaimForgottenOwner?(canonicalPath: string, workspacePath: string): void;
   workspaceBusy?(workspacePath: string): { sessionId: string; reason: string } | null;
+  replaceIdleSession?(workspacePath: string, sessionId: string): Promise<boolean>;
   createId(): string;
   launches: OrgPlanLaunchStore;
   sessions: {
@@ -76,6 +77,7 @@ export async function startOrgPlanSupervision(
         reference.kind === 'retained-session' ? null : reference.planName,
         input.expectedRevision,
         input.skillProfile ?? null,
+        ...(input.replaceSessionId ? [input.replaceSessionId] : []),
       ]),
     )
     .digest('hex');
@@ -85,12 +87,15 @@ export async function startOrgPlanSupervision(
     if (!(await deps.authorizeReplay(record))) return unavailable();
     if (record.requestFingerprint !== fingerprint) return conflict();
   } else {
-    const context = await deps.prepare(reference, input.expectedRevision, input.skillProfile);
+    let context = await deps.prepare(reference, input.expectedRevision, input.skillProfile);
     if (context.kind === 'blocked') {
       // Another delivery can reserve/attach while this delivery is preparing.
       // Records are retained, so one bounded re-entry takes the replay path.
       return deps.launches.find(input.launchId) ? startOrgPlanSupervision(input, deps) : context;
     }
+    const occupant = context.workspaceSession;
+    if (occupant && (!occupant.replaceAllowed || occupant.sessionId !== input.replaceSessionId))
+      return replacementBlocked(occupant.sessionId);
     let skillSelection: EffectiveSkillSelection;
     try {
       skillSelection = await deps.captureSkills(context);
@@ -107,6 +112,13 @@ export async function startOrgPlanSupervision(
         code: 'GESTALT_CAPABILITIES_UNAVAILABLE',
         reason: 'The Org-plan skill changed before launch. Refresh and confirm again.',
       };
+    if (occupant) {
+      if (!(await deps.replaceIdleSession?.(context.workspace.path, occupant.sessionId)))
+        return replacementBlocked(occupant.sessionId);
+      context = await deps.prepare(reference, input.expectedRevision, input.skillProfile);
+      if (context.kind === 'blocked') return context;
+      if (context.workspaceSession) return replacementBlocked(context.workspaceSession.sessionId);
+    }
     deps.reclaimForgottenOwner?.(context.sourcePath, context.workspace.path);
     const busy = deps.workspaceBusy?.(context.workspace.path);
     if (busy)
@@ -152,6 +164,15 @@ export async function startOrgPlanSupervision(
     }
     return continueLaunch(deps.launches.find(current.launchId) ?? current, deps);
   });
+}
+
+function replacementBlocked(sessionId: string): OrgPlanLaunchResult {
+  return {
+    kind: 'blocked',
+    code: 'WORKSPACE_BUSY',
+    reason: 'Refresh the workspace session status and confirm replacement once it is idle.',
+    existingSessionId: sessionId,
+  };
 }
 
 async function continueLaunch(
@@ -343,8 +364,13 @@ async function revalidateUnpublished(
     input.skillProfile,
     record.launchId,
   );
-  let blocked: OrgPlanLaunchResult | null = fresh.kind === 'blocked' ? fresh : null;
-  if (fresh.kind === 'eligible') {
+  let blocked: OrgPlanLaunchResult | null =
+    fresh.kind === 'blocked'
+      ? fresh
+      : fresh.workspaceSession
+        ? replacementBlocked(fresh.workspaceSession.sessionId)
+        : null;
+  if (fresh.kind === 'eligible' && !blocked) {
     try {
       const skills = await deps.captureSkills(fresh);
       if (
