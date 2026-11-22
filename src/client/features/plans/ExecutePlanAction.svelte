@@ -297,7 +297,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       void refreshProfiles();
     }}
   >
-    <option value="">Default</option>
     {#if selected && !confirmed?.skillProfiles.some((profile) => profile.name === selected && !profile.error)}<option
         value={selected}
         disabled>{selected} (unavailable)</option
@@ -305,6 +304,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {#each confirmed?.skillProfiles.filter((profile) => !profile.error) ?? [] as profile (profile.name)}<option
         value={profile.name}>{profile.name}</option
       >{/each}
+    <option value="">None</option>
   </select>
   {#each confirmed?.warnings ?? [] as warning}<p class="guidance">{warning}</p>{/each}
   {#if confirmed?.workspaceSession}

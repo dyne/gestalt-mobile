@@ -196,7 +196,7 @@ for (const code of [
   });
 }
 
-test('an empty profile list confirms Default and rapid native clicks submit one launch', async ({
+test('an empty profile list offers None and rapid native clicks submit one launch', async ({
   page,
 }) => {
   const { state } = await installExecuteFixture(page);
@@ -209,7 +209,7 @@ test('an empty profile list confirms Default and rapid native clicks submit one 
     await page.goto('/');
     await openExecuteEntry(page, 'catalog');
     await dialog(page);
-    await expect(page.getByRole('option')).toHaveCount(1);
+    await expect(page.getByRole('combobox').locator('option')).toHaveText(['None']);
     await expect(page.getByRole('combobox')).toHaveValue('');
     await page
       .getByRole('button', { name: 'OK', exact: true })
@@ -247,7 +247,7 @@ test('a deleted selected profile stays selected until an explicit available choi
   await expect(page.getByRole('combobox')).toHaveValue('supervisor');
   await expect(page.getByRole('button', { name: 'OK', exact: true })).toBeDisabled();
   expect(state.published).toBe(false);
-  await page.getByRole('combobox').selectOption('');
+  await page.getByRole('combobox').selectOption({ label: 'None' });
   await expect(page.getByRole('button', { name: 'OK', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: 'OK', exact: true }).click();
   await expect(

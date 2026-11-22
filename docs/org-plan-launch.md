@@ -7,6 +7,9 @@ the same authorized reference resolver and admission settings for every caller.
 the confirmed preparation revision, an optional supervisor skill profile, and a
 stable `launchId`. Paths, working folders, models and Autopilot switches are not
 accepted inputs. Callers first obtain read-only `/api/plans/prepare` context.
+The supervisor picker lists saved profiles followed by **None**, which loads
+only mandatory Gestalt skills, including `gestalt:org-plan`. Send an empty
+`skillProfile` to select **None** explicitly.
 
 Opening and validating a plan in the visualizer is passive. Its `display-open`
 attachment retains the plan for viewing, including existing WIP progress, without

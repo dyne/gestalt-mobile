@@ -136,7 +136,7 @@ describe('prepareOrgPlanSettings', () => {
           ...form,
           workspaceId: 'plan-project',
           profile: 'default',
-          skillProfile: form.skillProfile || undefined,
+          mandatorySkillsOnly: true,
         },
         {
           ...f.deps,
@@ -222,23 +222,26 @@ describe('prepareOrgPlanSettings', () => {
     });
   });
 
-  it('preserves Default/workspace fallback, empty global choices and capability consent', async () => {
+  it('resolves None to mandatory Gestalt skills without inheriting workspace skills or consent', async () => {
     const f = fixture();
     f.project({
       version: 2,
       name: 'project',
-      skills: [],
-      capabilities: { playwright: { enabled: false } },
+      skills: [{ name: 'optional', path: '/skills/optional/SKILL.md', enabled: true }],
+      capabilities: { playwright: { enabled: true } },
     });
     const result = await prepareOrgPlanSettings('/plan-project', f.deps, '');
     expect(result).toMatchObject({
       kind: 'available',
       settings: { skillProfile: '' },
       skillProfiles: [],
-      effectiveSkillSelection: { capabilities: { playwright: { enabled: false } } },
+    });
+    expect(result.kind === 'available' && result.effectiveSkillSelection).toEqual({
+      mandatorySkillsOnly: true,
+      skills: [{ name: 'gestalt:org-plan', path: '/skills/org-plan/SKILL.md', enabled: true }],
     });
     expect(f.deps.skillProfiles.readGlobalProfile).not.toHaveBeenCalled();
-    expect(f.deps.skillProfiles.readWorkspaceDefault).toHaveBeenCalledWith('/plan-project');
+    expect(f.deps.skillProfiles.readWorkspaceDefault).not.toHaveBeenCalled();
   });
 
   it('allows only the chosen global profile override and retains its consent and normal skill snapshot', async () => {
@@ -265,7 +268,7 @@ describe('prepareOrgPlanSettings', () => {
     });
   });
 
-  it('retains invalid profile errors and warns when normal saved-profile fallback selects Default', async () => {
+  it('retains invalid profile errors and warns when a missing saved profile falls back to None', async () => {
     const f = fixture({ ...saved, skillProfile: 'broken' });
     f.deps.skillProfiles.listGlobalProfileNames = async () => ['broken'];
     f.deps.skillProfiles.readGlobalProfile = async () => {
@@ -274,7 +277,7 @@ describe('prepareOrgPlanSettings', () => {
     expect(await prepareOrgPlanSettings('/plan-project', f.deps)).toMatchObject({
       kind: 'available',
       settings: { skillProfile: '' },
-      warnings: [expect.stringContaining('saved skill profile')],
+      warnings: [expect.stringContaining('None is selected')],
       skillProfiles: [{ name: 'broken', error: 'Invalid profile YAML' }],
     });
     expect(await prepareOrgPlanSettings('/plan-project', f.deps, 'broken')).toMatchObject({
