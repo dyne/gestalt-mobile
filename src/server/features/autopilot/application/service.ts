@@ -3459,7 +3459,10 @@ export class AutopilotCoordinator {
         ? this.currentExecutor(sessionId, plan.plan, state.consecutiveNoProgress, state.executor)
         : undefined;
     const fence =
-      state && plan && !this.deps.session(sessionId)?.activeTurnId
+      state &&
+      plan &&
+      !this.deps.session(sessionId)?.activeTurnId &&
+      !this.deps.pendingTurn?.(sessionId)
         ? {
             generation: state.generation,
             identity: plan.identity,
@@ -3486,11 +3489,6 @@ export class AutopilotCoordinator {
         this.enqueue(sessionId, async () => {
           const current = this.deps.store.find(sessionId);
           const currentPlan = this.deps.plan(sessionId);
-          const currentChild = fence.executorThreadId
-            ? this.deps
-                .activity(sessionId)
-                ?.subagents.find((child) => (child.threadId ?? child.id) === fence.executorThreadId)
-            : null;
           if (
             !current?.requestedEnabled ||
             this.deps.pendingInteraction(sessionId) ||
@@ -3502,14 +3500,21 @@ export class AutopilotCoordinator {
             !currentPlan ||
             fingerprint(currentPlan.plan) !== fence.fingerprint ||
             Boolean(this.deps.session(sessionId)?.activeTurnId) ||
-            (fence.executorThreadId !== null &&
-              (currentChild?.canonicalPosition !== fence.canonicalPosition ||
-                (currentChild.continuationGeneration ?? 1) !== fence.executorGeneration))
+            this.deps.pendingTurn?.(sessionId)
           ) {
             this.audit(sessionId, 'autopilot.executor-refresh-stale', { fence });
             return;
           }
+          // Refresh restores evidence, not executor authority. A disconnected
+          // roster may omit or replace the armed child; requiring that stale
+          // identity here prevents the read that could recover it. Execution
+          // is fenced independently against the refreshed state below.
           await this.deps.executorController?.refresh(sessionId);
+          const refreshed = this.deps.store.find(sessionId);
+          if (refreshed && this.decision(sessionId, refreshed).kind === 'reconcile') {
+            this.evaluate(sessionId);
+            return;
+          }
           if (!(await this.enforceSupervisedLifecycle(sessionId, 'processObserved')))
             this.evaluate(sessionId);
         });

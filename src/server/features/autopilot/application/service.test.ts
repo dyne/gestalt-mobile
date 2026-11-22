@@ -2594,6 +2594,108 @@ describe('AutopilotCoordinator', () => {
       expect(state).toMatchObject({ state: 'monitoring', requestedEnabled: true });
     },
   );
+  it.each(['missing', 'changed', 'manualOff', 'planReplaced', 'pendingTurn'] as const)(
+    'refreshes lost executor evidence without restoring obsolete authority: %s',
+    async (change) => {
+      const database = new DatabaseSync(':memory:');
+      migrate(database);
+      database
+        .prepare(
+          "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,failure_count,next_sequence,created_at,updated_at) VALUES ('s','w','/w','p','ready','active',0,1,'t','t')",
+        )
+        .run();
+      const store = new SqliteAutopilotStore(database);
+      const timers: Array<() => void> = [];
+      let identity = 'p';
+      let pendingTurn = false;
+      const activity = {
+        ...createAgentActivitySnapshot('s', now),
+        confidence: 'stale' as const,
+      };
+      const refresh = vi.fn(async () => {});
+      const resume = vi.fn(async () => {});
+      const start = vi.fn(async () => {});
+      const reconcile = vi.fn(async () => ({ compatible: false }));
+      const coordinator = new AutopilotCoordinator({
+        store,
+        now: () => now,
+        policy: defaultAutopilotPolicy,
+        plan: () => ({ plan, identity }),
+        session: () => ({ state: 'ready', threadId: 'root', activeTurnId: null }),
+        activity: () => activity,
+        pendingInteraction: () => false,
+        pendingTurn: () => pendingTurn,
+        reconcile,
+        schedule: (callback) => {
+          timers.push(callback);
+          return () => {};
+        },
+        nextControlId: () => 'unused',
+        turnStarter: { start },
+        executorController: {
+          refresh,
+          resume,
+          interrupt: async () => true,
+          transferProcess: () => {},
+          consumeProcess: () => {},
+          terminateProcess: async () => true,
+        },
+        publish: () => {},
+      });
+      try {
+        // Seed the durable owner while its runtime roster is unavailable.
+        coordinator.supervisionStarted('s');
+        store.save({
+          ...store.find('s')!,
+          executor: {
+            canonicalPosition: 'L1',
+            canonicalTaskName: 'l1',
+            taskPath: '/root/l1',
+            threadId: 'executor',
+            l1State: 'WIP',
+            lastActivityAt: now,
+            ownedProcesses: [],
+            outcome: 'partial',
+            continuationGeneration: 1,
+            continuationCount: 0,
+          },
+        });
+        coordinator.evaluate('s');
+        await vi.waitFor(() => expect(timers).toHaveLength(1));
+        if (change === 'changed')
+          activity.subagents = [
+            {
+              id: 'replacement',
+              threadId: 'replacement',
+              taskPath: '/root/l1_g2',
+              canonicalPosition: 'L1',
+              canonicalTaskName: 'l1',
+              continuationGeneration: 2,
+              state: 'idle',
+              reason: 'unknown',
+              observedAt: now,
+              lastActivityAt: now,
+            },
+          ];
+        if (change === 'manualOff') coordinator.disable('s');
+        if (change === 'planReplaced') identity = 'new-plan';
+        if (change === 'pendingTurn') pendingTurn = true;
+        timers[0]!();
+        if (change === 'missing' || change === 'changed') {
+          await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+          await vi.waitFor(() => expect(timers.length).toBeGreaterThan(1));
+        } else {
+          await new Promise((resolve) => setImmediate(resolve));
+          expect(refresh).not.toHaveBeenCalled();
+        }
+        expect(resume).not.toHaveBeenCalled();
+        expect(start).not.toHaveBeenCalled();
+      } finally {
+        coordinator.dispose('s');
+        database.close();
+      }
+    },
+  );
   it('durably invalidates a pending control when a manual turn wins the race', () => {
     let state: AutopilotSession | null = {
       sessionId: 's',
@@ -5796,7 +5898,7 @@ ${index === 10 ? '** SUSPENDED [#A] L11.1\n:PROPERTIES:\n:ID: l11-1\n:END:\n- Wh
       },
       {
         name: 'a child thread or generation change',
-        kinds: ['continuation', 'refresh'] as const,
+        kinds: ['continuation'] as const,
         apply: (fixture: ReturnType<typeof subject>) => {
           fixture.activity = {
             ...fixture.activity,
