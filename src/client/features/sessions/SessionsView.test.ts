@@ -739,6 +739,66 @@ describe('SessionsView session base tree', () => {
     expect(screen.getByText('closed.org')).toBeTruthy();
   });
 
+  it.each([false, true])(
+    'opens loaded plans from session rows (rosterOnly=%s)',
+    async (rosterOnly) => {
+      const onplan = vi.fn();
+      const onopen = vi.fn();
+      renderView({
+        rosterOnly,
+        onplan,
+        onopen,
+        sessions: [
+          {
+            id: 'open',
+            state: 'ready',
+            lastOrgPlan: { title: 'Open plan', filename: 'open.org', attached: true },
+          },
+          {
+            id: 'saved',
+            threadId: 'saved-thread',
+            state: 'released',
+            lastOrgPlan: { title: 'Saved plan', filename: 'saved.org', attached: true },
+          },
+          {
+            id: 'detached',
+            state: 'released',
+            lastOrgPlan: { title: 'Old plan', filename: 'old.org', attached: false },
+          },
+        ],
+        recentSessions: [
+          { id: 'saved-thread', cwd: '/work', recencyAt: null, orgPlanFilename: 'saved.org' },
+          {
+            id: 'forgotten-thread',
+            cwd: '/elsewhere',
+            recencyAt: null,
+            orgPlanFilename: 'old.org',
+          },
+        ],
+      });
+      await fireEvent.click(
+        within(screen.getByRole('list', { name: 'Open sessions' })).getByRole('button', {
+          name: 'Plan for Open plan',
+        }),
+      );
+      await fireEvent.click(
+        within(screen.getByRole('list', { name: 'Saved sessions' })).getByRole('button', {
+          name: 'Plan for Saved plan',
+        }),
+      );
+      expect(screen.queryByRole('button', { name: 'Plan for Old plan' })).toBeNull();
+      if (!rosterOnly) {
+        const recent = within(screen.getByRole('list', { name: 'Recent sessions' }));
+        expect(recent.getAllByRole('button', { name: /^Plan for/ })).toHaveLength(1);
+        await fireEvent.click(recent.getByRole('button', { name: 'Plan for Saved plan' }));
+      }
+      expect(onplan.mock.calls).toEqual(
+        rosterOnly ? [['open'], ['saved']] : [['open'], ['saved'], ['saved']],
+      );
+      expect(onopen).not.toHaveBeenCalled();
+    },
+  );
+
   it('copies resume commands from open and saved adopted sessions', async () => {
     const oncopyresume = vi.fn();
     renderView({
