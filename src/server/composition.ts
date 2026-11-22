@@ -155,8 +155,10 @@ import {
   OrgPlanSessionNotPublished,
 } from './features/plans/application/start-org-plan-supervision.js';
 import { SqliteOrgPlanLaunchStore } from './platform/persistence/sqlite-org-plan-launch-store.js';
-import { resolveSessionSkillSelection } from './features/sessions/application/resolve-session-skills.js';
-import { prepareOrgPlanSettings } from './features/plans/application/prepare-org-plan-settings.js';
+import {
+  prepareOrgPlanSettings,
+  resolveSupervisorSkillSelection,
+} from './features/plans/application/prepare-org-plan-settings.js';
 import type { PlanStatusUpdate } from './features/plans/application/ports.js';
 import { FilesystemPlanStatusSource } from './platform/plans/filesystem-plan-status-source.js';
 import { FilesystemWorkspacePlanCatalog } from './platform/plans/filesystem-workspace-plan-catalog.js';
@@ -2681,7 +2683,6 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               profiles: options.profiles,
               skillProfiles,
               skillCatalog,
-              defaultSkillProfile: options.explicitSkillProfile,
             },
             selectedProfile,
           ),
@@ -2753,17 +2754,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         }
       },
       captureSkills: (context) =>
-        resolveSessionSkillSelection(
-          {
-            workspacePath: context.workspace.path,
-            provider: 'codex',
-            profile: 'default',
-            ...(context.settings.skillProfile
-              ? { skillProfile: context.settings.skillProfile }
-              : {}),
-          },
-          { skillProfiles, skillCatalog, defaultSkillProfile: options.explicitSkillProfile },
-        ),
+        resolveSupervisorSkillSelection(context.workspace.path, context.settings.skillProfile, {
+          skillProfiles,
+          skillCatalog,
+        }),
       sessions: {
         create: async (id, context, selection, publication) => {
           orgPlanStarting.set(id, (orgPlanStarting.get(id) ?? 0) + 1);

@@ -15,7 +15,6 @@ import type {
 } from '../../../../shared/contracts/org-plan-execution.js';
 import type { ModelCatalog, ProfileCatalog } from '../../catalog/application/ports.js';
 import type { SkillCatalog, SkillProfileStore } from '../../skills/application/ports.js';
-import type { SkillProfile } from '../../skills/model/skill-profile.js';
 import { readGlobalSkillProfiles } from '../../skills/application/read-global-profiles.js';
 import { resolveSessionSkillSelection } from '../../sessions/application/resolve-session-skills.js';
 import type { EffectiveSkillSelection } from '../../sessions/model/relay-session.js';
@@ -47,8 +46,24 @@ export type OrgPlanSettingsDependencies = {
     'listGlobalProfileNames' | 'readGlobalProfile' | 'readWorkspaceDefault'
   >;
   skillCatalog(provider: 'codex' | 'kimi', profile: string): Pick<SkillCatalog, 'list'>;
-  defaultSkillProfile?: SkillProfile;
 };
+
+/** Resolve the same supervisor skills during preparation and launch. */
+export function resolveSupervisorSkillSelection(
+  workspacePath: string,
+  skillProfile: string,
+  deps: Pick<OrgPlanSettingsDependencies, 'skillProfiles' | 'skillCatalog'>,
+): Promise<EffectiveSkillSelection> {
+  return resolveSessionSkillSelection(
+    {
+      workspacePath,
+      provider: 'codex',
+      profile: 'default',
+      ...(skillProfile ? { skillProfile } : { mandatorySkillsOnly: true }),
+    },
+    deps,
+  );
+}
 
 /** Read-only counterpart of the ordinary New session form and skill snapshot. */
 export async function prepareOrgPlanSettings(
@@ -99,17 +114,13 @@ export async function prepareOrgPlanSettings(
           'The selected supervisor skill profile disappeared or is invalid. Refresh and choose again.',
         );
       warnings.push(
-        'The saved skill profile is unavailable. Default is selected; choose a supervisor profile before confirming.',
+        'The saved skill profile is unavailable. None is selected, so only mandatory Gestalt skills will load.',
       );
       selected = '';
     }
-    const effectiveSkillSelection = await resolveSessionSkillSelection(
-      {
-        workspacePath,
-        provider: 'codex',
-        profile: 'default',
-        ...(selected ? { skillProfile: selected } : {}),
-      },
+    const effectiveSkillSelection = await resolveSupervisorSkillSelection(
+      workspacePath,
+      selected,
       deps,
     );
     if (

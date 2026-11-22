@@ -135,7 +135,10 @@ describe('Execute plan confirmation', () => {
       const execute = await open();
       expect(transport.startOrgPlanSupervision).not.toHaveBeenCalled();
       expect(screen.getByRole('combobox', { name: 'Supervisor Skill profile' })).toBeTruthy();
-      expect(screen.queryByRole('option', { name: 'broken' })).toBeNull();
+      expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
+        'supervisor',
+        'None',
+      ]);
       if (action === 'Cancel')
         await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
       else await fireEvent(screen.getByRole('dialog'), new Event('cancel'));
@@ -177,7 +180,7 @@ describe('Execute plan confirmation', () => {
       }
     },
   );
-  it('supports Default with no saved profiles and preserves a disappeared selected default', async () => {
+  it('offers None when the selected profile has disappeared', async () => {
     const { transport } = setup({
       ...eligible,
       settings: { ...eligible.settings, skillProfile: 'deleted' },
