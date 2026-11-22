@@ -15,6 +15,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import PlanProgress from './PlanProgress.svelte';
   import PlanFilePath from './PlanFilePath.svelte';
   import { presentPlan } from './plan-presentation.js';
+  const titleId = $props.id();
 
   type Props = {
     state: PlanState;
@@ -175,25 +176,25 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <p class="visually-hidden" aria-live="polite" aria-atomic="true">{announcement}</p>
 
 {#if viewState.kind === 'loading'}
-  <section aria-labelledby="plan-title">
-    <h2 id="plan-title">Plan</h2>
+  <section aria-labelledby={titleId}>
+    <h2 id={titleId}>Plan</h2>
     <p>Loading plan…</p>
   </section>
 {:else if viewState.kind === 'unavailable'}
-  <section aria-labelledby="plan-title">
-    <h2 id="plan-title">Plan</h2>
+  <section aria-labelledby={titleId}>
+    <h2 id={titleId}>Plan</h2>
     <p>No retained plan for this session.</p>
   </section>
 {:else if viewState.kind === 'error' && !plan}
-  <section aria-labelledby="plan-title">
-    <h2 id="plan-title">Plan</h2>
+  <section aria-labelledby={titleId}>
+    <h2 id={titleId}>Plan</h2>
     <p>{viewState.error}</p>
   </section>
 {:else if plan}
-  <section class="plan" class:compact aria-labelledby="plan-title">
+  <section class="plan" class:compact aria-labelledby={titleId}>
     <header>
       <div class="plan-heading">
-        <h2 id="plan-title">{plan.title}</h2>
+        <h2 id={titleId}>{plan.title}</h2>
         {#if !compact && (plan.sourcePath || sourcePath)}
           <PlanFilePath path={plan.sourcePath || sourcePath!} {oncopyresult} />
         {/if}

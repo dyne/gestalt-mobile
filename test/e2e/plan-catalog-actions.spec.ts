@@ -113,6 +113,7 @@ test('reopens archived plans and opens raw Org documents at the top from a scrol
   await page.goto('/');
   await page.getByLabel('Primary').getByRole('button', { name: 'Plan', exact: true }).click();
   const reopen = page.getByRole('button', { name: 'Reopen Long roadmap', exact: true });
+  const viewer = page.getByRole('dialog', { name: 'Plan viewer' });
   await reopen.scrollIntoViewIfNeeded();
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
   await expect(
@@ -120,9 +121,10 @@ test('reopens archived plans and opens raw Org documents at the top from a scrol
       .getByRole('list', { name: 'Completed and archived plans' })
       .getByRole('button', { name: /^Archive / }),
   ).toHaveCount(0);
-  await reopen.click();
+  const beforeRoadmap = await page.evaluate(() => window.scrollY);
+  await reopen.press('Enter');
   await expect(page.getByRole('heading', { name: 'Long roadmap', exact: true })).toBeVisible();
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await expect.poll(() => viewer.evaluate((node) => node.scrollTop)).toBe(0);
   await expect(page.getByText(`${sourceRoot}/long.org`, { exact: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('supervised-plan-path-mobile.png') });
   const copy = page.getByRole('button', { name: 'Copy Org file path' });
@@ -135,12 +137,14 @@ test('reopens archived plans and opens raw Org documents at the top from a scrol
     .toBe(`${sourceRoot}/long.org`);
   await expect(page.getByRole('status').filter({ hasText: 'Org file path copied.' })).toBeVisible();
   await page.getByRole('button', { name: 'Close plan and return to list' }).click();
+  await expect(reopen).toBeFocused();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeCloseTo(beforeRoadmap, 0);
   const raw = page.getByRole('button', { name: 'Reopen Long raw document', exact: true });
   await raw.scrollIntoViewIfNeeded();
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
   await raw.click();
   await expect(page.getByRole('heading', { name: 'Long raw document', exact: true })).toBeVisible();
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await expect.poll(() => viewer.evaluate((node) => node.scrollTop)).toBe(0);
   await expect(page.getByText(`${sourceRoot}/raw.org`, { exact: true })).toBeVisible();
   await copy.click();
   await expect

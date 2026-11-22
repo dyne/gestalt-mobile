@@ -168,7 +168,9 @@ async function routeSessionHistory(page: Page, id: string): Promise<void> {
   );
 }
 
-test('opens a linked local Org file in the Plan tab', async ({ page }, testInfo) => {
+test('opens a linked local Org file over Chat and restores focus when closed', async ({
+  page,
+}, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'clipboard', {
@@ -236,19 +238,22 @@ test('opens a linked local Org file in the Plan tab', async ({ page }, testInfo)
   await page.goto('/');
   const navigation = page.getByLabel('Primary');
   await navigation.getByRole('button', { name: 'Chat' }).click();
-  await page.getByRole('link', { name: 'the roadmap' }).click();
-
-  await expect(navigation.getByRole('button', { name: 'Plan' })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  );
-  await expect(page.getByRole('heading', { name: 'Linked roadmap' })).toBeVisible();
+  const roadmap = page.getByRole('link', { name: 'the roadmap' });
+  await roadmap.click();
+  const viewer = page.getByRole('dialog', { name: 'Plan viewer' });
+  await expect(viewer.getByRole('heading', { name: 'Linked roadmap' })).toBeVisible();
   await expect(page.getByText('/projects/one/plans/roadmap.org', { exact: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('linked-org-path-desktop.png') });
   await page.getByRole('button', { name: 'Copy Org file path' }).click();
   await expect
     .poll(() => page.evaluate(() => (window as Window & { copiedOrgPath?: string }).copiedOrgPath))
     .toBe('/projects/one/plans/roadmap.org');
+  await viewer.getByRole('button', { name: 'Close plan and return to chat' }).click();
+  await expect(roadmap).toBeFocused();
+  await expect(navigation.getByRole('button', { name: 'Chat' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
   expect(openedPlanName).toBe('plans/roadmap.org');
 });
 

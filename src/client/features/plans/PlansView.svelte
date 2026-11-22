@@ -220,6 +220,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <OrgDocumentView
     preview={planState}
     onclose={close}
+    {closeLabel}
     {onreference}
     {verifiedReferences}
     {sourcePath}
@@ -284,6 +285,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     flex-wrap: wrap;
     align-items: start;
     gap: 0.5rem;
+  }
+  .plan-controls :global(.reason) {
+    flex-basis: 100%;
   }
   @media (max-width: 60rem) {
     .plan-controls {

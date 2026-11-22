@@ -513,7 +513,7 @@ test('sidebar selection follows the current session and live plan without scroll
   expect(Math.abs((await page.evaluate(() => window.scrollY)) - before)).toBeLessThanOrEqual(2);
 });
 
-test('sidebars resize live, show the selected session empty plan, and open the full Plan tab', async ({
+test('sidebars resize live, show the selected session empty plan, and open a plan over Chat', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -527,20 +527,17 @@ test('sidebars resize live, show the selected session empty plan, and open the f
   await expect(right).toHaveCount(0);
   await page.setViewportSize({ width: 1440, height: 900 });
   await expect(right).toBeVisible();
-  await right.getByRole('button', { name: 'Full plan' }).click();
-  await expect(page.getByRole('button', { name: 'Plan', exact: true })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  );
-  await expect(right).toHaveCount(0);
-  await page.getByRole('button', { name: 'Chat', exact: true }).click();
-  await right.getByRole('button', { name: 'Full plan' }).click();
-  await expect(page.getByRole('heading', { name: 'Alpha plan', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Close plan and return to list' }).click();
-  await page.getByRole('button', { name: 'Chat', exact: true }).click();
-  await right.getByRole('button', { name: 'Full plan' }).click();
-  await expect(page.getByRole('heading', { name: 'Alpha plan', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  const fullPlan = right.getByRole('button', { name: 'Full plan' });
+  const viewer = page.getByRole('dialog', { name: 'Plan viewer' });
+  await fullPlan.click();
+  await expect(viewer.getByRole('heading', { name: 'Alpha plan', exact: true })).toBeVisible();
+  await viewer.getByRole('button', { name: 'Close plan and return to chat' }).click();
+  await expect(fullPlan).toBeFocused();
+  await fullPlan.click();
+  await expect(viewer.getByRole('heading', { name: 'Alpha plan', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(viewer).toHaveCount(0);
+  await expect(fullPlan).toBeFocused();
   await page
     .getByRole('complementary', { name: 'Chat sessions and usage' })
     .locator('.managed-session')

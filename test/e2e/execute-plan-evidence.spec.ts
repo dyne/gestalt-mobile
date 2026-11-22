@@ -37,7 +37,7 @@ async function noOverflow(page: Page) {
 }
 
 async function viewportBounds(page: Page) {
-  const modal = page.getByRole('dialog');
+  const modal = page.getByRole('dialog', { name: 'Execute plan' });
   return {
     viewport: page.viewportSize(),
     scroll: await page.evaluate(() => ({ x: scrollX, y: scrollY })),
@@ -74,7 +74,10 @@ for (const renderer of ['supervised', 'org-source'] as ExecuteRenderer[]) {
           renderer === 'supervised' ? '.plan > header' : '.org-document > header',
         );
         const execute = page.getByRole('button', { name: 'Execute', exact: true });
-        const close = page.getByRole('button', { name: 'Close plan and return to list' });
+        const close = page.getByRole('button', {
+          name:
+            entry === 'linked' ? 'Close plan and return to chat' : 'Close plan and return to list',
+        });
         const path = header.locator('code');
         await expect(path).toHaveText(executeSourcePath);
         const copy = page.getByRole('button', { name: 'Copy Org file path' });
@@ -143,7 +146,8 @@ for (const renderer of ['supervised', 'org-source'] as ExecuteRenderer[]) {
         await target(ok);
         await target(page.getByRole('button', { name: 'Cancel', exact: true }));
         const dialogMetrics = await noOverflow(page);
-        const modalMetrics = await page.getByRole('dialog').evaluate((element) => ({
+        const modal = page.getByRole('dialog', { name: 'Execute plan' });
+        const modalMetrics = await modal.evaluate((element) => ({
           width: element.clientWidth,
           scroll: element.scrollWidth,
           height: element.clientHeight,
@@ -151,7 +155,6 @@ for (const renderer of ['supervised', 'org-source'] as ExecuteRenderer[]) {
         }));
         expect(modalMetrics.scroll).toBeLessThanOrEqual(modalMetrics.width + 1);
         expect(modalMetrics.height).toBeLessThanOrEqual(modalMetrics.maxHeight);
-        const modal = page.getByRole('dialog');
         const heading = modal.getByRole('heading', { name: 'Execute plan' });
         await modal.evaluate((element) => {
           element.scrollTop = 0;

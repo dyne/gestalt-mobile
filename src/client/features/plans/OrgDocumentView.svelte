@@ -14,6 +14,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   type Props = {
     preview: WorkspaceOrgPreview;
     onclose: () => void;
+    closeLabel?: string;
     verifiedReferences?: ReadonlySet<string>;
     onreference?: (path: string) => void;
     sourcePath?: string;
@@ -24,6 +25,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let {
     preview,
     onclose,
+    closeLabel = 'Close plan and return to list',
     onreference,
     verifiedReferences = new Set<string>(),
     sourcePath,
@@ -41,9 +43,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <PlanFilePath path={preview.sourcePath || sourcePath || preview.planName} {oncopyresult} />
     </div>
     {#if executeAction}<div class="execute-slot">{@render executeAction()}</div>{/if}
-    <button class="close" type="button" aria-label="Close plan and return to list" onclick={onclose}
-      >×</button
-    >
+    <button class="close" type="button" aria-label={closeLabel} onclick={onclose}>×</button>
   </header>
 
   {#if metadata.length}
