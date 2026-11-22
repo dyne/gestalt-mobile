@@ -5,8 +5,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { withoutSessionScratch } from './platform/scratch/child-environment.js';
-import { probePlaywrightComponent } from './platform/codex/playwright-component.js';
+import { readPlaywrightComponent } from './platform/codex/playwright-component.js';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -56,8 +55,7 @@ export type CliDependencies = {
   signalSource?: Pick<NodeJS.Process, 'once' | 'removeListener'>;
   probeCodexVersion?: () => Promise<string | null>;
   probeKimiVersion?: () => Promise<string | null>;
-  probePlaywrightComponent?: typeof probePlaywrightComponent;
-  runStartupDoctor?: (cwd: string) => Promise<{ ok: boolean; report: string }>;
+  readPlaywrightComponent?: typeof readPlaywrightComponent;
   compose?: typeof composeRelayApp;
   homeDirectory?: string;
   environment?: NodeJS.ProcessEnv;
@@ -112,25 +110,6 @@ export function componentVersions(
         : null,
     },
   ];
-}
-
-export async function runStartupDoctor(cwd: string): Promise<{ ok: boolean; report: string }> {
-  if (process.env.GESTALT_STARTUP_DIAGNOSTICS_DONE === '1') return { ok: true, report: '' };
-  try {
-    const result = await runFile('gestalt', ['doctor'], {
-      cwd,
-      env: withoutSessionScratch(),
-      timeout: 60_000,
-      maxBuffer: 1024 * 1024,
-    });
-    return { ok: true, report: `${result.stdout}${result.stderr}` };
-  } catch (error) {
-    const failure = error as Error & { stdout?: string; stderr?: string };
-    return {
-      ok: false,
-      report: `${failure.stdout ?? ''}${failure.stderr ?? ''}${failure.message ? `${failure.message}\n` : ''}`,
-    };
-  }
 }
 
 export function packageRoot(moduleUrl: string): string {
@@ -364,12 +343,6 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
     stderr.write(`${error instanceof Error ? error.message : 'Invalid --icon file'}\n\n${usage}\n`);
     return 2;
   }
-  const diagnosis = await (dependencies.runStartupDoctor ?? runStartupDoctor)(cwd);
-  if (diagnosis.report) stderr.write(diagnosis.report);
-  if (!diagnosis.ok)
-    stderr.write(
-      'WARNING: Startup diagnostics reported a problem; Gestalt Mobile will continue so it can show recovery controls.\n',
-    );
   const installedCodexVersion = await (dependencies.probeCodexVersion ?? probeCodexVersion)();
   const installedKimiVersion = await (dependencies.probeKimiVersion ?? probeKimiVersion)();
   const mobileVersion = await packageVersion(moduleUrl);
@@ -388,8 +361,7 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
       mobileVersion,
       installedCodexVersion,
       dependencies.environment,
-      await (dependencies.probePlaywrightComponent ?? probePlaywrightComponent)(
-        config.root,
+      await (dependencies.readPlaywrightComponent ?? readPlaywrightComponent)(
         dependencies.environment,
       ),
     ),
