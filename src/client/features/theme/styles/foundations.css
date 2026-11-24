@@ -14,4 +14,6 @@
   --theme-font-code: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --theme-motion-fast: 120ms;
   --theme-radius: 0.5rem;
+  --theme-divider: color-mix(in srgb, var(--theme-border) 34%, var(--theme-surface));
+  --theme-accent-wash: color-mix(in srgb, var(--theme-accent) 9%, var(--theme-surface));
 }

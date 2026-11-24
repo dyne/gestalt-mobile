@@ -298,7 +298,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {/snippet}
 
 <section class:roster-only={rosterOnly} aria-labelledby="sessions-title">
-  <h2 id="sessions-title" class="visually-hidden">Sessions</h2>
+  <h2 id="sessions-title" class="view-title" class:visually-hidden={rosterOnly}>Sessions</h2>
   {#if allowanceFetcher}
     <CodexAllowance
       fetcher={allowanceFetcher}
@@ -318,6 +318,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           {@const forgetting = isSessionForgetting(forgetState)}
           <li
             class:current-session={session.id === selectedSessionId}
+            class:plan-session={hasAssignedOrgPlan(session)}
             class="managed-session open-session"
             aria-busy={forgetting}
             data-session-id={session.id}
@@ -427,12 +428,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     </section>
   {/if}
   {#if savedSessions.length}
+    <h3>Saved sessions</h3>
     <ul class="session-list" aria-label="Saved sessions">
       {#each savedSessions as session (session.id)}
         {@const details = managedSessionDetails(session)}
         {@const forgetState = forgettingStates.get(session.id) ?? session.forgetOperation}
         {@const forgetting = isSessionForgetting(forgetState)}
-        <li class="managed-session" aria-busy={forgetting} data-session-id={session.id}>
+        <li
+          class="managed-session"
+          class:plan-session={hasAssignedOrgPlan(session)}
+          aria-busy={forgetting}
+          data-session-id={session.id}
+        >
           <div class="session-actions">
             <AppControl
               compact
@@ -488,7 +495,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {/each}
     </ul>
   {:else if !openSessions.length}
-    <p>No saved sessions yet.</p>
+    <p class="empty-sessions">No saved sessions yet.</p>
   {/if}
   {#if !rosterOnly}
     <form
@@ -764,10 +771,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     list-style: none;
   }
 
-  .current-session {
-    outline: 2px solid var(--theme-accent);
-    outline-offset: 2px;
-  }
   .managed-session {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(6rem, max-content);
@@ -775,14 +778,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     align-items: start;
     inline-size: 100%;
     box-sizing: border-box;
-    padding: 0.75rem;
-    border: 1px solid var(--theme-border);
-    border-radius: var(--theme-radius);
+    padding: 1rem;
+    background: var(--theme-surface);
+    border: 1px solid var(--theme-divider);
+    border-radius: 0.875rem;
   }
 
-  .open-session {
+  .managed-session.current-session {
     border-color: var(--theme-accent);
-    background: var(--theme-control-hover);
+  }
+
+  .empty-sessions {
+    margin: 0;
+    color: var(--theme-text-muted);
   }
 
   .session-details {
@@ -842,16 +850,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .workspace-path {
+    flex-basis: 100%;
+    font-weight: 650;
     overflow-wrap: anywhere;
   }
 
   .profile-badge {
     display: inline-block;
     padding: 0.15rem 0.4rem;
-    border-radius: 999px;
-    background: var(--theme-control-pressed);
-    color: var(--theme-control-pressed-contrast);
-    font-size: 0.875rem;
+    max-inline-size: 100%;
+    box-sizing: border-box;
+    border-radius: 0.25rem;
+    background: var(--theme-surface-subtle);
+    color: var(--theme-text-muted);
+    font-size: 0.8125rem;
     overflow-wrap: anywhere;
   }
 
@@ -881,6 +893,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .session-actions > :global(*) {
     inline-size: 100%;
+  }
+  .managed-session .session-actions > :global(.app-control:first-child:not(:disabled)) {
+    background: var(--theme-accent-wash);
+    border-color: var(--theme-accent);
+    color: var(--theme-accent);
+    font-weight: 650;
+  }
+  .managed-session .session-actions > :global(.app-control:first-child:hover:not(:disabled)) {
+    color: var(--theme-accent-contrast);
+    background: var(--theme-accent);
   }
 
   .session-plan-progress {
@@ -913,8 +935,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   form {
     margin-block: 1.75rem;
-    padding-block: 1.25rem;
-    border-block: 1px solid var(--theme-border);
+    padding: clamp(0.75rem, 3vw, 1.5rem);
+    background: var(--theme-surface);
+    border: 1px solid var(--theme-divider);
+    border-radius: 0.875rem;
   }
   .new-session-title {
     margin: 0 0 1rem;
@@ -935,7 +959,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     min-block-size: 44px;
   }
   .advanced-settings {
-    margin-block: 1rem;
+    margin-block: 1rem 0.75rem;
+    border-block: 1px solid var(--theme-divider);
   }
   .advanced-settings > summary {
     min-block-size: 44px;
@@ -1082,6 +1107,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     color: var(--theme-error);
   }
 
+  .managed-session:not(.plan-session) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .managed-session:not(.plan-session) > .session-actions {
+    grid-column: 1;
+    grid-row: 2;
+    display: flex;
+    flex-flow: row wrap;
+    padding-block-start: 0.65rem;
+    border-block-start: 1px solid var(--theme-divider);
+  }
+  .managed-session:not(.plan-session) > .session-actions > :global(*) {
+    flex: 0 1 auto;
+    inline-size: auto;
+    padding-inline: 0.75rem;
+  }
   @container (max-width: 18rem) {
     .managed-session {
       grid-template-columns: minmax(0, 1fr);

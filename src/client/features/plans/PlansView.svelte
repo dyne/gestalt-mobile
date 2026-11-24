@@ -238,7 +238,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {:else}
   <section class="plans" aria-labelledby="plans-title">
     <div class="catalog-heading">
-      <h2 id="plans-title" bind:this={heading} tabindex="-1">ORG Plans</h2>
+      <h2 id="plans-title" class="view-title" bind:this={heading} tabindex="-1">ORG Plans</h2>
       <span
         class={['catalog-update', { inactive: catalog.kind !== 'ready' || !catalog.refreshing }]}
         role="status"
@@ -299,10 +299,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   h2 {
     margin-block: 0.4rem;
     min-inline-size: 0;
-    font-size: clamp(1rem, 6vw, 1.5rem);
   }
   .scope {
     margin-block: 0 0.75rem;
+    color: var(--theme-text-muted);
   }
   ul {
     display: grid;

@@ -179,12 +179,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   popover="auto"
   ontoggle={(event) => onconfigurationchange(event.newState === 'open')}
 >
-  <div class="configuration-brand" aria-label="Dyne">
+  <div class="configuration-brand">
+    <h2>Configuration</h2>
     <img class="configuration-logo light-asset" src="/branding/dyne-logotype-black.svg" alt="" />
     <img class="configuration-logo dark-asset" src="/branding/dyne-logotype-white.svg" alt="" />
   </div>
   <label class="appearance-control" for="appearance">
-    <span aria-hidden="true">aA</span>
+    <span>Appearance</span>
     <select
       id="appearance"
       aria-label="Appearance"
@@ -196,49 +197,55 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {/each}
     </select>
   </label>
-  {#each contextualActions as action (action.id)}
+  <section class="menu-group">
+    <h3>Workspace</h3>
+    {#each contextualActions as action (action.id)}
+      <button
+        type="button"
+        popovertarget="configuration-panel"
+        popovertargetaction="hide"
+        onclick={action.run}>{action.label}</button
+      >
+    {/each}
     <button
       type="button"
       popovertarget="configuration-panel"
       popovertargetaction="hide"
-      onclick={action.run}>{action.label}</button
+      onclick={onnotifications}>Notifications</button
     >
-  {/each}
-  <button
-    type="button"
-    popovertarget="configuration-panel"
-    popovertargetaction="hide"
-    onclick={onnotifications}>Notifications</button
-  >
-  <button
-    type="button"
-    popovertarget="configuration-panel"
-    popovertargetaction="hide"
-    onclick={onscratchpad}>Scratchpad</button
-  >
-  {#if oncopytocli}
     <button
       type="button"
       popovertarget="configuration-panel"
       popovertargetaction="hide"
-      disabled={!copyToCliAvailable}
-      onclick={oncopytocli}>Copy session to CLI</button
+      onclick={onscratchpad}>Scratchpad</button
     >
-  {/if}
+    {#if oncopytocli}
+      <button
+        type="button"
+        popovertarget="configuration-panel"
+        popovertargetaction="hide"
+        disabled={!copyToCliAvailable}
+        onclick={oncopytocli}>Copy session to CLI</button
+      >
+    {/if}
+  </section>
   {#if passkeyAuthEnabled}
-    <button
-      type="button"
-      popovertarget="configuration-panel"
-      popovertargetaction="hide"
-      onclick={(event) => ondevices(event.currentTarget)}>Authorized devices</button
-    >
-    <button
-      type="button"
-      class="lock-relay"
-      popovertarget="configuration-panel"
-      popovertargetaction="hide"
-      onclick={onlock}>Lock Gestalt Mobile</button
-    >
+    <section class="menu-group">
+      <h3>Access</h3>
+      <button
+        type="button"
+        popovertarget="configuration-panel"
+        popovertargetaction="hide"
+        onclick={(event) => ondevices(event.currentTarget)}>Authorized devices</button
+      >
+      <button
+        type="button"
+        class="lock-relay"
+        popovertarget="configuration-panel"
+        popovertargetaction="hide"
+        onclick={onlock}>Lock Gestalt Mobile</button
+      >
+    </section>
   {/if}
   {#if retrieval !== undefined}<ToolReadiness
       status={retrieval}
@@ -274,6 +281,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     </section>
   {/if}
   <div class="maintenance-actions">
+    <h3>Maintenance</h3>
     <button
       type="button"
       disabled={cleanTmpPending || upgradePending || quitPending}
@@ -355,6 +363,46 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </dialog>
 
 <style>
+  .configuration-brand {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-block-end: 0.875rem;
+  }
+  .configuration-brand h2 {
+    margin: 0;
+    font: 600 1.25rem / 1.15 var(--theme-font-display);
+    letter-spacing: -0.025em;
+    min-inline-size: 0;
+  }
+  .menu-group {
+    margin-block-start: 0.75rem;
+    padding-block-start: 0.75rem;
+    border-block-start: 1px solid var(--theme-divider);
+  }
+  .menu-group h3,
+  .maintenance-actions h3,
+  .component-versions h2 {
+    margin: 0 0 0.25rem;
+    color: var(--theme-text-muted);
+    font: 600 0.8125rem / 1.35 var(--theme-font-body);
+    letter-spacing: 0;
+  }
+  .menu-group button {
+    display: block;
+    inline-size: 100%;
+    padding: 0.375rem 0.625rem;
+    text-align: start;
+    background: transparent;
+    border: 0;
+  }
+  .menu-group button:hover {
+    background: var(--theme-control-hover);
+  }
+  .menu-group button:active {
+    background: var(--theme-control-pressed);
+  }
   .session-path {
     flex: 1 1 0;
     min-inline-size: 0;
@@ -393,24 +441,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .maintenance-actions {
-    margin-block-start: 0.5rem;
-    padding-block-start: 0.5rem;
-    border-block-start: 1px solid var(--theme-border);
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 5rem), 1fr));
+    gap: 0.375rem;
+    margin-block-start: 0.75rem;
+    padding-block-start: 0.75rem;
+    border-block-start: 1px solid var(--theme-divider);
+  }
+  .maintenance-actions h3,
+  .maintenance-actions p {
+    grid-column: 1 / -1;
   }
 
   .component-versions {
     margin-block-start: 0.75rem;
     padding-block-start: 0.75rem;
-    border-block-start: 1px solid var(--theme-border);
-  }
-
-  .component-versions h2 {
-    margin: 0 0 0.4rem;
-    color: var(--theme-text-muted);
-    font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    border-block-start: 1px solid var(--theme-divider);
   }
 
   .component-versions dl {
@@ -468,6 +514,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .maintenance-actions button {
     inline-size: 100%;
+    font-size: 0.875rem;
   }
 
   .quit-relay,

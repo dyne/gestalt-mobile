@@ -578,15 +578,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .prompt-turn {
-    padding: 0.5rem 0.625rem;
+    padding: 0.75rem 1rem;
     background: var(--theme-surface-subtle);
-    border-inline-start: 0.25rem solid var(--theme-accent);
-    border-radius: 0.375rem;
+    border-radius: 0.875rem;
   }
 
   .answer-turn {
-    border-inline-start: 0.25rem solid var(--theme-border);
-    padding-inline-start: 0.625rem;
+    padding-inline: 0.75rem;
   }
 
   .orphan-activity-turn,
@@ -594,8 +592,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .commentary-content {
     padding: 0.5rem 0.625rem;
     background: var(--theme-surface-subtle);
-    border-inline-start: 0.25rem solid var(--theme-info);
-    border-radius: 0.375rem;
+    border-inline-start: 1px solid var(--theme-info);
+    border-radius: 0.25rem;
   }
 
   .live-commentary {
@@ -611,6 +609,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     flex-wrap: wrap;
     align-items: baseline;
     gap: 0.75rem;
+    color: var(--theme-text-muted);
+    font-size: 0.875rem;
   }
 
   time {
