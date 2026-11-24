@@ -21,6 +21,43 @@ const headers = {
 };
 
 for (const renderer of ['supervised', 'org-source'] as const) {
+  test(`keeps a long ${renderer} title readable above blocked plan actions`, async ({ page }) => {
+    const title = 'Improve session navigation and workspace settings across phones and tablets';
+    const reason =
+      'The selected skill profile is unavailable. Choose another profile before executing this plan.';
+    const { state } = await installExecuteFixture(page, { entry: 'catalog', renderer, title });
+    state.blocked = { kind: 'blocked', code: 'SKILL_PROFILE_UNAVAILABLE', reason };
+    await page.goto('/');
+    await page.getByLabel('Primary').getByRole('button', { name: 'Plan', exact: true }).click();
+    await page.getByRole('button', { name: `Open ${title}` }).click();
+    const heading = page.getByRole('heading', { name: title, exact: true });
+    await expect(page.getByText(reason)).toBeVisible();
+    for (const [width, fontScale] of [
+      [1280, 100],
+      [768, 100],
+      [390, 100],
+      [320, 200],
+    ] as const) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.locator('html').evaluate((el, scale) => {
+        el.style.fontSize = `${scale}%`;
+      }, fontScale);
+      const titleBox = (await heading.boundingBox())!;
+      const header = (await heading.locator('xpath=ancestor::header').boundingBox())!;
+      const close = (await page
+        .getByRole('button', { name: 'Close plan and return to list' })
+        .boundingBox())!;
+      const download = (await page
+        .getByRole('button', { name: 'Download Org file' })
+        .boundingBox())!;
+      expect(titleBox.width).toBeGreaterThanOrEqual(header.width - close.width - 16);
+      expect(download.y).toBeGreaterThanOrEqual(titleBox.y + titleBox.height);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
+    }
+  });
+
   for (const width of [320, 1280]) {
     test(`downloads original Org source beside Execute in the ${renderer} view at ${width}px`, async ({
       page,

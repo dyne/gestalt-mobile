@@ -23,7 +23,12 @@ export type ExecuteRenderer = 'supervised' | 'org-source';
 
 export async function installExecuteFixture(
   page: Page,
-  options: { entry?: ExecuteEntry; renderer?: ExecuteRenderer; defaultProfile?: string } = {},
+  options: {
+    entry?: ExecuteEntry;
+    renderer?: ExecuteRenderer;
+    defaultProfile?: string;
+    title?: string;
+  } = {},
 ) {
   await mockAuthenticatedStatus(page);
   await page.addInitScript(() =>
@@ -37,7 +42,7 @@ export async function installExecuteFixture(
     }),
   );
   const plan: SupervisedPlan = {
-    title: 'Project roadmap',
+    title: options.title ?? 'Project roadmap',
     sourcePath: executeSourcePath,
     currentStepId: 'work',
     totalSteps: 1,

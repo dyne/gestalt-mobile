@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import OrgNotes from './OrgNotes.svelte';
-  import PlanFilePath from './PlanFilePath.svelte';
+  import FullPlanHeader from './FullPlanHeader.svelte';
   import type { WorkspaceOrgPreview } from '../sessions/relay-client.js';
   import { parseOrgDocument } from './org-document.js';
 
@@ -37,14 +37,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </script>
 
 <article class="org-document" aria-labelledby="org-document-title">
-  <header>
-    <div class="document-heading">
-      <h2 id="org-document-title">{preview.title}</h2>
-      <PlanFilePath path={preview.sourcePath || sourcePath || preview.planName} {oncopyresult} />
-    </div>
-    {#if executeAction}<div class="execute-slot">{@render executeAction()}</div>{/if}
-    <button class="close" type="button" aria-label={closeLabel} onclick={onclose}>×</button>
-  </header>
+  <FullPlanHeader
+    title={preview.title}
+    titleId="org-document-title"
+    sourcePath={preview.sourcePath || sourcePath || preview.planName}
+    {oncopyresult}
+    {executeAction}
+    {closeLabel}
+    {onclose}
+  />
 
   {#if metadata.length}
     <dl class="metadata">
@@ -119,39 +120,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     gap: 0.85rem;
     overflow-wrap: anywhere;
   }
-  header {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
-  }
   .section-heading {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
     gap: 0.65rem;
   }
-  header {
-    align-items: start;
-    gap: 0.65rem;
-  }
-  header h2,
   .section-heading :is(h3, h4),
   p,
   dl,
   dd {
     margin: 0;
-  }
-  .document-heading {
-    flex: 1 1 15rem;
-    min-inline-size: 0;
-  }
-  .close {
-    grid-column: 3;
-    grid-row: 1;
-    flex: 0 0 auto;
-    min-inline-size: 44px;
-    min-block-size: 44px;
-    font-size: 1.35rem;
-    line-height: 1;
   }
   .metadata,
   .descriptions,
@@ -214,7 +193,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .properties dl {
     margin-block-start: 0.5rem;
   }
-  button:focus-visible,
   summary:focus-visible {
     outline: 3px solid currentColor;
     outline-offset: 2px;
@@ -228,29 +206,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
     .org-section {
       margin-inline-start: min(calc(var(--org-depth) * 0.35rem), 1rem);
-    }
-  }
-  .execute-slot {
-    display: contents;
-  }
-  @media (max-width: 40rem) {
-    header {
-      grid-template-columns: minmax(0, 1fr) auto;
-    }
-    .document-heading {
-      display: contents;
-    }
-    .document-heading :global(.plan-file-path) {
-      grid-column: 1;
-      grid-row: 2;
-    }
-    .close {
-      grid-column: 2;
-    }
-  }
-  @media (max-width: 24rem) {
-    .document-heading :global(.plan-file-path) {
-      grid-column: 1 / -1;
     }
   }
 </style>
