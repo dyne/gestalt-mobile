@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import AppControl from '../../components/AppControl.svelte';
+  import { downloadFile } from './download-file.js';
   import FileSource from './FileSource.svelte';
   import {
     fileLineReference,
@@ -48,6 +49,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let history = $state<FileLineReference[]>([]);
   let selectedLine = $state<number | undefined>();
   let currentPath = $state('');
+  let filename = $derived(currentPath.split('/').filter(Boolean).at(-1));
+  function download(): void {
+    if (preview?.kind !== 'file' || !filename) return;
+    const blob = new Blob([preview.hasUtf8Bom ? '\uFEFF' : '', preview.content], {
+      type: 'text/plain;charset=utf-8',
+    });
+    downloadFile(blob, filename);
+  }
   let sourceLineCount = $derived(preview?.kind === 'file' ? preview.content.split('\n').length : 0);
   let formatted = $derived(preview ? formatFile(preview) : { format: 'text', text: '' });
   let html = $derived(
@@ -159,11 +168,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <header>
     <div class="title">
       <h2 id="file-viewer-title" bind:this={heading} tabindex="-1">
-        {currentPath.split('/').filter(Boolean).at(-1) || 'Workspace files'}
+        {filename || 'Workspace files'}
       </h2>
       <p>{currentPath || '/'}</p>
     </div>
-    <AppControl icon="close" onclick={onclose} label="Close file preview" />
+    <div class="header-actions">
+      {#if preview?.kind === 'file'}
+        <AppControl
+          icon="download"
+          label="Download file"
+          tooltip={`Download ${filename}`}
+          onclick={download}
+        />
+      {/if}
+      <AppControl icon="close" onclick={onclose} label="Close file preview" />
+    </div>
   </header>
   <nav aria-label="Preview controls">
     <AppControl onclick={back} disabled={!history.length}>Back</AppControl>

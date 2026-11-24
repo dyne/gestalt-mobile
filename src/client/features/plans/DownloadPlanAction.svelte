@@ -7,6 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import AppControl from '../../components/AppControl.svelte';
+  import { downloadFile } from '../files/download-file.js';
   import type { OrgPlanReference } from '../../../shared/contracts/org-plan-execution.js';
   import type { createRelayClient } from '../sessions/relay-client.js';
 
@@ -28,17 +29,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     try {
       const result = await transport.downloadOrgPlan(reference, controller.signal);
       if (controller.signal.aborted) return;
-      const url = URL.createObjectURL(result.blob);
-      const link = document.createElement('a');
-      try {
-        link.href = url;
-        link.download = result.filename;
-        document.body.append(link);
-        link.click();
-      } finally {
-        link.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 0);
-      }
+      downloadFile(result.blob, result.filename);
     } catch {
       if (!controller.signal.aborted) onerror?.('Could not download the Org file. Try again.');
     } finally {

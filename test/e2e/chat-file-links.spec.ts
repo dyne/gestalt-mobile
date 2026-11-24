@@ -4,13 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { ChatRelayFixture } from './chat-relay-fixture.js';
 import { chatSnapshot } from './chat-snapshot-fixture.js';
 
 for (const width of [390, 1280]) {
-  test(`chat file links open the shared viewer at ${width}px`, async ({ page }) => {
+  test(`chat file links open the shared viewer at ${width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 844 });
     await mockAuthenticatedStatus(page);
     const fixture = new ChatRelayFixture(page);
@@ -39,6 +40,10 @@ for (const width of [390, 1280]) {
         ],
       }),
     );
+    const source =
+      Array.from({ length: 100 }, (_, i) => `const line${i + 1} = ${i + 1};`).join('\r\n') +
+      '\r\n// café\r\n';
+    const notes = '# File notes\n\n**Readable**';
     const paths: string[] = [];
     const images = await page.evaluate(() => {
       const canvas = document.createElement('canvas');
@@ -67,16 +72,19 @@ for (const width of [390, 1280]) {
       }
       if (path.includes('missing'))
         return route.fulfill({ status: 404, json: { code: 'FILE_PREVIEW_NOT_FOUND' } });
+      const content = path.endsWith('.json')
+        ? '{"ok":true}'
+        : path.endsWith('.md')
+          ? notes
+          : source;
+      const hasBom = path.endsWith('.ts');
       return route.fulfill({
         json: {
           kind: 'file',
           path,
-          size: 20,
-          content: path.endsWith('.json')
-            ? '{"ok":true}'
-            : path.endsWith('.md')
-              ? '# File notes\n\n**Readable**'
-              : Array.from({ length: 100 }, (_, i) => `const line${i + 1} = ${i + 1};`).join('\n'),
+          content,
+          size: Buffer.byteLength(content) + (hasBom ? 3 : 0),
+          ...(hasBom ? { hasUtf8Bom: true } : {}),
         },
       });
     });
@@ -122,6 +130,19 @@ for (const width of [390, 1280]) {
         expect(
           Math.abs(row!.y + row!.height / 2 - (contents!.y + contents!.height / 2)),
         ).toBeLessThan(5);
+      }
+      if (label === 'Notes' || label === 'Source') {
+        const pendingDownload = page.waitForEvent('download');
+        await viewer.locator('header').getByRole('button', { name: 'Download file' }).click();
+        const download = await pendingDownload;
+        const filename = path.split('/').at(-1)!;
+        expect(download.suggestedFilename()).toBe(filename);
+        const saved = testInfo.outputPath(filename);
+        await download.saveAs(saved);
+        expect(await readFile(saved)).toEqual(
+          Buffer.from(label === 'Notes' ? notes : '\uFEFF' + source),
+        );
+        await expect(viewer).toBeVisible();
       }
       await viewer.getByRole('button', { name: 'Close file preview' }).click();
       await expect(link).toBeFocused();

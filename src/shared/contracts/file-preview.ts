@@ -8,6 +8,6 @@ export type PreviewImageType = 'image/png' | 'image/jpeg';
 
 export type FilePreview = Readonly<
   | { kind: 'directory'; path: string }
-  | { kind: 'file'; path: string; content: string; size: number }
+  | { kind: 'file'; path: string; content: string; size: number; hasUtf8Bom?: true }
   | { kind: 'image'; path: string; mediaType: PreviewImageType; base64: string; size: number }
 >;
