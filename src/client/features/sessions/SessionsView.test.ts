@@ -349,7 +349,7 @@ describe('SessionsView session base tree', () => {
     expect(screen.getByText('worker')).toBeTruthy();
   });
 
-  it('orders open-session actions in a vertical rail and keeps status controls accessible', () => {
+  it('names each session action and places the full Agents control after the icons', () => {
     const activity = {
       sessionId: 'live',
       confidence: 'fresh' as const,
@@ -378,14 +378,14 @@ describe('SessionsView session base tree', () => {
     const actions = Array.from(container.querySelector('.open-session .session-actions')!.children);
     const control = (index: number, selector: string) =>
       actions[index]?.matches(selector) ? actions[index] : actions[index]?.querySelector(selector);
-    expect(control(0, 'button')?.textContent?.trim()).toBe('Open');
-    expect(control(1, 'button')?.textContent?.trim()).toBe('Copy CLI');
+    expect(control(0, 'button')?.getAttribute('title')).toBe('Open');
+    expect(control(1, 'button')?.getAttribute('title')).toBe('Copy CLI');
     expect(control(2, 'button')?.getAttribute('aria-label')).toBe('Autopilot: Unavailable');
-    expect(control(3, 'summary')?.textContent?.trim()).toBe('Agents (1)');
-    expect(control(4, 'button')?.textContent?.trim()).toBe('Close');
+    expect(control(4, 'summary')?.textContent?.trim()).toBe('Agents (1)');
+    expect(control(3, 'button')?.getAttribute('title')).toBe('Close');
   });
 
-  it('uses accent-pressed state without a visible on/off glyph for session Autopilot', () => {
+  it('shows the Autopilot icon with its pressed state and status tooltip', () => {
     renderView({
       sessions: [
         {
@@ -409,7 +409,8 @@ describe('SessionsView session base tree', () => {
     });
 
     const autopilot = screen.getByRole('button', { name: 'Autopilot: Monitoring' });
-    expect(autopilot.textContent?.trim()).toBe('Autopilot');
+    expect(autopilot.querySelector('svg')).toBeTruthy();
+    expect(autopilot.title).toBe('Autopilot: Monitoring');
     expect(autopilot.getAttribute('aria-pressed')).toBe('true');
     expect(autopilot.classList.contains('accentPressed')).toBe(true);
   });

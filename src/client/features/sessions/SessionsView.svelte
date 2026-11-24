@@ -238,14 +238,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   {/if}
 {/snippet}
 
-{#snippet sessionPlanAction(session: RelaySession | undefined, compact = true)}
+{#snippet sessionPlanAction(session: RelaySession | undefined)}
   {#if session && onplan && hasAssignedOrgPlan(session)}
     <AppControl
-      {compact}
-      full={compact}
+      icon="plan"
       label={`Plan for ${session.plan?.title ?? session.lastOrgPlan?.title ?? 'session'}`}
-      onclick={() => onplan?.(session.id)}>Plan</AppControl
-    >
+      onclick={() => onplan?.(session.id)}
+    />
   {/if}
 {/snippet}
 
@@ -326,28 +325,36 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <div class="session-actions" aria-label="Session actions">
               <AppControl
                 compact
-                full
+                icon="open"
+                label="Open"
                 current={session.id === selectedSessionId ? 'page' : undefined}
                 disabled={forgetting}
-                onclick={() => onselectopen(session.id)}>Open</AppControl
-              >
+                onclick={() => onselectopen(session.id)}
+              />
               {@render sessionPlanAction(session)}
               {#if session.resumeCommand && session.provider !== 'kimi'}
-                <AppControl compact full onclick={() => oncopyresume(session.resumeCommand!)}
-                  >Copy CLI</AppControl
-                >
+                <AppControl
+                  icon="cli"
+                  label="Copy CLI"
+                  onclick={() => oncopyresume(session.resumeCommand!)}
+                />
               {/if}
+              {#if hasAssignedOrgPlan(session) && session.provider !== 'kimi'}
+                <AutopilotControl
+                  compact
+                  autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
+                  controlId={`session-autopilot-${session.id}`}
+                  pending={forgetting || autopilotPending.has(session.id)}
+                  ontoggle={(enabled) => onautopilottoggle(session.id, enabled)}
+                />
+              {/if}
+              <AppControl
+                icon="close"
+                label="Close"
+                disabled={forgetting}
+                onclick={() => requestClose(session.id)}
+              />
               {#if hasAssignedOrgPlan(session)}
-                {#if session.provider !== 'kimi'}
-                  <AutopilotControl
-                    compact
-                    indicatorOnly
-                    autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
-                    controlId={`session-autopilot-${session.id}`}
-                    pending={forgetting || autopilotPending.has(session.id)}
-                    ontoggle={(enabled) => onautopilottoggle(session.id, enabled)}
-                  />
-                {/if}
                 <AgentActivityIndicators
                   compact
                   popupAlign={rosterOnly ? 'start' : 'end'}
@@ -357,12 +364,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                   onopen={() => onactivityopen(session.id)}
                 />
               {/if}
-              <AppControl
-                compact
-                full
-                disabled={forgetting}
-                onclick={() => requestClose(session.id)}>Close</AppControl
-              >
               {#if forgetState}
                 <AppControl compact full disabled={forgetting} onclick={() => onforget(session.id)}
                   >{forgetState.phase === 'failed' ? 'Retry Forget' : 'Forget'}</AppControl
@@ -442,18 +443,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         >
           <div class="session-actions">
             <AppControl
-              compact
-              full
+              icon={openingSessionId === session.id ? 'waiting' : 'open'}
+              label={openingSessionId === session.id ? 'Opening…' : 'Open'}
               disabled={forgetting || openingSessionId === session.id}
               onclick={() => onopen(session.id)}
-            >
-              {openingSessionId === session.id ? 'Opening…' : 'Open'}
-            </AppControl>
+            />
             {@render sessionPlanAction(session)}
             {#if session.resumeCommand && session.provider !== 'kimi'}
-              <AppControl compact full onclick={() => oncopyresume(session.resumeCommand!)}
-                >Copy CLI</AppControl
-              >
+              <AppControl
+                icon="cli"
+                label="Copy CLI"
+                onclick={() => oncopyresume(session.resumeCommand!)}
+              />
             {/if}
             <AppControl compact full disabled={forgetting} onclick={() => onforget(session.id)}
               >{forgetState?.phase === 'failed' ? 'Retry Forget' : 'Forget'}</AppControl
@@ -728,12 +729,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                   >{/if}
               </div>
               <div class="session-actions">
-                <AppControl onclick={() => onopenrecent(session)}>Open</AppControl>
-                {@render sessionPlanAction(managed, false)}
+                <AppControl icon="open" label="Open" onclick={() => onopenrecent(session)} />
+                {@render sessionPlanAction(managed)}
                 {#if session.resumeCommand}
-                  <AppControl onclick={() => oncopyresume(session.resumeCommand!)}
-                    >Copy to CLI</AppControl
-                  >
+                  <AppControl
+                    icon="cli"
+                    label="Copy to CLI"
+                    onclick={() => oncopyresume(session.resumeCommand!)}
+                  />
                 {/if}
               </div>
             </li>
@@ -747,20 +750,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </section>
 
 <style>
-  .roster-only .managed-session {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0.5rem;
-  }
-  .roster-only .managed-session > .session-actions {
-    grid-column: 1;
-    grid-row: 2;
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .roster-only .session-actions > :global(.agent-activity) {
-    grid-column: 1 / -1;
-    --agents-popup-width: 100%;
-  }
   .session-list {
     container-type: inline-size;
     display: grid;
@@ -773,7 +762,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .managed-session {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(6rem, max-content);
+    grid-template-columns: minmax(0, 1fr);
     gap: 0.75rem;
     align-items: start;
     inline-size: 100%;
@@ -827,8 +816,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     grid-row: 1;
   }
   .managed-session > .session-actions {
-    grid-column: 2;
-    grid-row: 1;
+    grid-column: 1;
+    grid-row: 2;
+    padding-block-start: 0.65rem;
+    border-block-start: 1px solid var(--theme-divider);
   }
   .session-summary,
   .recent-session .session-details,
@@ -882,17 +873,23 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .session-actions {
     display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.375rem;
     min-inline-size: 0;
   }
-
-  .session-actions > :global(.keep-temporary-files) {
-    max-inline-size: 8rem;
+  .session-actions > :global(.autopilot-control) {
+    inline-size: auto;
   }
-
-  .session-actions > :global(*) {
-    inline-size: 100%;
+  .session-actions > :global(.agent-activity) {
+    flex: 1 0 100%;
+  }
+  .roster-only .session-actions > :global(.agent-activity) {
+    --agents-popup-width: 100%;
+  }
+  .session-actions > :global(.app-control.full) {
+    inline-size: auto;
+    max-inline-size: 100%;
   }
   .managed-session .session-actions > :global(.app-control:first-child:not(:disabled)) {
     background: var(--theme-accent-wash);
@@ -1105,38 +1102,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .skills-profile-error {
     color: var(--theme-error);
-  }
-
-  .managed-session:not(.plan-session) {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .managed-session:not(.plan-session) > .session-actions {
-    grid-column: 1;
-    grid-row: 2;
-    display: flex;
-    flex-flow: row wrap;
-    padding-block-start: 0.65rem;
-    border-block-start: 1px solid var(--theme-divider);
-  }
-  .managed-session:not(.plan-session) > .session-actions > :global(*) {
-    flex: 0 1 auto;
-    inline-size: auto;
-    padding-inline: 0.75rem;
-  }
-  @container (max-width: 18rem) {
-    .managed-session {
-      grid-template-columns: minmax(0, 1fr);
-    }
-    .managed-session > .session-actions {
-      grid-column: 1;
-      grid-row: 2;
-      flex-direction: row;
-      flex-wrap: wrap;
-    }
-    .managed-session > .session-actions > :global(*) {
-      flex: 1 1 5rem;
-      inline-size: auto;
-    }
   }
 
   @media (max-width: 28rem) {

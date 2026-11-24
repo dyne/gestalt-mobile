@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import Icon from '../../components/Icon.svelte';
   import { onMount, tick, type Snippet } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
   import AutopilotAttention from '../autopilot/AutopilotAttention.svelte';
@@ -494,10 +495,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                   title="Copy answer"
                   onclick={async () => oncopyresult(await copyText(answer, clipboard), 'answer')}
                 >
-                  <svg aria-hidden="true" viewBox="0 0 24 24">
-                    <rect x="9" y="9" width="11" height="12" rx="2" />
-                    <path d="M15 9V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" />
-                  </svg>
+                  <Icon name="copy" size="1rem" />
                 </button>
               </div>
             {/if}
@@ -753,13 +751,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   .copy-answer:hover {
     color: var(--theme-text);
-  }
-  .copy-answer svg {
-    inline-size: 1rem;
-    block-size: 1rem;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.75;
   }
   @media (pointer: coarse) {
     .answer-tools button {

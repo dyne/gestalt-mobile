@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <svelte:options runes={true} />
 
 <script lang="ts">
+  import Icon from '../../components/Icon.svelte';
   import { onMount, tick } from 'svelte';
   import {
     browserScratchpadStorage,
@@ -106,7 +107,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         type="button"
         class="close"
         aria-label="Close scratchpad"
-        onclick={() => dialog?.close()}>×</button
+        title="Close scratchpad"
+        onclick={() => dialog?.close()}><Icon name="close" /></button
       >
     </header>
 
@@ -138,7 +140,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <button type="button" class="danger" disabled={!text} onclick={() => void requestClear()}
           >Clear</button
         >
-        <button type="button" onclick={() => dialog?.close()}>Close</button>
+        <button type="button" onclick={() => dialog?.close()} aria-label="Close" title="Close"
+          ><Icon name="close" /></button
+        >
       </footer>
     {/if}
   </section>

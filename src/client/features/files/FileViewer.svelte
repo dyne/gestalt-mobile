@@ -163,7 +163,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       </h2>
       <p>{currentPath || '/'}</p>
     </div>
-    <AppControl onclick={onclose} label="Close file preview">Close</AppControl>
+    <AppControl icon="close" onclick={onclose} label="Close file preview" />
   </header>
   <nav aria-label="Preview controls">
     <AppControl onclick={back} disabled={!history.length}>Back</AppControl>

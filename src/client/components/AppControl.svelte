@@ -5,10 +5,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import Icon, { type IconName } from './Icon.svelte';
   import type { Snippet } from 'svelte';
 
   type Props = {
-    children: Snippet;
+    children?: Snippet;
+    icon?: IconName;
+    tooltip?: string;
     element?: 'button' | 'summary';
     id?: string;
     type?: 'button' | 'submit';
@@ -29,6 +32,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   let {
     children,
+    icon,
+    tooltip,
     element = 'button',
     id,
     type = 'button',
@@ -54,7 +59,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     class={['app-control', className, { compact, full, primary, accentPressed }]}
     data-state={state}
   >
-    {@render children()}
+    {@render children?.()}
   </summary>
 {:else}
   <button
@@ -62,6 +67,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {type}
     {disabled}
     class={['app-control', className, { compact, full, primary, accentPressed }]}
+    class:icon-only={Boolean(icon)}
+    title={tooltip ?? (icon ? label : undefined)}
     aria-label={label}
     aria-current={current}
     aria-pressed={pressed}
@@ -69,7 +76,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     aria-disabled={ariaDisabled}
     {onclick}
   >
-    {@render children()}
+    {#if icon}<Icon name={icon} />{/if}
+    {@render children?.()}
   </button>
 {/if}
 
@@ -116,6 +124,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .compact {
     padding: 0.25rem 0.4rem;
     font-size: 0.8rem;
+  }
+
+  .app-control.icon-only {
+    flex: none;
+    inline-size: 44px;
+    padding: 0;
   }
 
   .full {

@@ -26,7 +26,7 @@ it('prevents duplicate downloads while pending and reports failures through the 
   await fireEvent.click(button);
   expect(downloadOrgPlan).toHaveBeenCalledExactlyOnceWith(reference, expect.any(AbortSignal));
   expect(button).toHaveProperty('disabled', true);
-  expect(button.textContent).toContain('Downloading…');
+  expect(button.getAttribute('title')).toBe('Downloading…');
   pending.reject(new Error('unavailable'));
   await waitFor(() =>
     expect(onerror).toHaveBeenCalledWith('Could not download the Org file. Try again.'),

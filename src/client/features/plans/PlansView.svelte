@@ -180,10 +180,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     </div>
     <div class="plan-actions">
       <AppControl
+        icon="open"
         label={`${entry.allDone || entry.archived ? 'Reopen' : 'Open'} ${entry.title}`}
         onclick={() => open(entry.planName)}
-        >{entry.allDone || entry.archived ? 'Reopen' : 'Open'}</AppControl
-      >
+      />
       {#if !entry.allDone && !entry.archived}
         <AppControl
           label={`Archive ${entry.title}`}
