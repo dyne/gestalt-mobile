@@ -19,6 +19,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import type { PreviewImageType } from '../../../shared/contracts/file-preview.js';
 
 import type { WorkspaceFileSource } from '../../features/files/application/ports.js';
 import type {
@@ -50,6 +51,17 @@ type MutationHooks = Readonly<{
   beforePublish?: (operation: 'upload' | 'copy' | 'move') => Promise<void>;
 }>;
 type AnchoredDirectory = Readonly<{ path: string; close: () => Promise<void> }>;
+
+const textPreviewLimit = 1024 * 1024;
+const imagePreviewLimit = 10 * 1024 * 1024;
+const pngSignature = Buffer.from('89504e470d0a1a0a', 'hex');
+const jpegSignature = Buffer.from('ffd8ff', 'hex');
+
+function previewImageType(bytes: Buffer): PreviewImageType | undefined {
+  if (bytes.subarray(0, pngSignature.length).equals(pngSignature)) return 'image/png';
+  if (bytes.subarray(0, jpegSignature.length).equals(jpegSignature)) return 'image/jpeg';
+  return undefined;
+}
 
 /** Lists exactly one directory; symlinks are represented but never followed. */
 export class FilesystemWorkspaceFiles implements WorkspaceFileSource {
@@ -188,22 +200,32 @@ export class FilesystemWorkspaceFiles implements WorkspaceFileSource {
         if (metadata.isDirectory())
           return { kind: 'available', preview: { kind: 'directory', path } };
         if (!metadata.isFile()) return { kind: 'unsupported' };
-        const limit = 1024 * 1024;
-        if (metadata.size > limit) return { kind: 'too-large' };
-        const buffer = Buffer.alloc(limit + 1);
+        if (metadata.size > imagePreviewLimit) return { kind: 'too-large' };
+        const chunks: Buffer[] = [];
+        let mediaType: PreviewImageType | undefined;
         let size = 0;
-        while (size < buffer.length) {
-          const read = await handle.read(buffer, size, buffer.length - size, size);
-          if (!read.bytesRead) break;
-          size += read.bytesRead;
+        for await (const chunk of handle.createReadStream({
+          autoClose: false,
+          end: imagePreviewLimit,
+        })) {
+          if (chunks.length === 0) mediaType = previewImageType(chunk);
+          size += chunk.length;
+          const limit = mediaType ? imagePreviewLimit : textPreviewLimit;
+          if (Math.max(metadata.size, size) > limit) return { kind: 'too-large' };
+          chunks.push(chunk);
         }
-        if (size > limit) return { kind: 'too-large' };
         if (
           !(await stableAnchor(root, parentPath, parent.path)) ||
           !within(root, await realpath(procPath(handle.fd)))
         )
           return { kind: 'unreadable' };
-        const bytes = buffer.subarray(0, size);
+        const bytes = Buffer.concat(chunks, size);
+        if (mediaType) {
+          return {
+            kind: 'available',
+            preview: { kind: 'image', path, size, mediaType, base64: bytes.toString('base64') },
+          };
+        }
         if (bytes.includes(0)) return { kind: 'unsupported' };
         try {
           const content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);

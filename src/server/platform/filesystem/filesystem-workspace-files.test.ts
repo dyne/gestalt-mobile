@@ -396,6 +396,34 @@ describe('FilesystemWorkspaceFiles', () => {
 });
 
 describe('workspace file previews', () => {
+  it('recognizes image bytes and applies the image limit independently of the filename', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-image-preview-'));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    const files = new FilesystemWorkspaceFiles();
+    const png = await readFile(
+      new URL('../../../../public/icons/gestalt-mobile-180.png', import.meta.url),
+    );
+    const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(1024 * 1024)]);
+    for (const [path, mediaType, bytes] of [
+      ['screen', 'image/png', png],
+      ['photo.JPG', 'image/jpeg', jpeg],
+    ] as const) {
+      await writeFile(join(root, path), bytes);
+      expect(await files.read(root, path)).toEqual({
+        kind: 'available',
+        preview: {
+          kind: 'image',
+          path,
+          mediaType,
+          size: bytes.length,
+          base64: bytes.toString('base64'),
+        },
+      });
+    }
+    await writeFile(join(root, 'large.png'), Buffer.alloc(10 * 1024 * 1024 + 1));
+    expect(await files.read(root, 'large.png')).toEqual({ kind: 'too-large' });
+  });
+
   it('reads bounded UTF-8 files and directories without following links or leaving the workspace', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-preview-'));
     await mkdir(join(root, 'docs'));

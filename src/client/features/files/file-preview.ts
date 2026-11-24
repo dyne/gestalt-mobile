@@ -5,11 +5,9 @@
  */
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import type { FilePreview } from '../../../shared/contracts/file-preview.js';
 
-export type FilePreview = Readonly<
-  | { kind: 'directory'; path: string }
-  | { kind: 'file'; path: string; content: string; size: number }
->;
+export type { FilePreview } from '../../../shared/contracts/file-preview.js';
 export type FileViewerTarget = Readonly<{
   workspaceId: string;
   path: string;

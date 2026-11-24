@@ -16,10 +16,11 @@ const relayMessages = {
   FILE_PREVIEW_NOT_FOUND: 'This file or folder no longer exists. Check the path and try again.',
   FILE_PREVIEW_UNREADABLE:
     'This path could not be read. It must be inside the workspace and accessible without symbolic links.',
-  FILE_PREVIEW_UNSUPPORTED:
-    'Preview supports UTF-8 text files and folders. This item cannot be displayed.',
+  FILE_PREVIEW_UNSUPPORTED: 'Preview supports PNG and JPEG images, UTF-8 text files, and folders.',
+  FILE_PREVIEW_IMAGE_INVALID:
+    'This image could not be decoded. Check that the file is complete and try again.',
   FILE_PREVIEW_TOO_LARGE:
-    'This file exceeds the 1 MiB preview limit. Open it locally to view its contents.',
+    'This file is too large to preview. The limit is 10 MiB for PNG and JPEG images and 1 MiB for text.',
   INVALID_FILE_PREVIEW: 'This file reference is invalid. Check its path and try again.',
 
   RELAY_UNAVAILABLE: 'The relay is unavailable. Check the connection and try again.',

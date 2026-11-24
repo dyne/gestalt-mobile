@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { FilePreview } from '../../../../shared/contracts/file-preview.js';
 import type {
   ListWorkspaceDirectory,
   WorkspaceDirectoryResult,
@@ -44,10 +45,6 @@ export type UploadInput = Readonly<{
 export type DeleteInput = Readonly<{ path: string; recursive: true }>;
 export type CreateDirectoryInput = Readonly<{ directory: string; name: string }>;
 
-export type FilePreview = Readonly<
-  | { kind: 'directory'; path: string }
-  | { kind: 'file'; path: string; content: string; size: number }
->;
 export type FilePreviewResult =
   | { kind: 'available'; preview: FilePreview }
   | { kind: 'missing' | 'unreadable' | 'unsupported' | 'too-large' };

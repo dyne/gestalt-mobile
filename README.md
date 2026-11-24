@@ -570,7 +570,8 @@ The viewer formats JSON and Markdown, offers the original source, and browses fo
 with the existing lazy-loading tree. JSON starts with the first level visible and nested
 branches folded; the Folded/Unfolded control toggles all branches, and +/− controls
 expand or collapse individual branches. Other UTF-8 text files remain readable as text.
-Previews are limited to 1 MiB and do not follow symbolic links. Markdown previews
+PNG and JPEG links open in the same viewer. Image previews support files up to 10 MiB,
+and text previews support up to 1 MiB. The viewer does not follow symbolic links. Markdown previews
 sanitize markup and do not load embedded images.
 
 ## Git

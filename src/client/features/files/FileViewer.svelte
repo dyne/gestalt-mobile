@@ -190,6 +190,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {#if preview?.kind === 'file'}<span class="format"
         >{formatted.format.toUpperCase()} · {preview.size.toLocaleString()} bytes</span
       >{/if}
+    {#if preview?.kind === 'image'}<span class="format"
+        >{preview.mediaType === 'image/png' ? 'PNG' : 'JPEG'} · {preview.size.toLocaleString()} bytes</span
+      >{/if}
   </nav>
   <div class="contents">
     {#if loading}<p role="status">Loading preview…</p>{:else if failed}<p>
@@ -213,6 +216,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         >
           This folder is empty.
         </p>{/if}
+    {:else if preview?.kind === 'image'}
+      <img
+        class="image-preview"
+        src={`data:${preview.mediaType};base64,${preview.base64}`}
+        alt={preview.path.split('/').at(-1)}
+        onerror={() => {
+          failed = true;
+          onerror(new Error('FILE_PREVIEW_IMAGE_INVALID'));
+        }}
+      />
     {:else if preview?.kind === 'file'}
       {#if html}
         <div class="markdown" use:markdownLinks>{@html html}</div>
@@ -294,6 +307,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin-inline: auto;
     overflow-wrap: anywhere;
     line-height: 1.65;
+  }
+  .image-preview {
+    display: block;
+    max-inline-size: 100%;
+    block-size: auto;
+    margin-inline: auto;
   }
   .markdown :global(:is(h1, h2, h3, h4)) {
     line-height: 1.25;
