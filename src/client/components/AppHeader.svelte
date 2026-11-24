@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import Icon from './Icon.svelte';
   import type { SessionRetrievalReadiness } from '../../shared/contracts/retrieval-readiness.js';
   import ToolReadiness from '../features/retrieval/ToolReadiness.svelte';
   import type { ComponentVersion } from '../../shared/contracts/component-version.js';
@@ -154,10 +155,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         title="Open Chat in a separate window"
         onclick={ondetach}
       >
-        <svg aria-hidden="true" viewBox="0 0 24 24">
-          <path d="M14 5h5v5M19 5l-8 8" />
-          <path d="M18 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
-        </svg>
+        <Icon name="external" />
       </button>
     {/if}
     <button
@@ -166,8 +164,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       type="button"
       popovertarget="configuration-panel"
       aria-label="Open configuration"
+      title="Open configuration"
     >
-      <span class="menu-lines" aria-hidden="true"><span></span><span></span><span></span></span>
+      <Icon name="menu" />
     </button>
   </div>
 </header>
@@ -204,20 +203,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         type="button"
         popovertarget="configuration-panel"
         popovertargetaction="hide"
-        onclick={action.run}>{action.label}</button
+        onclick={action.run}
+        >{#if action.id === 'debug'}<Icon name="debug" />{/if}{action.label}</button
       >
     {/each}
     <button
       type="button"
       popovertarget="configuration-panel"
       popovertargetaction="hide"
-      onclick={onnotifications}>Notifications</button
+      onclick={onnotifications}><Icon name="bell" />Notifications</button
     >
     <button
       type="button"
       popovertarget="configuration-panel"
       popovertargetaction="hide"
-      onclick={onscratchpad}>Scratchpad</button
+      onclick={onscratchpad}><Icon name="note" />Scratchpad</button
     >
     {#if oncopytocli}
       <button
@@ -225,7 +225,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         popovertarget="configuration-panel"
         popovertargetaction="hide"
         disabled={!copyToCliAvailable}
-        onclick={oncopytocli}>Copy session to CLI</button
+        onclick={oncopytocli}><Icon name="cli" />Copy session to CLI</button
       >
     {/if}
   </section>
@@ -236,14 +236,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         type="button"
         popovertarget="configuration-panel"
         popovertargetaction="hide"
-        onclick={(event) => ondevices(event.currentTarget)}>Authorized devices</button
+        onclick={(event) => ondevices(event.currentTarget)}
+        ><Icon name="devices" />Authorized devices</button
       >
       <button
         type="button"
         class="lock-relay"
         popovertarget="configuration-panel"
         popovertargetaction="hide"
-        onclick={onlock}>Lock Gestalt Mobile</button
+        onclick={onlock}><Icon name="lock" />Lock Gestalt Mobile</button
       >
     </section>
   {/if}
@@ -287,7 +288,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       disabled={cleanTmpPending || upgradePending || quitPending}
       aria-busy={cleanTmpPending}
       aria-describedby={cleanTmpPending ? 'clean-tmp-status' : undefined}
-      onclick={() => void cleanTmp()}>Clean TMP</button
+      onclick={() => void cleanTmp()}><Icon name="clean" />Clean TMP</button
     >
     {#if cleanTmpPending}<p id="clean-tmp-status" role="status">Cleaning temporary files…</p>{/if}
     <button
@@ -295,7 +296,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       popovertarget="configuration-panel"
       popovertargetaction="hide"
       disabled={cleanTmpPending || upgradePending || quitPending}
-      onclick={openUpgrade}>Upgrade</button
+      onclick={openUpgrade}><Icon name="upgrade" />Upgrade</button
     >
     <button
       type="button"
@@ -303,7 +304,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       popovertargetaction="hide"
       class="quit-relay"
       disabled={cleanTmpPending || upgradePending}
-      onclick={openQuit}>Quit</button
+      onclick={openQuit}><Icon name="power" />Quit</button
     >
   </div>
 </div>
@@ -390,13 +391,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     letter-spacing: 0;
   }
   .menu-group button {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
     inline-size: 100%;
     padding: 0.375rem 0.625rem;
     text-align: start;
     background: transparent;
     border: 0;
   }
+  .maintenance-actions button:hover,
   .menu-group button:hover {
     background: var(--theme-control-hover);
   }
@@ -430,19 +434,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     border: 0;
   }
 
-  .detach-chat svg {
-    inline-size: 1.25rem;
-    block-size: 1.25rem;
-    fill: none;
-    stroke: currentColor;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    stroke-width: 1.75;
-  }
-
   .maintenance-actions {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 5rem), 1fr));
+    grid-template-columns: minmax(0, 1fr);
     gap: 0.375rem;
     margin-block-start: 0.75rem;
     padding-block-start: 0.75rem;
@@ -513,6 +507,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .maintenance-actions button {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    text-align: start;
+    padding-inline: 0.625rem;
+    border: 0;
+    background: transparent;
     inline-size: 100%;
     font-size: 0.875rem;
   }

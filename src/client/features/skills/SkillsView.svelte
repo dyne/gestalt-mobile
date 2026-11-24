@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import Icon from '../../components/Icon.svelte';
   import { tick } from 'svelte';
 
   import type { SkillsState } from './skills-state.js';
@@ -222,8 +223,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         class="refresh-skills"
         onclick={() => void refreshSkills()}
         aria-label="Refresh skills"
+        title="Refresh skills"
       >
-        <span aria-hidden="true">↻</span><span>Refresh</span>
+        <Icon name="refresh" />
       </button>
       <p class="summary">{snapshot.enabledCount} of {snapshot.skills.length} skills enabled.</p>
     </div>
@@ -444,10 +446,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     inline-size: auto;
     min-block-size: 2.25rem;
     padding-inline: 0.65rem;
-  }
-  .refresh-skills span:first-child {
-    font-size: 1.2em;
-    line-height: 1;
   }
   .summary {
     min-inline-size: 0;

@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import Icon from '../../components/Icon.svelte';
   import type { Snippet } from 'svelte';
   import PlanFilePath from './PlanFilePath.svelte';
 
@@ -29,7 +30,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <header>
   <h2 id={titleId}>{title}</h2>
-  <button class="close" type="button" aria-label={closeLabel} onclick={onclose}>×</button>
+  <button class="close" type="button" aria-label={closeLabel} title={closeLabel} onclick={onclose}
+    ><Icon name="close" /></button
+  >
   {#if sourcePath}<PlanFilePath path={sourcePath} {oncopyresult} />{/if}
   {#if executeAction}<div class="actions">{@render executeAction()}</div>{/if}
 </header>

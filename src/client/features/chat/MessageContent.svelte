@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import Icon from '../../components/Icon.svelte';
   import { renderCommentary, type CommentaryPart } from './rendering.js';
   import {
     localFilePathFromHref,
@@ -78,10 +79,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           title="Copy code"
           onclick={() => void copyCode(block.text)}
         >
-          <svg aria-hidden="true" viewBox="0 0 24 24">
-            <rect x="9" y="9" width="10" height="10" rx="2" />
-            <path d="M15 9V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2" />
-          </svg>
+          <Icon name="copy" size="1rem" />
         </button>
         <pre><code>{block.text}</code></pre>
       </div>
@@ -204,16 +202,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     color: var(--theme-text);
     outline: 2px solid var(--theme-focus);
     outline-offset: 2px;
-  }
-
-  .code-copy svg {
-    inline-size: 1rem;
-    block-size: 1rem;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.8;
-    stroke-linecap: round;
-    stroke-linejoin: round;
   }
 
   :not(pre) > code {

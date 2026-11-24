@@ -408,9 +408,9 @@ test('renders a healthy controller as active without exposing its control identi
   });
 });
 
-test('Sessions keeps only active plan work below the Org title in the information column', async ({
+test('Sessions keeps active plan work above the compact action row and full-width Agents control', async ({
   page,
-}) => {
+}, testInfo) => {
   await install(page, 'monitoring', undefined, false, undefined, true, undefined, true);
   await page.setViewportSize({ width: 320, height: 568 });
   await page.goto('/');
@@ -418,29 +418,31 @@ test('Sessions keeps only active plan work below the Org title in the informatio
 
   const card = page.getByLabel('Open sessions').locator('li').first();
   const actions = card.getByLabel('Session actions');
-  const actionControls = [
-    actions.getByRole('button', { name: 'Open' }),
-    actions.getByRole('button', { name: 'Copy CLI' }),
-    actions.getByRole('button', { name: 'Autopilot: Monitoring' }),
-    actions.getByText('Agents (2)', { exact: true }),
-    actions.getByRole('button', { name: 'Close' }),
-  ];
-  await Promise.all(actionControls.map((control) => expect(control).toBeVisible()));
-  const actionBoxes = await Promise.all(
-    actionControls.map((control) =>
-      control.evaluate((element) => {
-        const { x, y } = element.getBoundingClientRect();
-        return { x, y };
-      }),
-    ),
-  );
-  expect(actionBoxes.every((box) => Math.abs(box.x - actionBoxes[0]!.x) <= 1)).toBe(true);
-  expect(actionBoxes.every((box, index) => index === 0 || box.y > actionBoxes[index - 1]!.y)).toBe(
-    true,
-  );
-
-  const autopilotControl = actions.getByRole('button', { name: 'Autopilot: Monitoring' });
-  await expect(autopilotControl).toHaveText('Autopilot');
+  const icons = [
+    'Open',
+    'Plan for Compact session plan',
+    'Copy CLI',
+    'Autopilot: Monitoring',
+    'Close',
+  ].map((name) => actions.getByRole('button', { name, exact: true }));
+  for (const button of icons) {
+    await expect(button.locator('svg')).toBeVisible();
+    const box = (await button.boundingBox())!;
+    expect(box.width).toBe(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+  }
+  const agents = actions.getByText('Agents (2)', { exact: true });
+  const agentBox = (await agents.boundingBox())!;
+  expect(agentBox.width).toBeCloseTo((await actions.boundingBox())!.width, 0);
+  expect(agentBox.y).toBeGreaterThan((await icons.at(-1)!.boundingBox())!.y);
+  const autopilotControl = icons[3]!;
+  await icons[2]!.focus();
+  await page.keyboard.press('Tab');
+  await expect(autopilotControl).toBeFocused();
+  await expect(page.locator('.icon-tooltip')).toBeVisible();
+  await expect(page.locator('.icon-tooltip')).toHaveText('Autopilot: Monitoring');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.icon-tooltip')).toBeHidden();
   await expect(autopilotControl).toHaveAttribute('aria-pressed', 'true');
   expect(
     await autopilotControl.evaluate((control) => {
@@ -453,6 +455,12 @@ test('Sessions keeps only active plan work below the Org title in the informatio
     }),
   ).toBe(true);
 
+  const close = actions.getByRole('button', { name: 'Close', exact: true });
+  await close.dispatchEvent('pointerdown', { pointerType: 'touch', isPrimary: true });
+  await expect(page.locator('.icon-tooltip')).toHaveText('Close');
+  await close.dispatchEvent('pointerup', { pointerType: 'touch', isPrimary: true });
+  await close.dispatchEvent('click', { detail: 1 });
+  await expect(page.getByRole('dialog', { name: 'Close session?' })).toBeHidden();
   const progress = card.getByRole('progressbar', {
     name: 'Plan progress for Compact session plan',
   });
@@ -471,7 +479,8 @@ test('Sessions keeps only active plan work below the Org title in the informatio
   expect(actionsBox).not.toBeNull();
   expect(titleBox).not.toBeNull();
   expect(progressBox).not.toBeNull();
-  expect(progressBox!.x + progressBox!.width).toBeLessThanOrEqual(actionsBox!.x);
+  expect(actionsBox!.y).toBeGreaterThanOrEqual(progressBox!.y + progressBox!.height);
+  await card.screenshot({ path: testInfo.outputPath('session-actions.png') });
   expect(progressBox!.y).toBeGreaterThanOrEqual(titleBox!.y + titleBox!.height);
   await expectNoHorizontalOverflow(page);
 });
@@ -563,9 +572,9 @@ const cases: ReadonlyArray<{
   attention?: boolean;
   continuationPhase?: ContinuationPhase;
 }> = [
-  { name: 'eligible-off', state: 'disabled', text: 'Autopilot: Off' },
-  { name: 'monitoring', state: 'monitoring', text: 'Autopilot: Monitoring' },
-  { name: 'root-awaiting-child', state: 'monitoring', text: 'Autopilot: Monitoring' },
+  { name: 'eligible-off', state: 'disabled', text: 'Autopilot status: Off' },
+  { name: 'monitoring', state: 'monitoring', text: 'Autopilot status: Monitoring' },
+  { name: 'root-awaiting-child', state: 'monitoring', text: 'Autopilot status: Monitoring' },
   {
     name: 'scheduled-continuation',
     state: 'backoff',
@@ -610,12 +619,12 @@ const cases: ReadonlyArray<{
     name: 'complete-plan',
     state: 'completed',
     reason: 'planComplete',
-    text: 'Autopilot: Complete',
+    text: 'Autopilot status: Complete',
   },
   {
     name: 'resolved-attention',
     state: 'monitoring',
-    text: 'Autopilot: Monitoring',
+    text: 'Autopilot status: Monitoring',
     attention: false,
   },
 ];
@@ -798,7 +807,7 @@ for (const item of cases) {
     const sessionAutopilot = page
       .getByLabel('Open sessions')
       .getByRole('button', { name: /^Autopilot:/ });
-    await expect(sessionAutopilot).toHaveText('Autopilot');
+    await expect(sessionAutopilot.locator('svg')).toBeVisible();
     await expect(sessionAutopilot).toHaveAttribute('aria-pressed', isEnabled ? 'true' : 'false');
     if (item.name === 'root-awaiting-child') {
       const sessionActivity = page.getByLabel('Open sessions').getByLabel('Agent activity');
@@ -1261,7 +1270,7 @@ for (const viewport of [
         },
       }),
     );
-    await expect(region).toContainText('Autopilot: Monitoring');
+    await expect(region.getByRole('button', { name: 'Autopilot: Monitoring' })).toBeVisible();
     await expect(region).not.toContainText('Recovering checkpoint handoff');
     await expectNoHorizontalOverflow(page);
   });

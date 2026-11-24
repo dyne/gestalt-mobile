@@ -5,6 +5,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import IconTooltip from './components/IconTooltip.svelte';
+  import Icon from './components/Icon.svelte';
   import { onDestroy, onMount, tick, untrack } from 'svelte';
   import { selectTheme } from './features/theme/browser-theme.js';
   import { type ThemeId } from './features/theme/theme-registry.js';
@@ -2253,6 +2255,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   />
 {/snippet}
 
+<IconTooltip />
 <svelte:head>
   <title
     >{detachedSessionId && selectedSessionPath
@@ -2333,9 +2336,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         {#if selectedSession && hasAssignedOrgPlan(selectedSession)}
           <AppControl
             compact
+            icon="plan"
             label="Plan for this session"
-            onclick={() => openSessionPlanViewer(selectedSession!.id)}>Plan</AppControl
-          >
+            onclick={() => openSessionPlanViewer(selectedSession!.id)}
+          />
         {/if}
       </header>
     {/if}
@@ -2420,9 +2424,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                     {#if !detachedSessionId}
                       <AppControl
                         compact
+                        icon="plan"
                         label="Plan for this session"
-                        onclick={() => openSessionPlanViewer(sessionId!)}>Plan</AppControl
-                      >
+                        onclick={() => openSessionPlanViewer(sessionId!)}
+                      />
                     {/if}
                     {#if selectedSession?.provider !== 'kimi'}
                       <AutopilotControl
@@ -2542,7 +2547,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 type="button"
                 class="close-profile-manager"
                 aria-label="Close skill profile editor"
-                onclick={() => void closeProfileManager()}>×</button
+                title="Close skill profile editor"
+                onclick={() => void closeProfileManager()}><Icon name="close" /></button
               >
             </div>
             {#if skillsState}
@@ -2761,7 +2767,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin-block-start: 0.625rem;
   }
 
-  .chat-controls > :global(*) {
+  .chat-controls > :global(.agent-activity) {
     flex: 1 1 0;
     min-inline-size: 0;
   }

@@ -13,14 +13,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     autopilot,
     controlId = 'autopilot-control',
     compact = false,
-    indicatorOnly = false,
     pending = false,
     ontoggle = () => {},
   }: {
     autopilot: AutopilotSnapshot | null;
     controlId?: string;
     compact?: boolean;
-    indicatorOnly?: boolean;
     pending?: boolean;
     ontoggle?: (enabled: boolean) => void;
   } = $props();
@@ -96,7 +94,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <section
   class="autopilot-control"
   class:compact
-  class:has-error={indicatorOnly && hasError}
+  class:has-error={compact && hasError}
   aria-label="Autopilot"
 >
   <p
@@ -111,22 +109,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <AppControl
       id={`${controlId}-button`}
       compact
-      full
+      icon={pending || autopilot?.state === 'backoff' ? 'waiting' : 'autopilot'}
       pressed={enabled}
-      accentPressed={indicatorOnly}
-      label={indicatorOnly ? `Autopilot: ${pending ? 'Updating' : status}` : undefined}
+      accentPressed
+      label={`Autopilot: ${pending ? 'Updating' : status}`}
       describedby={`${controlId}-help`}
       ariaDisabled={pending}
       onclick={() => {
         if (!pending) ontoggle(!enabled);
       }}
     >
-      {#if indicatorOnly}
-        Autopilot
-      {:else}
-        <span aria-hidden="true">{enabled ? '●' : '○'}</span>
-        Autopilot: {pending ? 'Updating…' : status}
-      {/if}
+      {#if hasError || autopilot?.state === 'attentionRequired'}<span
+          class="state-mark"
+          aria-hidden="true">!</span
+        >{:else if enabled}<span class="enabled-mark" aria-hidden="true"></span>{/if}
     </AppControl>
   {:else}
     <div class="control-row">
@@ -170,7 +166,25 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     align-items: center;
   }
   .compact {
-    inline-size: 100%;
+    position: relative;
+    inline-size: auto;
+  }
+  .enabled-mark {
+    position: absolute;
+    inset-inline-end: 4px;
+    inset-block-end: 7px;
+    width: 7px;
+    height: 4px;
+    border: solid currentColor;
+    border-width: 0 0 2px 2px;
+    transform: rotate(-45deg);
+  }
+  .state-mark {
+    position: absolute;
+    inset: 2px 2px auto auto;
+    font-weight: 750;
+    font-size: 0.75rem;
+    line-height: 1;
   }
   .status {
     border: 1px solid var(--theme-border);

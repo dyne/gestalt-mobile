@@ -361,8 +361,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <AppControl onclick={dismiss}>{submitting ? 'Close' : 'Cancel'}</AppControl>
     {#if problem || (confirmed?.workspaceSession && !canReplace)}<AppControl
         disabled={busy}
-        onclick={() => void refreshAvailability()}>Refresh</AppControl
-      >{/if}
+        icon="refresh"
+        label="Refresh"
+        onclick={() => void refreshAvailability()}
+      />{/if}
     {#if confirmed?.workspaceSession}
       {@const occupant = confirmed.workspaceSession}
       <AppControl

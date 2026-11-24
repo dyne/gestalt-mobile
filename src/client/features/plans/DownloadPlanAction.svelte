@@ -49,9 +49,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </script>
 
 <AppControl
+  icon={downloading ? 'waiting' : 'download'}
   label="Download Org file"
+  tooltip={downloading ? 'Downloading…' : 'Download Org file'}
   disabled={downloading || !reference || !transport}
   onclick={download}
->
-  {downloading ? 'Downloading…' : 'Download'}
-</AppControl>
+/>

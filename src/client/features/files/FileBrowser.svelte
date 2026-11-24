@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <svelte:options runes={true} />
 
 <script lang="ts">
+  import Icon from '../../components/Icon.svelte';
   import { onDestroy, onMount, tick } from 'svelte';
   import type { WorkspaceOption } from '../catalog/bootstrap-client.js';
   import type { RelayRequestError, RelayWorkspaceDirectory } from '../sessions/relay-client.js';
@@ -386,7 +387,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             : 'Browse folders and select a position.'}
         </p>
       </div>
-      <button type="button" class="close" aria-label="Close file browser" onclick={close}>×</button>
+      <button
+        type="button"
+        class="close"
+        aria-label="Close file browser"
+        title="Close file browser"
+        onclick={close}><Icon name="close" /></button
+      >
     </header>
     <div class="browser-actions">
       {#if createDirectory}
@@ -403,8 +410,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             (selectedEntry !== undefined && selectedEntry.kind !== 'directory')}>New folder</button
         >
       {/if}
-      <button type="button" onclick={() => void controller?.refresh()} disabled={rootState.loading}
-        >Refresh</button
+      <button
+        type="button"
+        onclick={() => void controller?.refresh()}
+        disabled={rootState.loading}
+        aria-label="Refresh"
+        title="Refresh"><Icon name="refresh" /></button
       >
     </div>
     {#if newFolderParent !== null}
@@ -480,7 +491,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {#if controller && transfer.phase === 'idle' && selectedEntry && selectedEntry.kind !== 'symlink'}
       <div class="browser-actions" aria-label="Selected file actions">
         {#if onview}<button type="button" onclick={() => onview?.(selectedPath)}>View</button>{/if}
-        <button type="button" onclick={() => beginTransfer('copy')}>Copy</button>
+        <button type="button" onclick={() => beginTransfer('copy')} aria-label="Copy" title="Copy"
+          ><Icon name="copy" /></button
+        >
         <button type="button" onclick={() => beginTransfer('move')}>Move</button>
         <button type="button" onclick={() => void openDeleteConfirmation()}>Delete</button>
       </div>
