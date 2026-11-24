@@ -14,6 +14,29 @@ async function dialog(page: import('@playwright/test').Page) {
   await expect(page.getByRole('button', { name: 'OK', exact: true })).toBeEnabled();
 }
 
+test('one preparation enables Execute and survives skill profile changes through launch', async ({
+  page,
+}) => {
+  const { state } = await installExecuteFixture(page);
+  state.profiles = ['supervisor', 'reviewer'];
+  await page.goto('/');
+  await openExecuteEntry(page, 'catalog');
+  await dialog(page);
+  const select = page.getByRole('combobox', { name: 'Supervisor Skill profile' });
+  const ok = page.getByRole('button', { name: 'OK', exact: true });
+  for (const profile of ['supervisor', 'reviewer', '', 'reviewer']) {
+    await select.selectOption(profile);
+    await expect(ok).toBeEnabled();
+  }
+  expect(state.prepareCount).toBe(1);
+  await ok.click();
+  await expect.poll(() => state.published).toBe(true);
+  expect(state.prepareCount).toBe(1);
+  expect(state.launchRequests).toMatchObject([
+    { expectedRevision: 'original', skillProfile: 'reviewer' },
+  ]);
+});
+
 test('Execute shows the existing session and requires confirmation once it is idle', async ({
   page,
 }) => {
@@ -121,34 +144,15 @@ test('native modal keeps background inert, preserves keyboard order and Escape/C
   await dialog(page);
   await cancel.click();
   await expect(page.getByRole('button', { name: 'Execute', exact: true })).toBeFocused();
-  let release!: () => void;
-  state.prepareGate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  try {
-    await page.getByRole('button', { name: 'Execute', exact: true }).click();
-    await expect(select).toBeDisabled();
-    const loadingFocus = await page.evaluate(() => document.activeElement?.tagName);
-    await page.keyboard.press('Tab');
-    await expect(cancel).toBeFocused();
-    release();
-    await expect(select).toBeEnabled();
-    await expect(cancel).toBeFocused();
-    await writeFile(
-      testInfo.outputPath('focus-transitions.json'),
-      JSON.stringify({
-        loadingFocus,
-        afterUserTab: 'Cancel',
-        afterFreshRead: 'Cancel',
-        nativeModalInertness: true,
-        focusTransitions,
-        initialLoadedFocus: 'Supervisor Skill profile',
-      }),
-    );
-    await cancel.click();
-  } finally {
-    release();
-  }
+  expect(state.prepareCount).toBe(1);
+  await writeFile(
+    testInfo.outputPath('focus-transitions.json'),
+    JSON.stringify({
+      nativeModalInertness: true,
+      focusTransitions,
+      initialLoadedFocus: 'Supervisor Skill profile',
+    }),
+  );
   expect(state.launchRequests).toEqual([]);
   expect(state.published).toBe(false);
   expect(state.opens).toEqual([]);
@@ -256,21 +260,30 @@ test('a deleted selected profile stays selected until an explicit available choi
   expect(state.launchRequests.map((request) => request.skillProfile)).toEqual(['supervisor', '']);
 });
 
-test('a failed fresh profile read blocks OK until explicit successful refresh', async ({
-  page,
-}) => {
-  const { state } = await installExecuteFixture(page);
+test('a failed explicit refresh blocks replacement until refresh succeeds', async ({ page }) => {
+  const { state, source } = await installExecuteFixture(page);
+  state.workspaceSession = { sessionId: source.id, replaceAllowed: false };
+  source.sessionStatus = {
+    state: 'idle',
+    reason: 'complete',
+    confidence: 'fresh',
+    observedAt: '2026-11-08T00:00:00Z',
+    nextExpectedAction: 'Ready for the next request.',
+  };
   await page.goto('/');
   await openExecuteEntry(page, 'catalog');
-  state.readError = true;
   await page.getByRole('button', { name: 'Execute', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Refresh', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'OK', exact: true })).toBeDisabled();
+  const refresh = page.getByRole('button', { name: 'Refresh', exact: true });
+  const replace = page.getByRole('button', { name: 'Replace and execute' });
+  state.readError = true;
+  await refresh.click();
+  await expect(replace).toBeDisabled();
   await expect(page.getByRole('alert')).toContainText('Relay request failed (503).');
   expect(state.launchRequests).toEqual([]);
   state.readError = false;
-  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'OK', exact: true })).toBeEnabled();
+  state.workspaceSession = { sessionId: source.id, replaceAllowed: true };
+  await refresh.click();
+  await expect(replace).toBeEnabled();
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   expect(state.published).toBe(false);
 });

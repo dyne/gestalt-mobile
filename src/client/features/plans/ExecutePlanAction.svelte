@@ -85,6 +85,23 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     problem = message;
     onerror?.(message);
   }
+  function reportBlocked(result: Extract<OrgPlanPreparation, { kind: 'blocked' }>): void {
+    if (result.code === 'SKILL_PROFILE_UNAVAILABLE' && selected && confirmed) {
+      confirmed = {
+        ...confirmed,
+        skillProfiles: confirmed.skillProfiles.filter((profile) => profile.name !== selected),
+      };
+      report(result.reason);
+    } else report(result.reason, true);
+  }
+  async function readWorkspaceSession(
+    result: OrgPlanPreparation,
+    api: ExecutePlanTransport,
+  ): Promise<RelaySession | null> {
+    if (result.kind !== 'eligible' || !result.workspaceSession || !api.getSession) return null;
+    const session = await api.getSession(result.workspaceSession.sessionId);
+    return session.id === result.workspaceSession.sessionId ? session : null;
+  }
   $effect(() => {
     const ref = reference;
     const api = transport;
@@ -108,8 +125,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       }
       void api
         .prepareOrgPlanSupervision(ref, undefined, undefined, request.signal)
-        .then((result) => {
-          if (current === generation && !disposed) preparation = result;
+        .then(async (result) => {
+          if (current !== generation || disposed) return;
+          let occupant: RelaySession | null = null;
+          try {
+            occupant = await readWorkspaceSession(result, api);
+          } catch (error) {
+            if (current === generation && !disposed)
+              report(error instanceof Error ? error.message : 'Could not check session status.');
+          }
+          if (current === generation && !disposed) {
+            preparation = result;
+            existingSession = occupant;
+          }
         })
         .catch((error) => {
           if (!request.signal.aborted && current === generation)
@@ -131,7 +159,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (preparation?.kind !== 'eligible' || busy) return;
     trigger = event.currentTarget;
     confirmed = preparation;
-    existingSession = null;
     selected = preparation.settings.skillProfile;
     problem = '';
     blocked = false;
@@ -139,7 +166,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     const openedDialog = ++dialogGeneration;
     initialFocusPending = true;
     dialog?.showModal();
-    await refreshProfiles();
     await tick();
     if (
       initialFocusPending &&
@@ -152,7 +178,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       profileSelect?.focus();
     if (openedDialog === dialogGeneration) initialFocusPending = false;
   }
-  async function refreshProfiles(): Promise<void> {
+  async function refreshAvailability(): Promise<void> {
     if (!dialog?.open || !confirmed || !transport || busy) return;
     const current = generation;
     const snapshot = confirmed;
@@ -164,10 +190,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         snapshot.revision,
         selected,
       );
-      const occupant =
-        fresh.kind === 'eligible' && fresh.workspaceSession && transport.getSession
-          ? await transport.getSession(fresh.workspaceSession.sessionId)
-          : null;
+      const occupant = await readWorkspaceSession(fresh, transport);
       if (
         current !== generation ||
         validation !== validationGeneration ||
@@ -175,16 +198,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         !dialog?.open
       )
         return;
-      if (fresh.kind === 'blocked') {
-        report(fresh.reason, true);
-        if (fresh.code === 'SKILL_PROFILE_UNAVAILABLE' && selected)
-          confirmed = {
-            ...snapshot,
-            skillProfiles: snapshot.skillProfiles.filter((profile) => profile.name !== selected),
-          };
-      } else {
+      if (fresh.kind === 'blocked') reportBlocked(fresh);
+      else {
+        preparation = fresh;
         confirmed = fresh;
-        existingSession = occupant?.id === fresh.workspaceSession?.sessionId ? occupant : null;
+        existingSession = occupant;
         problem = '';
         blocked = false;
       }
@@ -195,7 +213,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         !disposed &&
         dialog?.open
       )
-        report(error instanceof Error ? error.message : 'Could not read skill profiles.', true);
+        report(error instanceof Error ? error.message : 'Could not refresh plan execution.', true);
     } finally {
       if (!disposed && current === generation && validation === validationGeneration)
         validating = false;
@@ -220,8 +238,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (occupant && (!canReplace || occupant.sessionId !== replaceSessionId)) return;
     const current = generation;
     const snapshot = confirmed;
-    const validation = ++validationGeneration;
-    validating = true;
     try {
       const result = await launcher.submit({
         reference: snapshot.reference,
@@ -238,7 +254,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         return;
       }
       if (result.kind === 'blocked' || result.kind === 'rejected') {
-        report(result.reason, true);
+        if (result.kind === 'blocked') reportBlocked(result);
+        else report(result.reason, true);
         return;
       }
       if (result.kind === 'partial') report(result.reason);
@@ -247,9 +264,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     } catch (error) {
       if (!disposed && current === generation)
         report(error instanceof Error ? error.message : 'Could not start supervision.');
-    } finally {
-      if (!disposed && current === generation && validation === validationGeneration)
-        validating = false;
     }
   }
 </script>
@@ -293,8 +307,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     bind:value={selected}
     disabled={busy}
     onchange={() => {
-      problem = '';
-      void refreshProfiles();
+      if (!blocked) problem = '';
     }}
   >
     {#if selected && !confirmed?.skillProfiles.some((profile) => profile.name === selected && !profile.error)}<option
@@ -306,7 +319,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       >{/each}
     <option value="">None</option>
   </select>
-  {#each confirmed?.warnings ?? [] as warning}<p class="guidance">{warning}</p>{/each}
+  {#each confirmed && confirmed.settings.skillProfile === selected ? confirmed.warnings : [] as warning}<p
+      class="guidance"
+    >
+      {warning}
+    </p>{/each}
   {#if confirmed?.workspaceSession}
     <section class="workspace-conflict" aria-labelledby={`${id}-workspace-conflict`}>
       <h3 id={`${id}-workspace-conflict`}>Session open in this workspace</h3>
@@ -344,7 +361,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <AppControl onclick={dismiss}>{submitting ? 'Close' : 'Cancel'}</AppControl>
     {#if problem || (confirmed?.workspaceSession && !canReplace)}<AppControl
         disabled={busy}
-        onclick={() => void refreshProfiles()}>Refresh</AppControl
+        onclick={() => void refreshAvailability()}>Refresh</AppControl
       >{/if}
     {#if confirmed?.workspaceSession}
       {@const occupant = confirmed.workspaceSession}

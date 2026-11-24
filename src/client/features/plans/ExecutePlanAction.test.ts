@@ -98,6 +98,20 @@ afterEach(() => {
 });
 
 describe('Execute plan confirmation', () => {
+  it('reuses one preparation across Execute, repeated profile changes, and launch', async () => {
+    const { transport, onresult } = setup();
+    await open();
+    const select = screen.getByRole('combobox');
+    for (const value of ['supervisor', '', 'supervisor'])
+      await fireEvent.change(select, { target: { value } });
+    expect(transport.prepareOrgPlanSupervision).toHaveBeenCalledTimes(1);
+    await fireEvent.click(screen.getByRole('button', { name: 'OK' }));
+    await waitFor(() => expect(onresult).toHaveBeenCalledWith(started));
+    expect(transport.prepareOrgPlanSupervision).toHaveBeenCalledTimes(1);
+    expect(transport.startOrgPlanSupervision).toHaveBeenCalledWith(
+      expect.objectContaining({ reference, expectedRevision: 'seen', skillProfile: 'supervisor' }),
+    );
+  });
   it.each([
     'INVALID_PLAN',
     'NO_REMAINING_WORK',
@@ -227,68 +241,19 @@ describe('Execute plan confirmation', () => {
       transport.startOrgPlanSupervision.mock.calls[1]![0].launchId,
     );
   });
-  it('focuses the initial profile once the fresh read enables it', async () => {
+  it('focuses the initial profile when the confirmation opens', async () => {
     setup();
     await open();
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('combobox')));
   });
-  it('does not steal focus from Cancel when the user moves during the fresh read', async () => {
+  it('reopens confirmation from the same preparation without effects', async () => {
     const { transport } = setup();
-    await waitFor(() =>
-      expect((screen.getByRole('button', { name: 'Execute' }) as HTMLButtonElement).disabled).toBe(
-        false,
-      ),
-    );
-    let release!: (value: OrgPlanPreparation) => void;
-    transport.prepareOrgPlanSupervision.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          release = resolve;
-        }),
-    );
-    try {
-      await fireEvent.click(screen.getByRole('button', { name: 'Execute' }));
-      const cancel = screen.getByRole('button', { name: 'Cancel' });
-      await fireEvent.pointerDown(cancel);
-      cancel.focus();
-      release(eligible);
-      await waitFor(() =>
-        expect((screen.getByRole('button', { name: 'OK' }) as HTMLButtonElement).disabled).toBe(
-          false,
-        ),
-      );
-      expect(document.activeElement).toBe(cancel);
-    } finally {
-      release?.(eligible);
-      await tick();
-    }
-  });
-  it('keeps confirmation disabled while fresh profiles load and allows cancellation without effects', async () => {
-    const { transport } = setup();
-    await waitFor(() =>
-      expect((screen.getByRole('button', { name: 'Execute' }) as HTMLButtonElement).disabled).toBe(
-        false,
-      ),
-    );
-    let resolve!: (value: OrgPlanPreparation) => void;
-    transport.prepareOrgPlanSupervision.mockImplementationOnce(
-      () =>
-        new Promise((done) => {
-          resolve = done;
-        }),
-    );
-    const execute = screen.getByRole('button', { name: 'Execute' });
-    try {
-      await fireEvent.click(execute);
-      expect((screen.getByRole('button', { name: 'OK' }) as HTMLButtonElement).disabled).toBe(true);
-      await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-      await waitFor(() => expect(document.activeElement).toBe(execute));
-      resolve(eligible);
-      expect(transport.startOrgPlanSupervision).not.toHaveBeenCalled();
-    } finally {
-      resolve?.(eligible);
-      await tick();
-    }
+    const execute = await open();
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(document.activeElement).toBe(execute));
+    await open();
+    expect(transport.prepareOrgPlanSupervision).toHaveBeenCalledTimes(1);
+    expect(transport.startOrgPlanSupervision).not.toHaveBeenCalled();
   });
   it('closes stale confirmation when the viewed source changes and starts disabled again', async () => {
     const { transport, rerender } = setup();
@@ -327,27 +292,30 @@ describe('Execute plan confirmation', () => {
       await tick();
     }
   });
-  it('blocks confirmation after a failed fresh profile read until explicit successful refresh', async () => {
+  it('keeps confirmation blocked after a failed explicit refresh until refresh succeeds', async () => {
     const { transport, onerror } = setup();
-    await waitFor(() =>
-      expect((screen.getByRole('button', { name: 'Execute' }) as HTMLButtonElement).disabled).toBe(
-        false,
-      ),
-    );
+    await open();
+    transport.startOrgPlanSupervision.mockResolvedValueOnce({
+      kind: 'blocked',
+      code: 'WORKSPACE_BUSY',
+      reason: 'Refresh the workspace.',
+    });
+    const ok = screen.getByRole('button', { name: 'OK' });
+    await fireEvent.click(ok);
+    const refresh = await screen.findByRole('button', { name: 'Refresh' });
     transport.prepareOrgPlanSupervision.mockRejectedValueOnce(
       new Error('Fresh profiles unreadable'),
     );
-    await fireEvent.click(screen.getByRole('button', { name: 'Execute' }));
+    await fireEvent.click(refresh);
     await waitFor(() => expect(onerror).toHaveBeenCalledWith('Fresh profiles unreadable'));
-    const ok = screen.getByRole('button', { name: 'OK' });
     expect((ok as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('');
     await fireEvent.click(ok);
-    expect(transport.startOrgPlanSupervision).not.toHaveBeenCalled();
-    await fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(transport.startOrgPlanSupervision).toHaveBeenCalledTimes(1);
+    await fireEvent.click(refresh);
     await waitFor(() => expect((ok as HTMLButtonElement).disabled).toBe(false));
     await fireEvent.click(ok);
-    await waitFor(() => expect(transport.startOrgPlanSupervision).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(transport.startOrgPlanSupervision).toHaveBeenCalledTimes(2));
   });
   it('invalidates confirmation during a held submission when context changes and suppresses its stale presentation', async () => {
     const { transport, onresult, rerender } = setup();
@@ -390,8 +358,12 @@ describe('Execute plan confirmation', () => {
       await tick();
     }
   });
-  it('does not let a stale profile refresh release a newer confirmation check', async () => {
-    const { transport } = setup();
+  it('does not let an old manual refresh release a newer confirmation check', async () => {
+    const occupied = {
+      ...eligible,
+      workspaceSession: { sessionId: 'other', replaceAllowed: false },
+    };
+    const { transport } = setup(occupied);
     await waitFor(() =>
       expect((screen.getByRole('button', { name: 'Execute' }) as HTMLButtonElement).disabled).toBe(
         false,
@@ -414,21 +386,20 @@ describe('Execute plan confirmation', () => {
       );
     try {
       await fireEvent.click(screen.getByRole('button', { name: 'Execute' }));
+      await fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
       await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
       await fireEvent.click(screen.getByRole('button', { name: 'Execute' }));
-      releaseOld(eligible);
+      const refresh = screen.getByRole('button', { name: 'Refresh' });
+      await fireEvent.click(refresh);
+      releaseOld(occupied);
       await tick();
-      expect((screen.getByRole('button', { name: 'OK' }) as HTMLButtonElement).disabled).toBe(true);
+      expect((refresh as HTMLButtonElement).disabled).toBe(true);
       expect(transport.startOrgPlanSupervision).not.toHaveBeenCalled();
-      releaseNew(eligible);
-      await waitFor(() =>
-        expect((screen.getByRole('button', { name: 'OK' }) as HTMLButtonElement).disabled).toBe(
-          false,
-        ),
-      );
+      releaseNew(occupied);
+      await waitFor(() => expect((refresh as HTMLButtonElement).disabled).toBe(false));
     } finally {
-      releaseOld?.(eligible);
-      releaseNew?.(eligible);
+      releaseOld?.(occupied);
+      releaseNew?.(occupied);
       await tick();
     }
   });
