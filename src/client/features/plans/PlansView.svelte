@@ -286,12 +286,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .plan-controls :global(.reason) {
     flex-basis: 100%;
   }
-  @media (max-width: 60rem) {
-    .plan-controls {
-      grid-column: 1 / -1;
-      grid-row: 3;
-    }
-  }
   .plans {
     min-inline-size: 0;
     overflow-wrap: anywhere;

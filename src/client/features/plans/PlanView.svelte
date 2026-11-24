@@ -13,7 +13,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import type { PlanStep, SupervisedPlan } from './contracts.js';
   import type { PlanState } from './plan-controller.js';
   import PlanProgress from './PlanProgress.svelte';
-  import PlanFilePath from './PlanFilePath.svelte';
+  import FullPlanHeader from './FullPlanHeader.svelte';
   import { presentPlan } from './plan-presentation.js';
   const titleId = $props.id();
 
@@ -192,20 +192,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   </section>
 {:else if plan}
   <section class="plan" class:compact aria-labelledby={titleId}>
-    <header>
-      <div class="plan-heading">
+    {#if compact}
+      <header>
         <h2 id={titleId}>{plan.title}</h2>
-        {#if !compact && (plan.sourcePath || sourcePath)}
-          <PlanFilePath path={plan.sourcePath || sourcePath!} {oncopyresult} />
-        {/if}
-      </div>
-      {#if !compact && executeAction}<div class="execute-slot">{@render executeAction()}</div>{/if}
-      {#if compact}
         {#if onopenfull}<button type="button" onclick={onopenfull}>Full plan</button>{/if}
-      {:else}
-        <button class="close" aria-label={closeLabel} onclick={onclose}>×</button>
-      {/if}
-    </header>
+      </header>
+    {:else}
+      <FullPlanHeader
+        title={plan.title}
+        {titleId}
+        sourcePath={plan.sourcePath || sourcePath}
+        {oncopyresult}
+        {executeAction}
+        {closeLabel}
+        {onclose}
+      />
+    {/if}
     <PlanProgress {plan} {compact} />
     {#if !compact}<p>
         {presentation?.label}. Current: {currentStep
@@ -310,10 +312,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .compact header {
     display: flex;
     flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: start;
     gap: 0.5rem;
     margin-block-end: 0.75rem;
   }
   .compact h2 {
+    flex: 1 1 15rem;
+    min-inline-size: 0;
     font-size: 1.125rem;
   }
   .compact .plan-steps {
@@ -322,17 +328,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .plan {
     min-inline-size: 0;
     overflow-wrap: anywhere;
-  }
-  header {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
-    gap: 0.5rem;
-    justify-content: space-between;
-    align-items: start;
-  }
-  .plan-heading {
-    flex: 1 1 15rem;
-    min-inline-size: 0;
   }
   h2,
   p {
@@ -368,14 +363,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .metadata dd {
     margin: 0;
   }
-  .close {
-    grid-column: 3;
-    grid-row: 1;
-    inline-size: 2.75rem;
-    block-size: 2.75rem;
-    flex: 0 0 auto;
-    font-size: 1.5rem;
-  }
   button:focus-visible,
   summary:focus-visible {
     outline: 3px solid currentColor;
@@ -384,29 +371,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   @media (prefers-reduced-motion: reduce) {
     * {
       scroll-behavior: auto;
-    }
-  }
-  .execute-slot {
-    display: contents;
-  }
-  @media (max-width: 40rem) {
-    header {
-      grid-template-columns: minmax(0, 1fr) auto;
-    }
-    .plan:not(.compact) .plan-heading {
-      display: contents;
-    }
-    .plan-heading :global(.plan-file-path) {
-      grid-column: 1;
-      grid-row: 2;
-    }
-    .close {
-      grid-column: 2;
-    }
-  }
-  @media (max-width: 24rem) {
-    .plan-heading :global(.plan-file-path) {
-      grid-column: 1 / -1;
     }
   }
 </style>
