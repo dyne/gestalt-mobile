@@ -429,6 +429,7 @@ describe('workspace file previews', () => {
     await mkdir(join(root, 'docs'));
     await mkdir(join(root, '.git'));
     await writeFile(join(root, 'docs', 'notes.md'), '# Notes\n文');
+    await writeFile(join(root, 'marked.txt'), '\uFEFFhello\r\n');
     await writeFile(join(root, 'binary'), Buffer.from([0, 1, 2]));
     await writeFile(join(root, 'invalid-utf8'), Buffer.from([255]));
     await writeFile(join(root, 'large'), Buffer.alloc(1024 * 1024 + 1, 65));
@@ -452,6 +453,16 @@ describe('workspace file previews', () => {
     });
     for (const path of ['/etc/passwd', '../outside', '.git', 'alias', 'alias/notes.md', 'escape'])
       expect(await files.read(root, path)).toEqual({ kind: 'unreadable' });
+    expect(await files.read(root, 'marked.txt')).toEqual({
+      kind: 'available',
+      preview: {
+        kind: 'file',
+        path: 'marked.txt',
+        content: 'hello\r\n',
+        size: 10,
+        hasUtf8Bom: true,
+      },
+    });
     for (const path of ['binary', 'invalid-utf8'])
       expect(await files.read(root, path)).toEqual({ kind: 'unsupported' });
     expect(await files.read(root, 'large')).toEqual({ kind: 'too-large' });

@@ -229,7 +229,17 @@ export class FilesystemWorkspaceFiles implements WorkspaceFileSource {
         if (bytes.includes(0)) return { kind: 'unsupported' };
         try {
           const content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-          return { kind: 'available', preview: { kind: 'file', path, content, size } };
+          const hasUtf8Bom = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
+          return {
+            kind: 'available',
+            preview: {
+              kind: 'file',
+              path,
+              content,
+              size,
+              ...(hasUtf8Bom ? { hasUtf8Bom: true } : {}),
+            },
+          };
         } catch {
           return { kind: 'unsupported' };
         }
