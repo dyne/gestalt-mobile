@@ -119,7 +119,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { copyText } from './features/sessions/clipboard.js';
   import { createIdempotencyKey } from './features/sessions/idempotency-key.js';
   import { createPlanController, type PlanState } from './features/plans/plan-controller.js';
-  import type { SupervisedPlan } from './features/plans/contracts.js';
+  import {
+    isRelayPlanUpdate,
+    isSupervisedPlan,
+    type SupervisedPlan,
+  } from './features/plans/contracts.js';
   import { weeklyQuotaRemaining } from './features/plans/weekly-quota.js';
   import { workspacePlanNameFromHref } from './features/plans/org-plan-link.js';
   import PlansView, { type PlansCatalogState } from './features/plans/PlansView.svelte';
@@ -473,8 +477,23 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onEvent: (id, event) => {
       autopilotController.observe(id, event);
       if (event.type === 'session.forget.updated') sessionForgetting.observe(id, event.payload);
+      if (id !== sessionId) {
+        if (event.type === 'plan.closed') rememberSessionPlan(id, undefined, true);
+        if (event.type === 'plan.updated') {
+          const plan = isRelayPlanUpdate(event.payload) ? event.payload.plan : event.payload;
+          if (isSupervisedPlan(plan)) rememberSessionPlan(id, plan);
+        }
+      }
     },
-    onAuthoritativeSnapshot: (id, snapshot) => autopilotController.applyAuthoritative(id, snapshot),
+    onAuthoritativeSnapshot: (id, snapshot) => {
+      autopilotController.applyAuthoritative(id, snapshot);
+      // A resync can skip the plan event. Use the sequenced session snapshot
+      // for background cards while the selected plan remains owned by its controller.
+      if (id === sessionId || snapshot.currentSequence === undefined) return;
+      if (isSupervisedPlan(snapshot.plan)) rememberSessionPlan(id, snapshot.plan);
+      else if (snapshot.plan === undefined)
+        rememberSessionPlan(id, undefined, !snapshot.lastOrgPlan?.attached);
+    },
   });
   const chatController = new ChatController({
     relay,

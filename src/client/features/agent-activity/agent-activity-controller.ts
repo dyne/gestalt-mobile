@@ -15,6 +15,8 @@ export type AuthoritativeSessionSnapshot = {
   toolEfficiency?: unknown;
   autopilot?: unknown;
   pendingInteractions?: unknown;
+  plan?: unknown;
+  lastOrgPlan?: { attached?: boolean };
   currentSequence?: number;
 };
 type Relay = {
