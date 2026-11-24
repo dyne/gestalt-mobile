@@ -1420,11 +1420,13 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
     page.getByRole('button', { name: 'Choose prompt action' }).locator('svg'),
   ).toBeVisible();
   const answerHeading = answerTurn.locator('.answer-turn .entry-heading');
-  expect(
-    await answerHeading
-      .locator(':scope > *')
-      .evaluateAll((elements) => elements.map((element) => element.tagName)),
-  ).toEqual(['STRONG', 'TIME']);
+  await expect(answerHeading.getByText('answer', { exact: true })).toBeVisible();
+  await expect(answerHeading.getByRole('switch', { name: 'Raw answer text' })).not.toBeChecked();
+  await expect(answerHeading.getByRole('button', { name: 'Copy answer' })).toBeVisible();
+  await expect(answerHeading.locator('time')).toHaveAttribute(
+    'datetime',
+    '2026-07-15T10:00:00.000Z',
+  );
   await expect(messageList.getByText('I am inspecting the branch.')).toBeVisible();
   await expect(messageList.getByText('The branch is clean.')).toBeVisible();
   await expect(messageList.locator('.live-activity')).toContainText('Successful commands');

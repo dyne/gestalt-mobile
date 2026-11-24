@@ -2065,13 +2065,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     return feedback.message;
   }
 
-  function reportCodeCopy(copied: boolean): void {
+  function reportChatCopy(copied: boolean, subject: 'code' | 'answer' = 'code'): void {
+    const label = subject === 'answer' ? 'Answer' : 'Code';
     toastQueue.enqueue(
       copied
-        ? { kind: 'success', message: 'Code copied.' }
+        ? { kind: 'success', message: `${label} copied.` }
         : {
             kind: 'error',
-            message: 'Code could not be copied. Select it and copy it manually.',
+            message: `${label} could not be copied. Select it and copy it manually.`,
           },
     );
   }
@@ -2484,7 +2485,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                       line,
                     };
                 }}
-                oncopyresult={reportCodeCopy}
+                oncopyresult={reportChatCopy}
               />
               <div bind:this={chatTail} class="chat-tail" aria-hidden="true"></div>
             {:else}

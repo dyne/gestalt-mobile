@@ -140,6 +140,9 @@ describe('MessageList', () => {
       activeTurnId: 'turn',
     });
     const working = screen.getByText('working').closest('.answer-turn');
+    expect(working?.getAttribute('data-reading-order')).toBe('newest-first');
+    expect(screen.queryByRole('switch', { name: 'Raw answer text' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Copy answer' })).toBeNull();
     expect(
       [...working!.querySelectorAll('.message-content')].map((node) => node.textContent),
     ).toEqual([
@@ -155,6 +158,12 @@ describe('MessageList', () => {
       activeTurnId: null,
     });
     expect(view.container.querySelector('.working-content')).toBeNull();
+    expect(
+      screen
+        .getByText('answer', { exact: true })
+        .closest('.answer-turn')
+        ?.getAttribute('data-reading-order'),
+    ).toBe('top-down');
     expect(view.container.querySelector('.answer-turn .entry-content')?.textContent).toBe(
       'First answer paragraph.\n\nLast answer paragraph.',
     );
@@ -548,6 +557,35 @@ describe('MessageList', () => {
     const heading = screen.getByRole('heading', { level: 3, name: 'A clear title' });
     expect(heading.querySelector('strong')?.textContent).toBe('clear title');
     expect(screen.getByText('important').tagName).toBe('STRONG');
+  });
+
+  it('toggles one completed answer and copies its exact source in either mode', async () => {
+    const text = '## Result\n\n[notes](/tmp/notes.md)\n\n```js\n  const x = "<b>";\n```\n';
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const oncopyresult = vi.fn();
+    render(MessageList, {
+      messages: [
+        { id: 'older', role: 'assistant', text: '## Earlier', complete: true },
+        { id: 'final', role: 'assistant', text, complete: true },
+      ],
+      activities: [],
+      clipboard: { writeText },
+      oncopyresult,
+    });
+    const [toggle, olderToggle] = screen.getAllByRole('switch', { name: 'Raw answer text' });
+    const copy = screen.getAllByRole('button', { name: 'Copy answer' })[0]!;
+    expect(screen.getByRole('link', { name: 'notes' })).toBeTruthy();
+    await fireEvent.click(copy);
+    await fireEvent.click(toggle!);
+    expect(olderToggle?.getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByRole('heading', { name: 'Earlier' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'notes' })).toBeNull();
+    expect(document.querySelector('pre.raw-answer')?.textContent).toBe(text);
+    await fireEvent.click(copy);
+    expect(writeText.mock.calls).toEqual([[text], [text]]);
+    expect(oncopyresult).toHaveBeenCalledWith(true, 'answer');
+    await fireEvent.click(toggle!);
+    expect(screen.getByRole('heading', { name: 'Result' })).toBeTruthy();
   });
 
   it('copies a fenced code block with an accessible one-click control', async () => {

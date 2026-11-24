@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <script lang="ts">
   import { onMount, tick, type Snippet } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
   import AutopilotAttention from '../autopilot/AutopilotAttention.svelte';
   import type { OrgPlanAttention } from '../autopilot/contracts.js';
   import { boundedAttentionReport } from '../../../shared/contracts/attention-report.js';
@@ -22,6 +23,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { summarizeChangedFiles, summarizeFileChangeTotals } from './file-change-summary.js';
   import MessageContent from './MessageContent.svelte';
   import WorkingContent from './WorkingContent.svelte';
+  import { copyText } from '../sessions/clipboard.js';
   import type { ProjectedInteraction } from './chat-projection.js';
   import type { SubmittedQuizAnswer } from './quiz-submission.js';
 
@@ -47,7 +49,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onretry?(interaction: ProjectedInteraction): void;
     onopenorg?(href: string): void;
     onopenfile?(path: string, line?: number): void;
-    oncopyresult?(copied: boolean): void;
+    oncopyresult?(copied: boolean, subject?: 'code' | 'answer'): void;
   };
   let {
     messages,
@@ -199,6 +201,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     return { ...record, ...(supervisorReport ? { supervisorReport } : {}) };
   }
   let expandedCommentary = $state<Record<string, boolean>>({});
+  const rawAnswers = new SvelteSet<string>();
   let now = $state(Date.now());
   onMount(() => {
     const timer = globalThis.setInterval(() => (now = Date.now()), 1_000);
@@ -456,9 +459,48 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         {/if}
       {:else if group.answer !== null}
         {@const ownedActivities = activitiesByOwner.get(group.id) ?? []}
-        <section class="answer-turn">
-          <div class="entry-heading">
-            <strong>{isLive(group) ? 'working' : 'answer'}</strong>
+        {@const live = isLive(group)}
+        {@const answer = group.answer}
+        {@const raw = rawAnswers.has(group.id)}
+        <section
+          class="answer-turn"
+          data-reading-order={live ? 'newest-first' : 'top-down'}
+          aria-label={live ? 'Working, newest paragraphs first' : 'Answer, read from top to bottom'}
+        >
+          <div class="entry-heading" class:finished-heading={!live}>
+            <strong>{live ? 'working' : 'answer'}</strong>
+            {#if !live}
+              <div class="answer-tools">
+                <button
+                  type="button"
+                  class="mode-switch"
+                  role="switch"
+                  aria-label="Raw answer text"
+                  aria-checked={raw}
+                  onclick={() => {
+                    if (raw) rawAnswers.delete(group.id);
+                    else rawAnswers.add(group.id);
+                  }}
+                >
+                  <span class="mode-track" aria-hidden="true"
+                    ><span class:selected={!raw}>View</span><span class:selected={raw}>Raw</span
+                    ></span
+                  >
+                </button>
+                <button
+                  type="button"
+                  class="copy-answer"
+                  aria-label="Copy answer"
+                  title="Copy answer"
+                  onclick={async () => oncopyresult(await copyText(answer, clipboard), 'answer')}
+                >
+                  <svg aria-hidden="true" viewBox="0 0 24 24">
+                    <rect x="9" y="9" width="11" height="12" rx="2" />
+                    <path d="M15 9V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" />
+                  </svg>
+                </button>
+              </div>
+            {/if}
             {#if group.occurredAt}
               <time datetime={new Date(group.occurredAt).toISOString()}>
                 {formatMessageTime(group.occurredAt)}
@@ -468,10 +510,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               </time>
             {/if}
           </div>
-          {#if isLive(group)}
+          {#if live}
             <div class="entry-content">{@render workingContent(group.answer)}</div>
             {#if group.commentary}
-              <div class="commentary-content live-commentary">
+              <div class="commentary-content live-commentary" data-reading-order="newest-first">
                 {@render workingContent(group.commentary)}
               </div>
             {/if}
@@ -493,19 +535,30 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               {/if}
             </div>
           {/if}
-          {#if !isLive(group) && group.commentary && expandedCommentary[group.id]}
-            <div class="commentary-content" id={`commentary-${group.id}`}>
+          {#if !live && group.commentary && expandedCommentary[group.id]}
+            <div
+              class="commentary-content"
+              data-reading-order="top-down"
+              id={`commentary-${group.id}`}
+            >
               {@render content(group.commentary)}
             </div>
           {/if}
-          {#if !isLive(group)}
-            <div class="entry-content">{@render content(group.answer)}</div>
+          {#if !live}
+            <div class="entry-content">
+              {#if raw}<pre class="raw-answer"><code>{answer}</code></pre>
+              {:else}{@render content(answer)}{/if}
+            </div>
             <WorkDetails activities={ownedActivities} {now} />
           {/if}
         </section>
       {:else if group.commentary !== null}
         {@const ownedActivities = activitiesByOwner.get(group.id) ?? []}
-        <section class="progress-turn">
+        <section
+          class="progress-turn"
+          data-reading-order="newest-first"
+          aria-label="Working, newest paragraphs first"
+        >
           <div class="entry-heading">
             <strong>working</strong>
             {#if group.occurredAt}
@@ -611,6 +664,116 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     gap: 0.75rem;
     color: var(--theme-text-muted);
     font-size: 0.875rem;
+  }
+
+  [data-reading-order] {
+    position: relative;
+    padding-inline-start: 1rem;
+    border-inline-start: 0;
+    --reading-line: var(--theme-border);
+  }
+
+  [data-reading-order='newest-first'] {
+    --reading-line: var(--theme-info);
+  }
+
+  [data-reading-order]::before,
+  [data-reading-order]::after {
+    content: '';
+    position: absolute;
+    pointer-events: none;
+    overflow-anchor: none;
+  }
+
+  [data-reading-order]::before {
+    inset-block: 3px;
+    inset-inline-start: 4px;
+    border-inline-start: 2px solid var(--reading-line);
+  }
+
+  [data-reading-order]::after {
+    inset-inline-start: 1px;
+    inline-size: 6px;
+    block-size: 6px;
+    border: solid var(--reading-line);
+    border-width: 0 2px 2px 0;
+  }
+
+  [data-reading-order='top-down']::after {
+    inset-block-end: 3px;
+    transform: rotate(45deg);
+  }
+  [data-reading-order='newest-first']::after {
+    inset-block-start: 3px;
+    transform: rotate(225deg);
+  }
+
+  .finished-heading {
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.375rem;
+  }
+  .finished-heading time {
+    min-inline-size: 0;
+    text-align: end;
+  }
+  .answer-tools {
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+  }
+  .answer-tools button {
+    display: grid;
+    place-items: center;
+    min-block-size: 32px;
+    padding: 0;
+    background: transparent;
+    color: var(--theme-text-muted);
+    border: 0;
+  }
+  .mode-track {
+    display: flex;
+    padding: 2px;
+    border-radius: var(--theme-radius);
+    background: var(--theme-surface-subtle);
+    font-size: 0.8125rem;
+    line-height: 1.4;
+  }
+  .mode-track span {
+    padding: 0.05rem 0.375rem;
+    border-radius: calc(var(--theme-radius) - 2px);
+  }
+  .mode-track .selected {
+    background: var(--theme-text);
+    color: var(--theme-surface);
+    font-weight: 600;
+  }
+  .copy-answer {
+    inline-size: 32px;
+  }
+  .copy-answer:hover {
+    color: var(--theme-text);
+  }
+  .copy-answer svg {
+    inline-size: 1rem;
+    block-size: 1rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.75;
+  }
+  @media (pointer: coarse) {
+    .answer-tools button {
+      min-block-size: 44px;
+    }
+    .copy-answer {
+      inline-size: 44px;
+    }
+  }
+  .raw-answer {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font: 0.875rem / 1.5 var(--theme-font-code);
   }
 
   time {
