@@ -471,6 +471,71 @@ for (const { width, scale, theme } of [
   });
 }
 
+test('session cards track a background Org plan in Sessions and Chat', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const { fixture } = await install(page);
+  const initial = plan('Beta plan');
+  const beta = fixture.sessions.find((session) => session.id === 'beta')!;
+  Object.assign(beta, {
+    plan: initial,
+    lastOrgPlan: { filename: 'beta.org', title: initial.title, attached: true },
+  });
+  let betaSnapshot = { ...beta, plan: initial, currentSequence: 0 };
+  await page.route('**/api/sessions/beta', (route) => route.fulfill({ json: betaSnapshot }));
+  const progressName = { name: 'Plan progress for Beta plan', exact: true };
+  const next: SupervisedPlan = {
+    ...initial,
+    steps: [
+      {
+        ...initial.steps[0]!,
+        state: 'DONE',
+        children: initial.steps[0]!.children.map((step) => ({ ...step, state: 'DONE' })),
+      },
+      { ...initial.steps[1]!, state: 'WIP' },
+    ],
+    currentStepId: 'review',
+    doneSteps: 2,
+  };
+
+  await page.goto('/');
+  const card = page.locator('[data-session-id="beta"]');
+  await expect(card.getByRole('progressbar', progressName)).toHaveAttribute('value', '0');
+  await expect.poll(() => fixture.sockets.has('beta')).toBe(true);
+  fixture.event('beta', 1, 'plan.updated', { plan: next, reason: null });
+  await expect(card.getByRole('progressbar', progressName)).toHaveAttribute('value', '2');
+  await expect(card.locator('[aria-current="step"]')).toHaveText(/Review the result/);
+
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  const sidebar = page.getByRole('complementary', { name: 'Chat sessions and usage' });
+  const sidebarCard = sidebar.locator('[data-session-id="beta"]');
+  await expect(sidebarCard.getByRole('progressbar', progressName)).toHaveAttribute('value', '2');
+  await expect(page.getByRole('heading', { name: 'Alpha plan', exact: true })).toBeVisible();
+
+  // Resync skips the completion event and reconciles from the sequenced detail response.
+  betaSnapshot = {
+    ...betaSnapshot,
+    currentSequence: 2,
+    plan: {
+      ...next,
+      steps: next.steps.map((step) => ({ ...step, state: 'DONE' })),
+      doneSteps: 3,
+      allDone: true,
+    },
+  };
+  fixture.sockets.get('beta')!.send(JSON.stringify({ type: 'relay.resyncRequired' }));
+  await expect(sidebarCard.getByRole('progressbar', progressName)).toHaveAttribute('value', '3');
+  await expect(page.getByRole('heading', { name: 'Alpha plan', exact: true })).toBeVisible();
+
+  fixture.event('beta', 3, 'plan.closed', {});
+  await expect(sidebarCard.getByRole('progressbar', progressName)).toHaveCount(0);
+  await expect(sidebarCard).not.toContainText('Org plan attached');
+  fixture.event('beta', 1, 'plan.updated', { plan: next, reason: null });
+  await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+  await expect(card.getByRole('progressbar', progressName)).toHaveCount(0);
+  await expect(card).not.toContainText('Org plan attached');
+  expect(fixture.protocol).not.toContainEqual({ kind: 'history', sessionId: 'beta' });
+});
+
 test('sidebar selection follows the current session and live plan without scrolling the chat', async ({
   page,
 }) => {
