@@ -5,7 +5,11 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CodexAllowanceReader, decodeCodexAllowance } from './codex-allowance.js';
+import {
+  CodexAllowanceReader,
+  decodeCodexAllowance,
+  decodeWeeklyResetCandidate,
+} from './codex-allowance.js';
 
 const weekly = { windowDurationMins: 10_080, usedPercent: 37, resetsAt: 1_800_000_000 };
 const response = {
@@ -13,6 +17,43 @@ const response = {
   rateLimitResetCredits: { availableCount: 3, credits: [] },
 };
 afterEach(() => vi.useRealTimers());
+
+it('requires exact weekly exhaustion, a future reset and a usable Codex credit', () => {
+  const now = (weekly.resetsAt - 600) * 1000;
+  const credit = { id: 'private-credit', status: 'available', resetType: 'codexRateLimits' };
+  const credits = { availableCount: 1, credits: [credit] };
+  const depleted = { ...weekly, usedPercent: 100 };
+  const complete = { rateLimits: { secondary: depleted }, rateLimitResetCredits: credits };
+  expect(decodeWeeklyResetCandidate(complete, now)).toEqual({
+    creditId: credit.id,
+    weeklyResetsAt: weekly.resetsAt,
+  });
+  for (const value of [
+    { ...complete, rateLimits: { primary: { ...depleted, windowDurationMins: 300 } } },
+    { ...complete, rateLimits: { secondary: { ...weekly, usedPercent: 99.9 } } },
+    { ...complete, rateLimits: { secondary: { ...depleted, resetsAt: now / 1000 + 60 } } },
+    { ...complete, rateLimits: { ...complete.rateLimits, spendControlReached: true } },
+    {
+      ...complete,
+      rateLimits: {
+        ...complete.rateLimits,
+        rateLimitReachedType: 'workspace_member_usage_limit_reached',
+      },
+    },
+    { ...complete, rateLimitResetCredits: { ...credits, availableCount: 0 } },
+    {
+      ...complete,
+      rateLimitResetCredits: { ...credits, credits: [{ ...credit, status: 'redeeming' }] },
+    },
+    {
+      ...complete,
+      rateLimitResetCredits: { ...credits, credits: [{ ...credit, expiresAt: now / 1000 }] },
+    },
+    { ...complete, rateLimitResetCredits: { ...credits, credits: [] } },
+  ])
+    expect(decodeWeeklyResetCandidate(value, now)).toBeNull();
+  expect(JSON.stringify(decodeCodexAllowance(complete))).not.toContain(credit.id);
+});
 
 describe('Codex allowance', () => {
   it('reads the weekly window by duration and uses the authoritative reset count', () => {

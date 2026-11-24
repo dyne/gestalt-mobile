@@ -9853,6 +9853,9 @@ describe('production composition', () => {
         ['HEAD', '/api/bootstrap', '/api/bootstrap', 'protected'],
         ['GET', '/api/codex/allowance', '/api/codex/allowance', 'protected'],
         ['HEAD', '/api/codex/allowance', '/api/codex/allowance', 'protected'],
+        ['GET', '/api/codex/allowance/auto-reset', '/api/codex/allowance/auto-reset', 'protected'],
+        ['HEAD', '/api/codex/allowance/auto-reset', '/api/codex/allowance/auto-reset', 'protected'],
+        ['PUT', '/api/codex/allowance/auto-reset', '/api/codex/allowance/auto-reset', 'protected'],
         ['GET', '/api/session-defaults', '/api/session-defaults', 'protected'],
         ['HEAD', '/api/session-defaults', '/api/session-defaults', 'protected'],
         ['PUT', '/api/session-defaults', '/api/session-defaults', 'protected'],
@@ -10256,6 +10259,105 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('sessions', () => {
+    it('redeems one weekly reset credit on a matched terminal Codex failure and records a receipt', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'gestalt-weekly-reset-root-'));
+      const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-weekly-reset-state-'));
+      ownTemporaryPaths(root, dataDir);
+      await mkdir(join(root, 'workspace'));
+      const handles: LiveServerHandle[] = [];
+      const app = await composeAuthorizedApp({
+        root,
+        dataDir,
+        relyingParty,
+        installedCodexVersion: 'codex-cli 0.170.0',
+        startAppServers: true,
+        launchAppServer: liveAppServer(handles),
+        profiles: {
+          list: async () => [],
+          require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
+        },
+      });
+      onTestFinished(() => app.close());
+      const policy = '/api/codex/allowance/auto-reset';
+      expect(
+        (await app.inject({ method: 'PUT', url: policy, payload: { enabled: true } })).statusCode,
+      ).toBe(200);
+      const id = await createComposedSession(app);
+      await vi.waitFor(async () => {
+        expect((await app.inject(`/api/sessions/${id}`)).json().state).toBe('ready');
+      });
+      expect(
+        (
+          await app.inject({
+            method: 'POST',
+            url: `/api/sessions/${id}/turns`,
+            payload: { text: 'fixture' },
+          })
+        ).statusCode,
+      ).toBe(202);
+      const session = (await app.inject(`/api/sessions/${id}`)).json();
+      const handle = handles.find((candidate) => candidate.calls.includes('turn/start'))!;
+      handle.respond = (method) => {
+        if (method === 'account/rateLimits/read')
+          return {
+            rateLimits: {
+              secondary: {
+                windowDurationMins: 10_080,
+                usedPercent: 100,
+                resetsAt: Math.floor(Date.now() / 1000) + 1_200,
+              },
+            },
+            rateLimitResetCredits: {
+              availableCount: 1,
+              credits: [
+                { id: 'fixture-credit', status: 'available', resetType: 'codexRateLimits' },
+              ],
+            },
+          };
+        if (method === 'account/rateLimitResetCredit/consume') return { outcome: 'reset' };
+      };
+      const error = { codexErrorInfo: 'usageLimitExceeded' };
+      handle.notify!({
+        method: 'error',
+        params: {
+          threadId: 'unknown-thread',
+          turnId: 'unknown-turn',
+          error,
+          willRetry: false,
+        },
+      });
+      expect(handle.calls).not.toContain('account/rateLimits/read');
+      handle.notify!({
+        method: 'error',
+        params: {
+          threadId: session.threadId,
+          turnId: session.activeTurnId,
+          error,
+          willRetry: false,
+        },
+      });
+      handle.notify!({
+        method: 'turn/completed',
+        params: {
+          threadId: session.threadId,
+          turn: { id: session.activeTurnId, status: 'failed', error },
+        },
+      });
+      await vi.waitFor(async () => {
+        expect((await app.inject(policy)).json().resets).toEqual([
+          { id: expect.any(String), occurredAt: expect.any(Number) },
+        ]);
+      });
+      expect(
+        handle.requests.filter((call) => call.method === 'account/rateLimitResetCredit/consume'),
+      ).toEqual([
+        {
+          method: 'account/rateLimitResetCredit/consume',
+          params: { creditId: 'fixture-credit', idempotencyKey: expect.any(String) },
+        },
+      ]);
+      expect(handle.calls.filter((method) => method === 'turn/start')).toHaveLength(1);
+    });
     it('does not return retained display history as current when an in-flight plan refresh is superseded by mandatory rejection', async () => {
       const { app, sessionId, workspacePath } = await createProductionAutopilotFixture();
       const url = `/api/sessions/${sessionId}/plan`;

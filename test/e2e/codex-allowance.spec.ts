@@ -21,6 +21,45 @@ async function install(page: Page) {
   );
 }
 
+test('saves Use when over and logs a background redemption as information', async ({ page }) => {
+  await install(page);
+  await page.clock.install();
+  const resets: { id: string; occurredAt: number }[] = [];
+  const saves: boolean[] = [];
+  let enabled = false;
+  await page.route('**/api/codex/allowance', (route) =>
+    route.fulfill({
+      json: { weeklyRemainingPercent: 0, weeklyResetsAt: null, resetsAvailable: 2 },
+    }),
+  );
+  await page.route('**/api/codex/allowance/auto-reset', (route) => {
+    if (route.request().method() === 'PUT') {
+      enabled = route.request().postDataJSON().enabled as boolean;
+      saves.push(enabled);
+    }
+    return route.fulfill({ json: { enabled, resets } });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+  const checkbox = page.getByRole('checkbox', { name: 'Use when over' });
+  await expect(checkbox).toBeEnabled();
+  await expect(checkbox).not.toBeChecked();
+  await checkbox.click();
+  await expect(checkbox).toBeChecked();
+  expect(saves).toEqual([true]);
+  await page.getByLabel('Primary').getByRole('button', { name: 'Git', exact: true }).click();
+  resets.push({ id: 'reset-one', occurredAt: Date.now() });
+  await page.clock.fastForward(15_001);
+  const message = 'Gestalt used a reset credit for the Codex weekly allowance.';
+  await expect(page.getByRole('status').filter({ hasText: message })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: message })).toHaveCount(0);
+  await page.reload();
+  await page.getByRole('button', { name: 'Open configuration' }).click();
+  await page.getByRole('button', { name: 'Notifications' }).click();
+  const history = page.getByRole('list', { name: 'Recent notifications' });
+  await expect(history.getByText(message, { exact: true })).toHaveCount(1);
+});
+
 for (const [width, theme] of [
   [320, 'minimal-light'],
   [390, 'minimal-dark'],

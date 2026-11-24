@@ -6,6 +6,7 @@
 
 import { z } from 'zod';
 import type { CodexAllowance } from '../../../shared/contracts/codex-allowance.js';
+import type { WeeklyResetCandidate } from '../../features/catalog/application/codex-auto-reset.js';
 import { launchCodexAppServer, type CodexProcess } from './codex-process-launcher.js';
 
 const windowSchema = z.object({
@@ -15,8 +16,7 @@ const windowSchema = z.object({
 });
 const recordSchema = z.record(z.string(), z.unknown());
 
-/** Return only account-wide counters, never account identifiers or credit details. */
-export function decodeCodexAllowance(value: unknown): CodexAllowance {
+function readCodexLimits(value: unknown) {
   const response = recordSchema.safeParse(value);
   const data = response.success ? response.data : {};
   const buckets = recordSchema.safeParse(data.rateLimitsByLimitId);
@@ -30,22 +30,64 @@ export function decodeCodexAllowance(value: unknown): CodexAllowance {
   const weekly = [limits.primary, limits.secondary]
     .map((window) => windowSchema.safeParse(window))
     .find((window) => window.success);
+  return {
+    limits,
+    weekly: weekly?.success ? weekly.data : undefined,
+    credits: data.rateLimitResetCredits,
+  };
+}
+
+/** Return only account-wide counters, never account identifiers or credit details. */
+export function decodeCodexAllowance(value: unknown): CodexAllowance {
+  const { weekly, credits: rawCredits } = readCodexLimits(value);
   const credits = z
     .object({ availableCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) })
-    .safeParse(data.rateLimitResetCredits);
-  const reset = z
-    .number()
-    .int()
-    .nonnegative()
-    .max(8_640_000_000_000)
-    .safeParse(weekly?.success ? weekly.data.resetsAt : null);
+    .safeParse(rawCredits);
+  const reset = z.number().int().nonnegative().max(8_640_000_000_000).safeParse(weekly?.resetsAt);
   return {
-    weeklyRemainingPercent: weekly?.success
-      ? Math.round(Math.max(0, Math.min(100, 100 - weekly.data.usedPercent)))
+    weeklyRemainingPercent: weekly
+      ? Math.round(Math.max(0, Math.min(100, 100 - weekly.usedPercent)))
       : null,
     resetsAvailable: credits.success ? credits.data.availableCount : null,
     weeklyResetsAt: reset.success ? reset.data : null,
   };
+}
+
+const availableCreditSchema = z.object({
+  id: z.string().min(1).max(512),
+  status: z.literal('available'),
+  resetType: z.literal('codexRateLimits'),
+  expiresAt: z.number().int().nonnegative().nullish(),
+});
+
+export function decodeWeeklyResetCandidate(
+  value: unknown,
+  now: number,
+): WeeklyResetCandidate | null {
+  const { limits, weekly, credits } = readCodexLimits(value);
+  const reached = limits.rateLimitReachedType;
+  if (
+    !weekly ||
+    weekly.usedPercent < 100 ||
+    limits.spendControlReached === true ||
+    (reached != null && reached !== 'rate_limit_reached')
+  )
+    return null;
+  const resetsAt = z.number().int().positive().max(8_640_000_000_000).safeParse(weekly.resetsAt);
+  if (!resetsAt.success || resetsAt.data * 1000 <= now + 60_000) return null;
+  const summary = z
+    .object({ availableCount: z.number().int().positive(), credits: z.array(z.unknown()) })
+    .safeParse(credits);
+  if (!summary.success) return null;
+  for (const row of summary.data.credits) {
+    const credit = availableCreditSchema.safeParse(row);
+    if (
+      credit.success &&
+      (credit.data.expiresAt == null || credit.data.expiresAt * 1000 > now + 10_000)
+    )
+      return { creditId: credit.data.id, weeklyResetsAt: resetsAt.data };
+  }
+  return null;
 }
 
 type Server = Pick<CodexProcess, 'close'> & {

@@ -88,6 +88,11 @@ for (const settings of [
       });
     }, settings.fontPercent);
     await mockAuthenticatedStatus(page);
+    await page.route('**/api/codex/allowance/auto-reset', (route) =>
+      route.request().method() === 'GET'
+        ? route.fulfill({ json: { enabled: false, resets: [] } })
+        : route.fallback(),
+    );
     const fixture = new ChatRelayFixture(page);
     await fixture.install([saved]);
     fixture.snapshot(

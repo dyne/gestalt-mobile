@@ -43,6 +43,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     rosterOnly?: boolean;
     allowanceFetcher?: typeof fetch;
     onallowanceerror?: () => void;
+    useWhenOver?: boolean | null;
+    savingAutoReset?: boolean;
+    onautoreset?: (enabled: boolean) => void;
     sessions: RelaySession[];
     forgettingStates?: ReadonlyMap<string, SessionForgetState>;
     recentSessions: RecentSession[];
@@ -111,6 +114,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     rosterOnly = false,
     allowanceFetcher,
     onallowanceerror = () => {},
+    useWhenOver,
+    savingAutoReset,
+    onautoreset,
     sessions,
     forgettingStates = new Map(),
     recentSessions,
@@ -294,7 +300,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <section class:roster-only={rosterOnly} aria-labelledby="sessions-title">
   <h2 id="sessions-title" class="visually-hidden">Sessions</h2>
   {#if allowanceFetcher}
-    <CodexAllowance fetcher={allowanceFetcher} onerror={onallowanceerror} />
+    <CodexAllowance
+      fetcher={allowanceFetcher}
+      onerror={onallowanceerror}
+      {useWhenOver}
+      {savingAutoReset}
+      {onautoreset}
+    />
   {/if}
   {#if openSessions.length}
     <section aria-labelledby="open-sessions-title">

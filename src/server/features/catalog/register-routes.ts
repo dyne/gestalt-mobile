@@ -10,6 +10,10 @@ import type { BootstrapDependencies } from './get-bootstrap/use-case.js';
 import { registerGetBootstrap } from './get-bootstrap/endpoint.js';
 import { registerSessionDefaults } from './session-defaults/endpoint.js';
 import {
+  registerCodexAutoReset,
+  type CodexAutoResetPreferences,
+} from './codex-auto-reset/endpoint.js';
+import {
   registerGetCodexAllowance,
   type CodexAllowanceReader,
 } from './get-codex-allowance/endpoint.js';
@@ -20,9 +24,11 @@ export function registerCatalogRoutes(
     bootstrap?: BootstrapDependencies;
     sessionDefaults?: SessionDefaultsStore;
     codexAllowance?: CodexAllowanceReader;
+    codexAutoReset?: CodexAutoResetPreferences;
   },
 ): void {
   if (deps.bootstrap) registerGetBootstrap(app, deps.bootstrap);
   if (deps.codexAllowance) registerGetCodexAllowance(app, deps.codexAllowance);
+  if (deps.codexAutoReset) registerCodexAutoReset(app, deps.codexAutoReset);
   if (deps.sessionDefaults) registerSessionDefaults(app, deps.sessionDefaults);
 }
