@@ -7,10 +7,11 @@
 import fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { registerReadSessionLink } from './endpoint.js';
+import type { FilePreviewResult } from '../application/ports.js';
 
 function fixture(type = 'agentMessage', text = '[Trace](/tmp/trace.json:12)') {
   const app = fastify();
-  const readLinkedFile = vi.fn(async () => ({
+  const readLinkedFile = vi.fn(async (): Promise<FilePreviewResult> => ({
     kind: 'available' as const,
     preview: { kind: 'file' as const, path: '/tmp/trace.json', content: '{"ok":true}', size: 11 },
   }));
@@ -26,6 +27,24 @@ function fixture(type = 'agentMessage', text = '[Trace](/tmp/trace.json:12)') {
   return { app, readLinkedFile, readWorkspaceFile };
 }
 describe('session linked file previews', () => {
+  it('returns an image explicitly linked outside the workspace', async () => {
+    const path = '/tmp/screen.png';
+    const { app, readLinkedFile } = fixture('agentMessage', `[Screenshot](${path})`);
+    const preview = {
+      kind: 'image',
+      path,
+      mediaType: 'image/png',
+      size: 8,
+      base64: 'iVBORw0KGgo=',
+    } as const;
+    readLinkedFile.mockResolvedValueOnce({ kind: 'available', preview });
+    const response = await app.inject(
+      '/api/sessions/s/files/preview?' + new URLSearchParams({ path }),
+    );
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(preview);
+    await app.close();
+  });
   it('allows an outside file explicitly linked by this session assistant', async () => {
     const { app, readLinkedFile } = fixture();
     const response = await app.inject('/api/sessions/s/files/preview?path=%2Ftmp%2Ftrace.json');

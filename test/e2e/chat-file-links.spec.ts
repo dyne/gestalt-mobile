@@ -33,16 +33,38 @@ for (const width of [390, 1280]) {
           {
             id: 'a',
             kind: 'agent',
-            text: '[Trace](/tmp/trace.json) [Notes](</workspace/My Notes.md:12>) [Source](/workspace/app.ts#L50) [Missing](/tmp/missing.json) [Web](https://example.com)',
+            text: '[Trace](/tmp/trace.json) [Notes](</workspace/My Notes.md:12>) [Source](/workspace/app.ts#L50) [Screenshot](/tmp/screen.png) [Photo](</workspace/My photo.jpg>) [Missing](/tmp/missing.json) [Web](https://example.com)',
             phase: 'final_answer',
           },
         ],
       }),
     );
     const paths: string[] = [];
+    const images = await page.evaluate(() => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 800;
+      canvas.height = 450;
+      return {
+        png: canvas.toDataURL('image/png').split(',')[1]!,
+        jpeg: canvas.toDataURL('image/jpeg').split(',')[1]!,
+      };
+    });
     await page.route('**/api/sessions/s/files/preview?**', (route) => {
       const path = new URL(route.request().url()).searchParams.get('path')!;
       paths.push(path);
+      if (path.endsWith('.png') || path.endsWith('.jpg')) {
+        const format = path.endsWith('.png') ? 'png' : 'jpeg';
+        const base64 = images[format];
+        return route.fulfill({
+          json: {
+            kind: 'image',
+            path,
+            mediaType: `image/${format}`,
+            base64,
+            size: Buffer.byteLength(base64, 'base64'),
+          },
+        });
+      }
       if (path.includes('missing'))
         return route.fulfill({ status: 404, json: { code: 'FILE_PREVIEW_NOT_FOUND' } });
       return route.fulfill({
@@ -65,6 +87,8 @@ for (const width of [390, 1280]) {
       ['Trace', '/tmp/trace.json'],
       ['Notes', '/workspace/My Notes.md'],
       ['Source', '/workspace/app.ts'],
+      ['Screenshot', '/tmp/screen.png'],
+      ['Photo', '/workspace/My photo.jpg'],
     ]) {
       const link = page.getByRole('link', { name: label, exact: true });
       await link.focus();
@@ -72,6 +96,15 @@ for (const width of [390, 1280]) {
       const viewer = page.getByRole('dialog');
       await expect(viewer).toBeVisible();
       await expect(viewer).toContainText(path);
+      if (label === 'Screenshot' || label === 'Photo') {
+        const image = viewer.getByRole('img', { name: path.split('/').at(-1)! });
+        await expect(image).toBeInViewport();
+        await expect
+          .poll(() => image.evaluate((el: HTMLImageElement) => [el.naturalWidth, el.naturalHeight]))
+          .toEqual([800, 450]);
+        expect((await image.boundingBox())!.width).toBeLessThanOrEqual(width);
+        await expect(viewer.getByRole('button', { name: 'Show source' })).toHaveCount(0);
+      }
       if (label === 'Trace')
         await expect(viewer.getByRole('button', { name: 'Unfold all JSON' })).toBeVisible();
       if (label === 'Notes') {
@@ -94,7 +127,13 @@ for (const width of [390, 1280]) {
       await expect(link).toBeFocused();
       expect(page.url()).toBe(url);
     }
-    expect(paths).toEqual(['/tmp/trace.json', '/workspace/My Notes.md', '/workspace/app.ts']);
+    expect(paths).toEqual([
+      '/tmp/trace.json',
+      '/workspace/My Notes.md',
+      '/workspace/app.ts',
+      '/tmp/screen.png',
+      '/workspace/My photo.jpg',
+    ]);
     await expect(page.getByRole('link', { name: 'Web', exact: true })).toHaveAttribute(
       'target',
       '_blank',

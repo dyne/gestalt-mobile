@@ -42,7 +42,7 @@ export function registerReadSessionLink(
       );
       if (!linked) return reply.code(403).send({ code: 'FILE_PREVIEW_NOT_LINKED' });
       const result = await deps.readLinkedFile(session.workspacePath, path);
-      if (result.kind === 'available' && result.preview.kind === 'file')
+      if (result.kind === 'available' && result.preview.kind !== 'directory')
         return reply.send(result.preview);
       const errors = {
         missing: [404, 'FILE_PREVIEW_NOT_FOUND'],
