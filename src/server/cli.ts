@@ -14,7 +14,17 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { composeRelayApp } from './composition.js';
-import { CliUsageError, parseConfig, type RelayConfig } from './config.js';
+import {
+  CliUsageError,
+  createRelyingPartyConfig,
+  parseConfig,
+  type RelayConfig,
+} from './config.js';
+import {
+  AuthorizationHostnameMismatchError,
+  checkAuthorizationHostname,
+  resetAuthorizationHostname,
+} from './platform/auth/sqlite-authorization-store.js';
 import { LauncherProfileCatalog } from './platform/catalog/launcher-profile-catalog.js';
 import { FilesystemSkillProfileStore } from './platform/skills/filesystem-skill-profile-store.js';
 import { loadPwaIcon } from './platform/pwa/load-pwa-icon.js';
@@ -29,6 +39,7 @@ const runFile = promisify(execFile);
 
 export const usage = `Usage: gestalt-mobile [options]
        gestalt-mobile trace <session-id> [--json] [--cwd <path>] [--data-dir <path>]
+       gestalt-mobile reset-passkeys --public-origin <origin> --confirm
 
 Options:
   --cwd <path>       Workspace root (default: current directory)
@@ -193,6 +204,7 @@ function parseInvocation(
   | { command: 'help' }
   | { command: 'version' }
   | { command: 'list' }
+  | { command: 'reset-passkeys'; rpId: string }
   | {
       command: 'trace';
       sessionId: string;
@@ -200,6 +212,20 @@ function parseInvocation(
       root: string;
       dataDir?: string;
     } {
+  if (args[0] === 'reset-passkeys') {
+    const options = args.slice(1);
+    const originIndex = options.indexOf('--public-origin');
+    const origin = options[originIndex + 1];
+    if (
+      options.length !== 3 ||
+      originIndex < 0 ||
+      !origin ||
+      origin.startsWith('--') ||
+      !options.includes('--confirm')
+    )
+      throw new CliUsageError('Passkey reset requires --public-origin <origin> and --confirm');
+    return { command: 'reset-passkeys', rpId: createRelyingPartyConfig(origin).rpId };
+  }
   if (args[0] === 'trace') {
     const sessionId = args[1];
     if (!sessionId || sessionId.startsWith('--'))
@@ -267,12 +293,35 @@ async function listSkillProfiles(
   return failed ? 1 : 0;
 }
 
+function reportHostnameMismatch(
+  error: unknown,
+  publicOrigin: string,
+  launcher: string,
+  stderr: Output,
+): number {
+  if (!(error instanceof AuthorizationHostnameMismatchError)) throw error;
+  // A WHATWG URL can accept characters with special meaning in a shell.
+  const originArgument = /^https?:\/\/[a-z\d.-]+(?::\d+)?$/i.test(publicOrigin)
+    ? publicOrigin
+    : '"<new-origin>"';
+  stderr.write(
+    `${error.message}. Stop every Gestalt Mobile relay on this account.\n` +
+      'Run the local reset command to revoke existing passkeys and browser sessions and enroll a new first device.\n' +
+      `  ${launcher} reset-passkeys --public-origin ${originArgument} --confirm\n`,
+  );
+  return 1;
+}
+
 export async function runCli(dependencies: CliDependencies = {}): Promise<number> {
   const args = dependencies.args ?? process.argv.slice(2);
   const cwd = dependencies.cwd ?? process.cwd();
   const moduleUrl = dependencies.moduleUrl ?? import.meta.url;
   const stdout = dependencies.stdout ?? process.stdout;
   const stderr = dependencies.stderr ?? process.stderr;
+  const home = dependencies.homeDirectory ?? homedir();
+  const launcher = (dependencies.environment ?? process.env).GESTALT_MANAGER_VERSION
+    ? 'npx gestalt mobile'
+    : 'gestalt-mobile';
   let invocation: ReturnType<typeof parseInvocation>;
 
   try {
@@ -290,6 +339,27 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
   if (invocation.command === 'version') {
     stdout.write(`${await packageVersion(moduleUrl)}\n`);
     return 0;
+  }
+  if (invocation.command === 'reset-passkeys') {
+    try {
+      const result = resetAuthorizationHostname(home, invocation.rpId);
+      if (result === 'reset')
+        stdout.write(
+          'Passkeys and browser sessions cleared. Start Mobile with the new origin and enroll your first device.\n',
+        );
+      else if (result === 'alreadyConfigured')
+        stdout.write('The passkey hostname already matches the requested origin.\n');
+      else
+        stdout.write(
+          'There is no passkey hostname to reset. Start Mobile with the requested origin.\n',
+        );
+      return 0;
+    } catch (error) {
+      stderr.write(
+        `Unable to reset passkeys: ${error instanceof Error ? error.message : 'unknown error'}\n`,
+      );
+      return 1;
+    }
   }
   if (invocation.command === 'trace') {
     const stateHome =
@@ -315,10 +385,17 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
       return 1;
     }
   }
-  const skillProfiles = new FilesystemSkillProfileStore(dependencies.homeDirectory ?? homedir());
+  const skillProfiles = new FilesystemSkillProfileStore(home);
   if (invocation.command === 'list') return listSkillProfiles(skillProfiles, stdout, stderr);
 
   const config = invocation.config;
+  if (config.passkeyAuthEnabled) {
+    try {
+      checkAuthorizationHostname(home, config.relyingParty.rpId);
+    } catch (error) {
+      return reportHostnameMismatch(error, config.relyingParty.publicOrigin, launcher, stderr);
+    }
+  }
   if (!config.passkeyAuthEnabled)
     stderr.write(
       'WARNING: Passkey access control is disabled; anyone who can reach this server has full access.\n',
@@ -369,7 +446,11 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
     homeDirectory: dependencies.homeDirectory,
     explicitSkillProfile,
     planMeasurementBaseUrl: `http://${config.host}:${config.port}`,
+  }).catch((error: unknown) => {
+    reportHostnameMismatch(error, config.relyingParty.publicOrigin, launcher, stderr);
+    return null;
   });
+  if (!app) return 1;
   installShutdownHandlers(app, dependencies.signalSource);
   let address: string;
   try {
