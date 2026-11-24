@@ -46,6 +46,7 @@ for (const width of [390, 1280]) {
     await page.goto('/');
     await page.getByRole('button', { name: 'Chat', exact: true }).click();
     const working = page.locator('.progress-turn');
+    await expect(working).toHaveAttribute('data-reading-order', 'newest-first');
     await expect(working.getByText('working', { exact: true })).toBeVisible();
     await expect(working.getByText('Latest update.', { exact: true })).toBeVisible();
     await expect(working.getByText('First update.', { exact: true })).toBeVisible();
@@ -53,23 +54,58 @@ for (const width of [390, 1280]) {
     await expect(page.locator('.commentary-turn')).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath('working-without-answer.png') });
     await expect.poll(() => fixture.sockets.has('s')).toBe(true);
-    fixture.event('s', 1, 'agentMessageCompleted', {
-      itemId: 'answer',
-      turnId: 'turn',
-      phase: 'final_answer',
-      text: 'Finished reviewing the workspace.',
-    });
+    const source = '## Review complete\n\nSee [workspace notes](/workspace/notes.md).';
+    fixture.event(
+      's',
+      1,
+      'agentMessageCompleted',
+      {
+        itemId: 'answer',
+        turnId: 'turn',
+        phase: 'final_answer',
+        text: source,
+      },
+      '2026-04-11T17:00:00Z',
+    );
     const answer = page.locator('.answer-turn');
     await expect(answer.getByText('answer', { exact: true })).toBeVisible();
+    await expect(answer).toHaveAttribute('data-reading-order', 'top-down');
     await expect(working).toHaveCount(0);
     const commentary = answer.getByRole('button', { name: 'commentary', exact: true });
     await expect(commentary).toHaveAttribute('aria-expanded', 'false');
     await expect(answer.getByText('First update.', { exact: true })).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath('answer-with-commentary.png') });
+    if (width === 390) await page.setViewportSize({ width: 320, height: 900 });
+    const toggle = answer.getByRole('switch', { name: 'Raw answer text' });
+    const copy = answer.getByRole('button', { name: 'Copy answer' });
+    await expect(toggle).not.toBeChecked();
+    await toggle.focus();
+    await toggle.press('Space');
+    await expect(toggle).toBeChecked();
+    expect(await answer.locator('pre').textContent()).toBe(source);
+    await expect(answer.getByRole('link')).toHaveCount(0);
+    const time = answer.locator('.entry-heading time');
+    await expect(time).toBeVisible();
+    const dateBox = (await time.boundingBox())!;
+    const copyBox = (await copy.boundingBox())!;
+    expect(copyBox.x + copyBox.width).toBeLessThanOrEqual(dateBox.x);
+    expect(Math.abs(copyBox.y + copyBox.height / 2 - dateBox.y - dateBox.height / 2)).toBeLessThan(
+      2,
+    );
+    expect(dateBox.x + dateBox.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+    await page.screenshot({ path: testInfo.outputPath('answer-raw.png') });
+    await copy.click();
+    await expect(page.getByText('Answer copied.', { exact: true })).toBeVisible();
+    await toggle.click();
+    await expect(answer.getByRole('link', { name: 'workspace notes' })).toBeVisible();
     await commentary.click();
     await expect(commentary).toHaveAttribute('aria-expanded', 'true');
     await expect(answer.locator('.commentary-content')).toContainText('First update.');
     await expect(answer.locator('.commentary-content')).toContainText('Latest update.');
+    await expect(answer.locator('.commentary-content')).toHaveAttribute(
+      'data-reading-order',
+      'top-down',
+    );
   });
 
   test(`working paragraphs arrive at the top and preserve older reading position at ${width}px`, async ({
