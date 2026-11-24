@@ -7,7 +7,7 @@
 import { EventEmitter } from 'node:events';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -21,6 +21,18 @@ import {
   runCli,
   usage,
 } from './cli.js';
+import { composeRelayApp } from './composition.js';
+import { createRelyingPartyConfig } from './config.js';
+import { deviceNickname } from './features/auth/domain/device-nickname.js';
+import {
+  authorizationSessionId,
+  authorizedDeviceId,
+  webAuthnCredentialId,
+} from './features/auth/domain/identifiers.js';
+import {
+  authorizationDatabasePath,
+  SqliteAuthorizationStore,
+} from './platform/auth/sqlite-authorization-store.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -94,6 +106,108 @@ function output() {
   return { stream: { write: (chunk: string) => ((value += chunk), true) }, value: () => value };
 }
 
+describe('passkey hostname reset CLI', () => {
+  it('detects a hostname change before startup and requires confirmation before first-device enrollment', async () => {
+    const home = await createPackageFixture();
+    const stdout = output();
+    const stderr = output();
+    const compose = vi.fn();
+    const probeCodexVersion = vi.fn();
+    const dependencies = {
+      homeDirectory: home,
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      compose,
+      probeCodexVersion,
+      environment: { GESTALT_MANAGER_VERSION: '0.19.0' },
+    };
+    const oldOrigin = 'https://old.example';
+    const newOrigin = 'https://new.example:9443';
+    const oldStore = new SqliteAuthorizationStore(home, createRelyingPartyConfig(oldOrigin));
+    try {
+      const owner = oldStore.initializeOwner(new Uint8Array(32).fill(1));
+      const id = authorizedDeviceId('original-device');
+      expect(
+        oldStore.claimFirstDevice(owner, {
+          id,
+          credentialId: webAuthnCredentialId('original-credential'),
+          publicKey: new Uint8Array([1]),
+          deviceType: 'singleDevice',
+          backedUp: false,
+          counter: 0,
+          transports: ['internal'],
+          nickname: deviceNickname('Original device'),
+          createdAt: '2026-01-01T00:00:00.000Z',
+        }),
+      ).toBe('claimed');
+      oldStore.saveSession(authorizationSessionId('old-cookie'), {
+        deviceId: id,
+        expiresAt: '2099-01-01T00:00:00.000Z',
+      });
+    } finally {
+      oldStore.close();
+    }
+
+    const publicOrigin = ['--public-origin', newOrigin];
+    await expect(runCli({ ...dependencies, args: publicOrigin })).resolves.toBe(1);
+    expect(stderr.value()).toContain('WebAuthn RP ID hostname changed while credentials exist');
+    expect(stderr.value()).toContain(
+      `npx gestalt mobile reset-passkeys --public-origin ${newOrigin} --confirm`,
+    );
+    expect(probeCodexVersion).not.toHaveBeenCalled();
+    expect(compose).not.toHaveBeenCalled();
+    await expect(
+      runCli({ ...dependencies, args: ['reset-passkeys', ...publicOrigin] }),
+    ).resolves.toBe(2);
+    await expect(runCli({ ...dependencies, args: publicOrigin })).resolves.toBe(1);
+    await expect(
+      runCli({ ...dependencies, args: ['reset-passkeys', ...publicOrigin, '--confirm'] }),
+    ).resolves.toBe(0);
+    expect(stdout.value()).toContain('enroll your first device');
+    expect(compose).not.toHaveBeenCalled();
+
+    const relay = await composeRelayApp({
+      root: home,
+      dataDir: join(home, 'relay'),
+      homeDirectory: home,
+      startAppServers: false,
+      relyingParty: createRelyingPartyConfig(newOrigin),
+      installedCodexVersion: null,
+      profiles: {
+        list: async () => [],
+        require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
+      },
+    });
+    try {
+      const status = await relay.inject({
+        method: 'GET',
+        url: '/api/auth/status',
+        headers: { cookie: 'gestalt_mobile_session=old-cookie' },
+      });
+      expect(status.json()).toEqual({ status: 'bootstrap', publicOrigin: newOrigin });
+    } finally {
+      await relay.close();
+    }
+  });
+
+  it('does not initialize authorization when resetting an empty account', async () => {
+    const home = await createPackageFixture();
+    const compose = vi.fn();
+    const stdout = output();
+    await expect(
+      runCli({
+        args: ['reset-passkeys', '--confirm', '--public-origin', 'https://new.example'],
+        homeDirectory: home,
+        stdout: stdout.stream,
+        compose,
+      }),
+    ).resolves.toBe(0);
+    expect(stdout.value()).toContain('There is no passkey hostname to reset');
+    await expect(access(authorizationDatabasePath(home))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(compose).not.toHaveBeenCalled();
+  });
+});
+
 describe('runCli', () => {
   it('exports a control-plane trace without starting the server', async () => {
     const stdout = output();
@@ -160,6 +274,7 @@ describe('runCli', () => {
   });
 
   it('rejects an unreadable install icon before composition', async () => {
+    const home = await createPackageFixture();
     const stderr = output();
     const compose = vi.fn();
 
@@ -167,6 +282,7 @@ describe('runCli', () => {
       await runCli({
         args: ['--icon', 'missing.svg'],
         cwd: '/caller',
+        homeDirectory: home,
         stderr: stderr.stream,
         compose,
       }),
@@ -198,6 +314,7 @@ describe('runCli', () => {
       await runCli({
         args: ['--cwd', '../workspace', '--port', '43210', '--icon', iconPath],
         cwd: '/caller/project',
+        homeDirectory: root,
         moduleUrl: pathToFileURL(join(root, 'dist/server/server/main.js')).href,
         stdout: stdout.stream,
         signalSource: fakeSignals(signals),
@@ -296,6 +413,7 @@ describe('runCli', () => {
     await expect(
       runCli({
         args: [],
+        homeDirectory: root,
         moduleUrl: pathToFileURL(join(root, 'dist/server/server/main.js')).href,
         signalSource: fakeSignals(signals),
         compose,

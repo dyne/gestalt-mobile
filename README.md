@@ -402,6 +402,22 @@ two local relay processes behind `https://relay.example.org`), but an RP-ID/
 hostname change is refused once credentials exist because it would strand those
 credentials. Do not expose `--host 0.0.0.0` before that boundary is in place.
 
+### Move to a different hostname
+
+Stop every Gestalt Mobile relay using the same account. Run the reset on the
+machine hosting Mobile with the new public origin.
+
+```sh
+gestalt-mobile reset-passkeys --public-origin https://new-relay.example.org --confirm
+```
+
+With the Gestalt manager, use `npx gestalt mobile reset-passkeys` with the same
+arguments. The reset revokes all passkeys and browser sessions for the old
+hostname across the account's relays. Saved Codex sessions and workspaces
+remain available. Start Mobile with the same workspace and state options and
+the new `--public-origin`. Enroll the first device before making the relay
+reachable over the network.
+
 An empty authorization store is deliberately bootstrap-open: the first verified passkey becomes the owner. Register a device before exposing the service. The
 final authorized device cannot be deleted; synced passkeys can represent more
 than one physical device, and an enrollment QR/link is neither recovery nor

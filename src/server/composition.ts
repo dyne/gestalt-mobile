@@ -2345,6 +2345,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       );
       authorization.initializeOwner(ownerHandle!);
     } catch (error) {
+      authorization?.close();
       database.close();
       throw error;
     }

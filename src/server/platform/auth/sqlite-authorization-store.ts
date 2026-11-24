@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { createHash } from 'node:crypto';
-import { mkdirSync, chmodSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { mkdirSync, chmodSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -38,6 +38,69 @@ const startupLockWaiter = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_
 
 export function authorizationDatabasePath(homeDirectory: string): string {
   return join(resolve(homeDirectory), '.codex-gestalt', 'gestalt-mobile', 'auth.sqlite');
+}
+
+export class AuthorizationHostnameMismatchError extends Error {
+  constructor() {
+    super('WebAuthn RP ID hostname changed while credentials exist');
+  }
+}
+
+function storedRpId(db: DatabaseSync): string | undefined {
+  if (
+    !db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'auth_settings'").get()
+  )
+    return undefined;
+  const settings = db.prepare('SELECT rp_id FROM auth_settings WHERE singleton = 1').get() as
+    { rp_id: string } | undefined;
+  return settings?.rp_id;
+}
+
+export function checkAuthorizationHostname(homeDirectory: string, rpId: string): void {
+  const path = authorizationDatabasePath(homeDirectory);
+  if (!statSync(path, { throwIfNoEntry: false })) return;
+  using db = new DatabaseSync(path, { readOnly: true, timeout: SQLITE_STARTUP_BUSY_TIMEOUT_MS });
+  db.exec('BEGIN');
+  const stored = storedRpId(db);
+  if (
+    stored !== undefined &&
+    stored !== rpId &&
+    db.prepare('SELECT 1 FROM auth_devices LIMIT 1').get()
+  )
+    throw new AuthorizationHostnameMismatchError();
+}
+
+export function resetAuthorizationHostname(
+  homeDirectory: string,
+  rpId: string,
+): 'reset' | 'alreadyConfigured' | 'uninitialized' {
+  const path = authorizationDatabasePath(homeDirectory);
+  if (!statSync(path, { throwIfNoEntry: false })) return 'uninitialized';
+  using db = new DatabaseSync(path, { timeout: SQLITE_STARTUP_BUSY_TIMEOUT_MS });
+  // An exclusive WAL connection cannot acquire its lock while another relay
+  // has the shared auth database open. Keep the lock until the reset commits.
+  db.exec('PRAGMA locking_mode = EXCLUSIVE;');
+  try {
+    return withImmediateTransaction(db, () => {
+      const stored = storedRpId(db);
+      if (stored === undefined) return 'uninitialized';
+      if (stored === rpId) return 'alreadyConfigured';
+      db.exec(
+        'DELETE FROM auth_sessions; DELETE FROM auth_tickets; DELETE FROM auth_ceremonies; DELETE FROM auth_devices;',
+      );
+      db.prepare('UPDATE auth_settings SET rp_id = ?, user_handle = ? WHERE singleton = 1').run(
+        rpId,
+        randomBytes(32),
+      );
+      return 'reset';
+    });
+  } catch (error) {
+    if (isLocked(error))
+      throw new Error(
+        'Stop every Gestalt Mobile relay using this authorization database, then retry.',
+      );
+    throw error;
+  }
 }
 
 /** SQLite adapter for the auth bounded context. No SQLite types escape this file. */
@@ -105,7 +168,7 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
         .prepare('SELECT rp_id FROM auth_settings WHERE singleton = 1')
         .get() as { rp_id: string } | undefined;
       if (settings && settings.rp_id !== this.relyingParty.rpId && this.deviceCount() > 0)
-        throw new Error('WebAuthn RP ID hostname changed while credentials exist');
+        throw new AuthorizationHostnameMismatchError();
     });
   }
 
@@ -122,7 +185,7 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
           )
           .run(SCHEMA_VERSION, this.relyingParty.rpId, userHandle);
       else if (current.rp_id !== this.relyingParty.rpId && this.deviceCount() > 0)
-        throw new Error('WebAuthn RP ID hostname changed while credentials exist');
+        throw new AuthorizationHostnameMismatchError();
       else if (current.rp_id !== this.relyingParty.rpId)
         this.statements
           .prepare('UPDATE auth_settings SET rp_id = ? WHERE singleton = 1')

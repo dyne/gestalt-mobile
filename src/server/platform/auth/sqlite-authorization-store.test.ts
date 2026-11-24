@@ -23,6 +23,8 @@ import { CeremonyCapacityError } from '../../features/auth/domain/errors.js';
 import type { AuthorizedDevice, LocalOwner } from '../../features/auth/domain/authorization.js';
 import {
   authorizationDatabasePath,
+  checkAuthorizationHostname,
+  resetAuthorizationHostname,
   SqliteAuthorizationStore,
 } from './sqlite-authorization-store.js';
 
@@ -494,6 +496,55 @@ describe('SqliteAuthorizationStore', () => {
     });
     expect(same.readOwner()).not.toBeNull();
     same.close();
+  });
+
+  it('requires offline access and atomically clears old hostname authorization data', async () => {
+    const directory = await home();
+    const next = { ...rp, publicOrigin: 'https://new.example', rpId: 'new.example' };
+    const old = new SqliteAuthorizationStore(directory, rp);
+    const account = old.initializeOwner(owner().userHandle);
+    const first = device('old');
+    const session = authorizationSessionId('old-session');
+    const ticket = enrollmentTicketId('old-ticket');
+    const ceremony = passkeyCeremonyId('old-ceremony');
+    const now = '2026-08-03T00:00:00.000Z';
+    const expiresAt = '2099-08-03T00:00:00.000Z';
+    try {
+      expect(old.claimFirstDevice(account, first)).toBe('claimed');
+      old.saveSession(session, { deviceId: first.id, expiresAt });
+      old.issueEnrollmentTicket(ticket, session, expiresAt);
+      old.saveCeremony(ceremony, {
+        purpose: 'registration',
+        rpId: rp.rpId,
+        expectedOrigin: rp.publicOrigin,
+        challenge: new Uint8Array([1]),
+        expiresAt,
+      });
+      expect(() => checkAuthorizationHostname(directory, next.rpId)).toThrow('hostname changed');
+      expect(() => resetAuthorizationHostname(directory, next.rpId)).toThrow('Stop every');
+      expect(old.sessionDevice(session, now)).toBe(first.id);
+      expect(old.ticketAvailable(ticket, now)).toBe(true);
+    } finally {
+      old.close();
+    }
+    expect(resetAuthorizationHostname(directory, rp.rpId)).toBe('alreadyConfigured');
+    expect(() => checkAuthorizationHostname(directory, next.rpId)).toThrow('hostname changed');
+    expect(resetAuthorizationHostname(directory, next.rpId)).toBe('reset');
+    expect(resetAuthorizationHostname(directory, next.rpId)).toBe('alreadyConfigured');
+    checkAuthorizationHostname(directory, next.rpId);
+    const replacement = new SqliteAuthorizationStore(directory, next);
+    try {
+      const newOwner = replacement.initializeOwner(owner().userHandle);
+      expect(newOwner.userHandle).not.toEqual(account.userHandle);
+      expect(replacement.listAuthorizedDevices()).toEqual([]);
+      expect(replacement.sessionDevice(session, now)).toBeNull();
+      expect(replacement.ticketAvailable(ticket, now)).toBe(false);
+      expect(replacement.consumeCeremony(ceremony, now)).toBeNull();
+      expect(replacement.claimFirstDevice(newOwner, device('new'))).toBe('claimed');
+    } finally {
+      replacement.close();
+    }
+    expect(() => checkAuthorizationHostname(directory, rp.rpId)).toThrow('hostname changed');
   });
 
   it('allows exactly one competing revocation from a two-device starting state', async () => {
