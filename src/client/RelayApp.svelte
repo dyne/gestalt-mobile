@@ -68,6 +68,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { isSessionStatus } from './features/sessions/session-status.js';
   import { relayFeedback, type RelayFeedbackCode } from './features/feedback/relay-messages.js';
   import NotificationHistory from './features/feedback/NotificationHistory.svelte';
+  import { createCodexResetFeedback } from './features/feedback/codex-reset-feedback.js';
+  import { codexAutoResetStatusSchema } from '../shared/contracts/codex-allowance.js';
   import {
     browserNotificationHistoryStorage,
     createToastQueue,
@@ -621,6 +623,65 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   );
   const sessionCache = createSessionCache();
   const toastQueue = createToastQueue({ historyStorage: browserNotificationHistoryStorage() });
+  const showCodexResets = createCodexResetFeedback(toastQueue, browserNotificationHistoryStorage());
+  const codexResetUrl = '/api/codex/allowance/auto-reset';
+  let useWhenOver = $state<boolean | null>(null);
+  let savingAutoReset = $state(false);
+  let autoResetRevision = 0;
+  const autoResetRequest = new AbortController();
+
+  async function saveCodexAutoReset(enabled: boolean): Promise<void> {
+    if (savingAutoReset || useWhenOver === null) return;
+    savingAutoReset = true;
+    ++autoResetRevision;
+    try {
+      const response = await authorizedFetch(codexResetUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+        signal: autoResetRequest.signal,
+      });
+      if (!response.ok) throw new Error('CODEX_AUTO_RESET_SAVE_FAILED');
+      const state = codexAutoResetStatusSchema.parse(await response.json());
+      if (!autoResetRequest.signal.aborted) {
+        useWhenOver = state.enabled;
+        showCodexResets(state.resets);
+      }
+    } catch {
+      if (!autoResetRequest.signal.aborted)
+        toastQueue.enqueue({
+          kind: 'error',
+          message: 'Could not save the Codex reset credit preference.',
+        });
+    } finally {
+      savingAutoReset = false;
+    }
+  }
+
+  onMount(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      const revision = autoResetRevision;
+      try {
+        const response = await authorizedFetch(codexResetUrl, { signal: autoResetRequest.signal });
+        if (!response.ok) return;
+        const state = codexAutoResetStatusSchema.parse(await response.json());
+        if (!autoResetRequest.signal.aborted) {
+          if (revision === autoResetRevision && !savingAutoReset) useWhenOver = state.enabled;
+          showCodexResets(state.resets);
+        }
+      } catch {
+        // The next poll can recover without repeatedly notifying about a disconnected relay.
+      } finally {
+        if (!autoResetRequest.signal.aborted) timer = setTimeout(() => void poll(), 15_000);
+      }
+    };
+    void poll();
+    return () => {
+      autoResetRequest.abort();
+      clearTimeout(timer);
+    };
+  });
   const mcpStartupFeedback = createMcpStartupFeedback(toastQueue);
   const evidenceContext = new URLSearchParams(location.search).get('tree-evidence');
   const toastEvidence = new URLSearchParams(location.search).get('toast-evidence');
@@ -2098,6 +2159,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <SessionsView
     {rosterOnly}
     allowanceFetcher={authorizedFetch}
+    {useWhenOver}
+    {savingAutoReset}
+    onautoreset={(enabled) => void saveCodexAutoReset(enabled)}
     onallowanceerror={() =>
       toastQueue.enqueue({
         kind: 'warning',

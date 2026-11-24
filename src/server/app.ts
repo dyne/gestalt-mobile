@@ -77,6 +77,7 @@ export type AppDependencies = {
   selfDebug?: SelfDebugDependencies;
   health: HealthReader;
   codexAllowance?: import('./features/catalog/get-codex-allowance/endpoint.js').CodexAllowanceReader;
+  codexAutoReset?: import('./features/catalog/codex-auto-reset/endpoint.js').CodexAutoResetPreferences;
   logger: Pick<Console, 'info' | 'warn' | 'error'>;
   staticDir?: string;
   pwaIcon?: PwaIcon;
@@ -308,6 +309,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     bootstrap: deps.bootstrap,
     sessionDefaults: deps.sessionDefaults,
     codexAllowance: deps.codexAllowance,
+    codexAutoReset: deps.codexAutoReset,
   });
   registerSessionRoutes(app, deps);
   if (deps.selfDebug) registerSelfDebug(app, deps.selfDebug);

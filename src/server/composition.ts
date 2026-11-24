@@ -47,6 +47,8 @@ import { protocolCompatibility } from './platform/codex/protocol-compatibility.j
 import { launchCodexAppServer } from './platform/codex/codex-process-launcher.js';
 import { CodexModelCatalog } from './platform/codex/codex-model-catalog.js';
 import { CodexAllowanceReader } from './platform/codex/codex-allowance.js';
+import { CodexAutoReset } from './features/catalog/application/codex-auto-reset.js';
+import { SqliteCodexResetStore } from './platform/persistence/sqlite-codex-reset-store.js';
 import { ProviderModelCatalog } from './platform/catalog/provider-model-catalog.js';
 import { createRecentThreadLister } from './platform/codex/recent-thread-lister.js';
 import { CodexSessionRuntime, type AppServer } from './platform/codex/session-runtime.js';
@@ -794,6 +796,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     databasePath,
   );
   const homeDirectory = options.homeDirectory ?? homedir();
+  const codexResetStore = new SqliteCodexResetStore(homeDirectory);
+  const codexAutoReset = new CodexAutoReset(codexResetStore, randomUUID);
   const sessionScratch = new FilesystemSessionScratch(
     (id) => forgetOperations.assertAvailable(id),
     ({ id }) => {
@@ -1482,16 +1486,33 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             (settledFailure?.providerFailureTurnId === completionTurnId
               ? settledFailure?.providerFailure
               : undefined);
+          const failureTurnId =
+            completionTurnId ??
+            (typeof (notification.params as { turnId?: unknown })?.turnId === 'string'
+              ? (notification.params as { turnId: string }).turnId
+              : resolvedOrigin.physicalTurnId);
           if (resolvedOrigin.kind !== 'unknown' && providerFailure)
             autopilot.providerFailed(sessionId, providerFailure, {
               actor: resolvedOrigin.kind === 'root' ? 'root' : 'child',
-              turnId:
-                completionTurnId ??
-                (typeof (notification.params as { turnId?: unknown })?.turnId === 'string'
-                  ? (notification.params as { turnId: string }).turnId
-                  : resolvedOrigin.physicalTurnId),
+              turnId: failureTurnId,
               settled: notification.method === 'turn/completed',
             });
+          if (
+            providerFailure?.code === 'usageLimitExceeded' &&
+            currentSession?.provider === 'codex' &&
+            currentSession.activeTurnId &&
+            currentSession.desiredState === 'active' &&
+            resolvedOrigin.runtimeId &&
+            (resolvedOrigin.kind === 'child' ||
+              (resolvedOrigin.kind === 'root' && failureTurnId === currentSession.activeTurnId))
+          ) {
+            const account = runtime?.weeklyResetAccount(
+              sessionId,
+              resolvedOrigin.runtimeId,
+              () => !closing && sessions.find(sessionId)?.desiredState === 'active',
+            );
+            if (account) void codexAutoReset.blocked(account);
+          }
           const rootCommandId =
             resolvedOrigin.kind === 'root' ? completedCommandId(notification) : null;
           if (rootCommandId) autopilot.rootProcessCompleted(sessionId, rootCommandId);
@@ -2928,6 +2949,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       pwaIcon: options.pwaIcon,
       recentThreads: recentThreadsForRelay,
       sessionDefaults,
+      codexAutoReset: codexResetStore,
       codexAllowance:
         options.installedCodexVersion === null
           ? {

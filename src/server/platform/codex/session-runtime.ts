@@ -20,6 +20,8 @@ import {
   type RelaySessionSnapshot,
 } from '../../features/sessions/model/relay-session.js';
 import { randomUUID } from 'node:crypto';
+import { decodeWeeklyResetCandidate } from './codex-allowance.js';
+import type { WeeklyResetAccount } from '../../features/catalog/application/codex-auto-reset.js';
 import {
   createPlanMeasurementSnapshot,
   type RateLimitWindow,
@@ -1080,6 +1082,33 @@ export class CodexSessionRuntime {
       input: [{ type: 'text', text, text_elements: [] }],
       ...(clientUserMessageId ? { clientUserMessageId } : {}),
     });
+  }
+
+  weeklyResetAccount(
+    sessionId: string,
+    runtimeId: string,
+    allowed: () => boolean,
+  ): WeeklyResetAccount | null {
+    const resource = this.sessions.get(sessionId);
+    if (!resource?.active || resource.mcpStartup.runtimeId !== runtimeId) return null;
+    const request = (method: string, params: unknown) => {
+      if (!allowed() || !resource.active || this.sessions.get(sessionId) !== resource)
+        throw new Error('CODEX_RESET_SESSION_CHANGED');
+      return resource.process.rpc.request(method, params);
+    };
+    return {
+      readCandidate: async (now) =>
+        decodeWeeklyResetCandidate(await request('account/rateLimits/read', {}), now),
+      redeem: async (creditId, idempotencyKey) => {
+        const result = asRecord(
+          await request('account/rateLimitResetCredit/consume', {
+            creditId,
+            idempotencyKey,
+          }),
+        );
+        return result?.outcome === 'reset' || result?.outcome === 'alreadyRedeemed';
+      },
+    };
   }
 
   async readPlanMeasurement(session: RelaySessionSnapshot) {

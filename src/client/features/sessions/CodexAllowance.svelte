@@ -8,7 +8,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { onMount } from 'svelte';
   import type { CodexAllowance } from '../../../shared/contracts/codex-allowance.js';
 
-  let { fetcher, onerror }: { fetcher: typeof fetch; onerror: () => void } = $props();
+  let {
+    fetcher,
+    onerror,
+    useWhenOver = null,
+    savingAutoReset = false,
+    onautoreset,
+  }: {
+    fetcher: typeof fetch;
+    onerror: () => void;
+    useWhenOver?: boolean | null;
+    savingAutoReset?: boolean;
+    onautoreset?: (enabled: boolean) => void;
+  } = $props();
   let allowance = $state<CodexAllowance | null>(null);
   let loading = $state(true);
   let now = $state(Date.now());
@@ -103,6 +115,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           ? 'Unavailable'
           : `${allowance.resetsAvailable} available`}</strong
     >
+    {#if onautoreset}
+      <label class="auto-reset">
+        <input
+          type="checkbox"
+          checked={useWhenOver === true}
+          disabled={useWhenOver === null || savingAutoReset}
+          onchange={(event) => {
+            const enabled = event.currentTarget.checked;
+            event.currentTarget.checked = useWhenOver === true;
+            onautoreset?.(enabled);
+          }}
+        />
+        Use when over
+      </label>
+    {/if}
   </div>
 </section>
 
@@ -162,5 +189,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     display: grid;
     gap: 0.375rem;
     font-size: 0.875rem;
+  }
+  .auto-reset {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    min-block-size: 44px;
+    cursor: pointer;
+  }
+  .auto-reset input {
+    accent-color: var(--theme-accent);
   }
 </style>
