@@ -74,7 +74,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </script>
 
 <section class="git-view" aria-labelledby="git-title">
-  <h2 id="git-title" class="visually-hidden">Git</h2>
+  <h2 id="git-title" class="view-title">Git</h2>
   <section class="git-tree" aria-labelledby="git-tree-title">
     <div class="section-heading">
       <h3 id="git-tree-title">Repository and clone destination</h3>
@@ -253,6 +253,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .git-tree,
   .repository-details {
     min-inline-size: 0;
+  }
+  .git-view > h2 {
+    margin-block-end: 0;
   }
   .section-heading h3,
   .repository-details h3 {

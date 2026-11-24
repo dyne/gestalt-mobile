@@ -141,10 +141,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     gap: 1rem 1.5rem;
     padding-block: 0.25rem 1.25rem;
     margin-block-end: 1.25rem;
-    border-block-end: 1px solid var(--theme-border);
+    border-block-end: 1px solid var(--theme-divider);
   }
   .weekly {
-    flex: 1 1 15rem;
+    flex: 1 1 13rem;
     min-inline-size: 0;
   }
   .summary {
@@ -187,10 +187,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   .resets {
     display: grid;
-    gap: 0.375rem;
+    grid-template-columns: auto 1fr;
+    align-items: baseline;
+    gap: 0.25rem 0.5rem;
     font-size: 0.875rem;
   }
   .auto-reset {
+    grid-column: 1 / -1;
     display: flex;
     align-items: center;
     gap: 0.375rem;
@@ -198,6 +201,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     cursor: pointer;
   }
   .auto-reset input {
+    inline-size: 1rem;
+    block-size: 1rem;
+    min-block-size: 0;
+    margin: 0;
     accent-color: var(--theme-accent);
   }
 </style>

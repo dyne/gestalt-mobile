@@ -457,11 +457,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .prompt-row {
     display: flex;
     align-items: end;
-    gap: 0.5rem;
+    gap: 0.25rem;
+    padding: 0.25rem;
+    background: var(--theme-surface);
+    border: 1px solid var(--theme-border);
+    border-radius: 0.875rem;
   }
   textarea {
     flex: 1 1 auto;
+    min-inline-size: 0;
     min-block-size: 2.75rem;
+    padding: 0.625rem;
+    border: 0;
+    background: transparent;
     resize: vertical;
   }
   textarea.new-empty {
@@ -472,9 +480,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     display: grid;
     place-items: center;
     flex: 0 0 auto;
-    inline-size: 3rem;
-    min-block-size: 3rem;
+    inline-size: 2.75rem;
+    min-block-size: 2.75rem;
     padding: 0;
+  }
+  .prompt-row > button:not(:disabled) {
+    color: var(--theme-accent-contrast);
+    background: var(--theme-accent);
+    border-color: transparent;
+  }
+  .prompt-row > button:hover:not(:disabled) {
+    background: var(--theme-control-pressed);
+    color: var(--theme-control-pressed-contrast);
   }
   .prompt-row svg {
     inline-size: 1.35rem;
@@ -492,7 +509,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .prompt-action > button {
     color: var(--theme-text);
     background: var(--theme-surface);
-    border: 1px solid var(--theme-border);
+    border: 1px solid var(--theme-divider);
     border-radius: 0.375rem;
     cursor: pointer;
   }

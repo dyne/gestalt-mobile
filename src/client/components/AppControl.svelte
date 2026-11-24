@@ -127,7 +127,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     font-weight: 700;
     background: var(--theme-accent);
     border-color: var(--theme-accent);
-    box-shadow: inset 0 -0.2rem 0 color-mix(in srgb, var(--theme-shadow) 35%, transparent);
   }
 
   .primary:hover:not(:disabled, [aria-disabled='true']) {
@@ -135,7 +134,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .primary:active:not(:disabled, [aria-disabled='true']) {
-    box-shadow: inset 0 -0.08rem 0 color-mix(in srgb, var(--theme-shadow) 35%, transparent);
+    color: var(--theme-control-pressed-contrast);
+    background: var(--theme-control-pressed);
   }
 
   .accentPressed[aria-pressed='true'] {
