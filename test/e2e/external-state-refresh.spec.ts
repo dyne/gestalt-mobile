@@ -58,9 +58,9 @@ test('re-reads an active Org plan when its tab is opened', async ({ page }) => {
   );
 
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'Plan' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Plan', exact: true })).toBeVisible();
   planTitle = 'Plan after filesystem edit';
-  await page.getByRole('button', { name: 'Plan' }).click();
+  await page.getByRole('button', { name: 'Plan', exact: true }).click();
   await expect(page.getByRole('heading', { name: planTitle })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Plan before filesystem edit' })).toHaveCount(0);
 });

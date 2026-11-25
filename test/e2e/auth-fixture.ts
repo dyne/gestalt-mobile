@@ -9,6 +9,7 @@ type AuthRouteHost = Pick<Page, 'route'> | Pick<BrowserContext, 'route'>;
 
 /** Installs the current public auth-status contract before a legacy UI fixture navigates. */
 export async function mockAuthenticatedStatus(host: AuthRouteHost): Promise<void> {
+  await host.route('**/api/sessions/recent-threads', (route) => route.fulfill({ json: [] }));
   // Legacy fixtures model an older server; readiness scenarios override this route.
   await host.route('**/api/sessions/*/retrieval-readiness', (route) =>
     route.fulfill({ status: 404 }),

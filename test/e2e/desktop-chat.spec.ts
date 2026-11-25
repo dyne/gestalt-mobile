@@ -107,7 +107,8 @@ async function install(page: Page) {
   });
   await page.route('**/api/sessions/*', (route) => {
     const id = route.request().url().split('/').at(-1);
-    return route.fulfill({ json: fixture.sessions.find((session) => session.id === id) });
+    const session = fixture.sessions.find((item) => item.id === id);
+    return session ? route.fulfill({ json: session }) : route.fallback();
   });
   await page.route('**/api/sessions/*/plan', (route) => {
     const id = route.request().url().split('/').at(-2)!;
@@ -305,6 +306,8 @@ test('a delayed bootstrap cannot replace a refreshed roster or the selected chat
 }) => {
   const { fixture } = await install(page);
   const bootstrap = deferred<void>();
+  const rosterGate = deferred<void>();
+  const recentGate = deferred<void>();
   const originalSessions = fixture.sessions.slice();
   let bootstrapRequested = false;
   await page.route('**/api/bootstrap', async (route) => {
@@ -317,19 +320,40 @@ test('a delayed bootstrap cannot replace a refreshed roster or the selected chat
     id: 'external',
     workspacePath: '/workspace/external',
   });
+  await page.route('**/api/sessions', async (route) => {
+    await rosterGate.promise;
+    await route.fulfill({ json: fixture.sessions });
+  });
+  await page.route('**/api/sessions/recent-threads', async (route) => {
+    await recentGate.promise;
+    await route.fulfill({ json: [] });
+  });
   try {
     await page.goto('/');
     await expect.poll(() => bootstrapRequested).toBe(true);
-    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await expect(page.getByText('Loading sessions…', { exact: true })).toBeVisible();
+    await expect(page.getByText('Loading recent sessions…', { exact: true })).toBeVisible();
+    await expect(page.getByText('No saved sessions yet.')).toHaveCount(0);
+    const spinner = page
+      .getByRole('status')
+      .filter({ hasText: 'Loading sessions…' })
+      .locator('[aria-hidden]');
+    await expect(spinner).not.toHaveCSS('animation-name', 'none');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await expect(spinner).toHaveCSS('animation-name', 'none');
+    rosterGate.resolve();
     const roster = page.getByRole('list', { name: 'Open sessions' });
     await expect(roster).toContainText('/workspace/external');
+    await expect(page.getByText('Loading recent sessions…')).toBeVisible();
+    recentGate.resolve();
+    await expect(page.getByText('No other recent sessions found.')).toBeVisible();
     await roster
       .locator('.managed-session')
       .filter({ hasText: '/workspace/beta' })
       .getByRole('button', { name: 'Open', exact: true })
       .click();
     await expect(page.getByText('beta conversation', { exact: true })).toBeVisible();
-    const initialized = page.waitForResponse('**/api/sessions/recent-threads');
+    const initialized = page.waitForResponse('**/api/skill-profiles');
     bootstrap.resolve();
     await initialized;
     await expect(page.getByText('beta conversation', { exact: true })).toBeVisible();
@@ -338,6 +362,8 @@ test('a delayed bootstrap cannot replace a refreshed roster or the selected chat
     await expect(page.locator('.current-session')).toContainText('/workspace/beta');
   } finally {
     bootstrap.resolve();
+    rosterGate.resolve();
+    recentGate.resolve();
     await page.unrouteAll({ behavior: 'wait' });
   }
 });
@@ -358,7 +384,7 @@ test('a failed refresh cannot discard a successful bootstrap roster', async ({ p
     const failedRefresh = page.waitForResponse('**/api/sessions');
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));
     expect((await failedRefresh).status()).toBe(503);
-    const initialized = page.waitForResponse('**/api/sessions/recent-threads');
+    const initialized = page.waitForResponse('**/api/skill-profiles');
     bootstrap.resolve();
     await initialized;
     await expect(page.getByRole('list', { name: 'Open sessions' })).toContainText(

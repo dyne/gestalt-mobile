@@ -5,7 +5,7 @@
  */
 
 import fastify from 'fastify';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { buildApp, type AppDependencies } from '../../../app.js';
 import { registerListRecentThreads } from './endpoint.js';
@@ -58,11 +58,14 @@ describe('GET /api/sessions/recent-threads', () => {
       list: async () => [
         { id: 'thread-1', cwd: '/projects/work', profile: 'work', recencyAt: 200 },
       ],
-      metadata: () => ({
-        model: 'gpt-5.4',
-        skillProfile: 'focused',
-        orgPlanFilename: 'session-summary.org',
-      }),
+      listManaged: () => [
+        {
+          threadId: 'thread-1',
+          model: 'gpt-5.4',
+          effectiveSkillSelection: { selectedProfileName: 'focused' },
+          lastOrgPlan: { filename: 'session-summary.org' },
+        },
+      ],
     });
 
     const response = await app.inject({ method: 'GET', url: '/api/sessions/recent-threads' });
@@ -80,7 +83,11 @@ describe('GET /api/sessions/recent-threads', () => {
 
   it('looks up managed-session metadata with provider-qualified thread identity', async () => {
     const app = fastify();
-    const lookups: Array<[string, string]> = [];
+    const listManaged = vi.fn(() => [
+      { threadId: 'shared-thread', model: 'gpt-5.6-terra' },
+      { threadId: 'shared-thread', provider: 'kimi' as const, model: 'k2-thinking' },
+      { threadId: 'shared-thread', model: 'older-owner' },
+    ]);
     registerListRecentThreads(app, {
       list: async () => [
         { id: 'shared-thread', cwd: '/codex', profile: 'default', recencyAt: 2 },
@@ -92,18 +99,12 @@ describe('GET /api/sessions/recent-threads', () => {
           recencyAt: 1,
         },
       ],
-      metadata: (threadId, provider) => {
-        lookups.push([threadId, provider]);
-        return provider === 'kimi' ? { model: 'k2-thinking' } : { model: 'gpt-5.6-terra' };
-      },
+      listManaged,
     });
 
     const response = await app.inject({ method: 'GET', url: '/api/sessions/recent-threads' });
 
-    expect(lookups).toEqual([
-      ['shared-thread', 'codex'],
-      ['shared-thread', 'kimi'],
-    ]);
+    expect(listManaged).toHaveBeenCalledOnce();
     expect(response.json()).toMatchObject([
       { id: 'shared-thread', model: 'gpt-5.6-terra' },
       { id: 'shared-thread', provider: 'kimi', model: 'k2-thinking' },

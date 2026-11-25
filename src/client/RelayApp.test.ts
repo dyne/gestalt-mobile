@@ -1113,45 +1113,11 @@ describe('RelayApp chat controller composition', () => {
     expect(detachedWindow.focus).toHaveBeenCalledOnce();
   });
   it('renders controller view after session switch and ignores late old-session content', async () => {
-    vi.stubGlobal('matchMedia', () => ({ matches: false }));
-    vi.stubGlobal('scrollTo', vi.fn());
-    vi.stubGlobal(
-      'IntersectionObserver',
-      class {
-        observe() {}
-        disconnect() {}
-      },
-    );
-    Element.prototype.scrollIntoView = vi.fn();
-    const authorizedFetch = vi.fn(
-      async (input: RequestInfo | URL) =>
-        new Response(
-          JSON.stringify(
-            String(input) === '/api/bootstrap'
-              ? {
-                  workspaces: [],
-                  profiles: [],
-                  models: { codex: [], kimi: [] },
-                  sessions: [
-                    { id: 'a', state: 'ready', workspacePath: '/work/a' },
-                    { id: 'b', state: 'ready', workspacePath: '/work/b' },
-                  ],
-                }
-              : String(input) === '/api/skill-profiles'
-                ? { profiles: [] }
-                : [],
-          ),
-        ),
-    );
-    render(RelayApp, {
-      authorizedFetch,
-      passkeyAuthEnabled: false,
-      theme: 'minimal-dark',
-      onlock: vi.fn(),
-    });
-    await vi.waitFor(() => expect(fakeController?.selected).toBe('a'));
+    await renderChat([
+      { id: 'a', state: 'ready', workspacePath: '/work/a' },
+      { id: 'b', state: 'ready', workspacePath: '/work/b' },
+    ]);
     fakeController?.emit('a', chatView('a', 'session A'));
-    screen.getByRole('button', { name: 'Chat' }).click();
     await vi.waitFor(() => expect(screen.getByText('session A')).toBeTruthy());
     await fireEvent.click(screen.getByRole('button', { name: /Sessions/i }));
     await vi.waitFor(() =>

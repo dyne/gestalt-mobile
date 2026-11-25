@@ -18,33 +18,40 @@ export type RecentThread = {
   provider?: LlmProvider;
 };
 
-type RecentThreadMetadata = {
+type ManagedThread = {
+  threadId: string | null;
+  provider?: LlmProvider;
   model?: string;
-  skillProfile?: string;
-  orgPlanFilename?: string;
+  effectiveSkillSelection?: { selectedProfileName?: string };
+  lastOrgPlan?: { filename: string };
 };
 
 export function registerListRecentThreads(
   app: FastifyInstance,
   deps: {
     list(): Promise<RecentThread[]>;
-    metadata?(threadId: string, provider: LlmProvider): RecentThreadMetadata | null;
+    listManaged?(): ManagedThread[];
   },
 ): void {
   app.get('/api/sessions/recent-threads', async () => {
     const threads = await deps.list();
+    if (!threads.length) return [];
+    const managed = new Map<string, ManagedThread>();
+    for (const session of deps.listManaged?.() ?? []) {
+      if (!session.threadId) continue;
+      const key = `${session.provider ?? 'codex'}:${session.threadId}`;
+      if (!managed.has(key)) managed.set(key, session);
+    }
     return threads.map(({ id, cwd, recencyAt, provider }) => {
-      const metadata = deps.metadata?.(id, provider ?? 'codex');
+      const session = managed.get(`${provider ?? 'codex'}:${id}`);
       return {
         id,
         cwd,
         recencyAt,
         ...(provider ? { provider } : {}),
-        ...(metadata?.model === undefined ? {} : { model: metadata.model }),
-        ...(metadata?.skillProfile === undefined ? {} : { skillProfile: metadata.skillProfile }),
-        ...(metadata?.orgPlanFilename === undefined
-          ? {}
-          : { orgPlanFilename: metadata.orgPlanFilename }),
+        model: session?.model,
+        skillProfile: session?.effectiveSkillSelection?.selectedProfileName,
+        orgPlanFilename: session?.lastOrgPlan?.filename,
         // The CLI resume command is codex-specific; kimi threads open in the
         // relay without one.
         ...(provider === 'kimi'
