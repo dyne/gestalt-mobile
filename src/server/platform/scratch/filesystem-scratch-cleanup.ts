@@ -86,6 +86,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
     session: ScratchSessionOwner,
     authorized: () => boolean,
     protectedSessions: () => readonly ScratchSessionOwner[],
+    { retainBorrowed = false } = {},
   ) {
     // A retained session can outlive its workspace (including Self DEBUG).
     // Only an absent workspace is already clean; existing links and invalid
@@ -108,13 +109,30 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
         throw error;
       }
     }
+    const ownerId = mobileScratchOwnerId(session.id);
     const counts = await this.cleanWorkspace(
       session.workspacePath,
       protectedSessions,
-      mobileScratchOwnerId(session.id),
+      ownerId,
       authorized,
     );
-    if (counts.skipped || counts.failed) throw new Error('SESSION_CLEANUP_FAILED');
+    const borrowed = counts.leasedMobileSessions;
+    if (
+      counts.failed ||
+      (counts.skipped && (!retainBorrowed || counts.skipped !== borrowed.length))
+    )
+      throw new Error('SESSION_CLEANUP_FAILED');
+    // A missing logical owner cannot prove that its external runtime was retired.
+    if (
+      process.getuid &&
+      (await hasRuntimeOwner(
+        { workspacePath: session.workspacePath, ownerId },
+        new Set(borrowed.flatMap(({ runtimeDirectory }) => runtimeDirectory ?? [])),
+      ))
+    )
+      throw new Error('SESSION_CLEANUP_FAILED');
+    if (!authorized()) throw new Error('SESSION_CLEANUP_FAILED');
+    if (borrowed.length) return 'retained' as const;
   }
   async canonicalWorkspace(path: string): Promise<string> {
     return canonicalScratchWorkspace(path);

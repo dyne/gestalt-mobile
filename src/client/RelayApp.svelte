@@ -452,6 +452,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   const sessionForgetting = new SessionForgetting({
     relay,
     publish: (next) => (forgettingStates = next),
+    onScratchRetained: () =>
+      toastQueue.enqueue({
+        kind: 'info',
+        message:
+          'Session forgotten. Some temporary files are still in use. Run Clean TMP when that work finishes.',
+      }),
     onComplete: (forgottenSession) => {
       const id = forgottenSession.id;
       sessions = sessions.filter((session) => session.id !== id);

@@ -36,12 +36,13 @@ const operation = (
 });
 function fixture() {
   let states: ReadonlyMap<string, SessionForgetState> = new Map();
-  const request = deferred<void>();
+  const request = deferred<void | 'retained'>();
   const relay = {
     forgetSession: vi.fn(() => request.promise),
     getSession: vi.fn(async (): Promise<RelaySession> => owner),
   };
   const onComplete = vi.fn();
+  const onScratchRetained = vi.fn();
   const onError = vi.fn();
   const workflow = new SessionForgetting({
     relay,
@@ -49,6 +50,7 @@ function fixture() {
       states = next;
     },
     onComplete,
+    onScratchRetained,
     onError,
   });
   return {
@@ -56,6 +58,7 @@ function fixture() {
     relay,
     request,
     onComplete,
+    onScratchRetained,
     onError,
     get states() {
       return states;
@@ -185,12 +188,13 @@ describe('owner-specific forgetting', () => {
     const f = fixture();
     const task = f.workflow.forget(owner);
     f.workflow.observe(owner.id, operation('completed'));
-    f.request.resolve();
+    f.request.resolve('retained');
     await task;
     expect(f.workflow.reconcile([owner])).toEqual([]);
     f.workflow.observe(owner.id, operation('stopping'));
     expect(f.states.size).toBe(0);
     expect(f.onComplete).toHaveBeenCalledTimes(1);
+    expect(f.onScratchRetained).toHaveBeenCalledOnce();
     f.workflow.dispose();
   });
 

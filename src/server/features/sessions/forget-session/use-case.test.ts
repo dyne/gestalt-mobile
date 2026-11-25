@@ -296,12 +296,22 @@ describe('durable Forget orchestration', () => {
       desiredState: 'stopped' as const,
     };
     f.sessions.save(saved);
+    const peer = await f.scratch.allocate(saved);
+    roots.push(peer.environment.TMPDIR!, f.context.environment.TMPDIR!);
+    const peerPayload = join(peer.environment.TMPDIR!, 'physical-payload');
+    await writeFile(peerPayload, 'saved session');
+    await writeFile(join(f.context.environment.TMPDIR!, 'physical-payload'), 'forget me');
     const legacy = join(f.workspacePath, 'tmp', 'old-unregistered-output');
     await writeFile(legacy, 'temporary');
     const source = join(f.workspacePath, 'source');
     await writeFile(source, 'keep');
     const forget = f.make();
     expect((await forget.execute(f.session.id))?.phase).toBe('completed');
+    expect(f.operations.find(f.session.id)?.scratchRetained).toBeUndefined();
+    expect(existsSync(f.context.directory)).toBe(false);
+    expect(existsSync(f.context.environment.TMPDIR!)).toBe(false);
+    expect(await readFile(peerPayload, 'utf8')).toBe('saved session');
+    expect((await f.scratch.allocate(saved)).directory).toBe(peer.directory);
     expect(await readFile(legacy, 'utf8')).toBe('temporary');
     expect(f.sessions.find(saved.id)).not.toBeNull();
     expect((await forget.execute(saved.id))?.phase).toBe('completed');

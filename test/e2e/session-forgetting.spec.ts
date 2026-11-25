@@ -549,6 +549,31 @@ for (const viewport of [
   }
 }
 
+test('explains how to reclaim borrowed scratch after Forget completes', async ({ page }) => {
+  await mockAuthenticatedStatus(page);
+  const fixture = new ChatRelayFixture(page);
+  await fixture.install([
+    {
+      id: 'borrowed',
+      state: 'released',
+      threadId: 'borrowed-thread',
+      workspaceId: 'workspace-1',
+      workspacePath: '/workspace/shared',
+    },
+  ]);
+  await page.route('**/api/sessions/borrowed', async (route) => {
+    if (route.request().method() !== 'DELETE') return route.fallback();
+    fixture.sessions.splice(0);
+    await route.fulfill({ status: 204, headers: { 'x-gestalt-scratch-retained': 'true' } });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+  const row = page.locator('[data-session-id="borrowed"]').last();
+  await row.getByRole('button', { name: 'Forget', exact: true }).click();
+  await expect(row).toHaveCount(0);
+  await expect(page.getByText(/Some temporary files are still in use/)).toBeVisible();
+});
+
 test('forgets a saved session through the keep-files action after a cleanup failure', async ({
   page,
 }) => {

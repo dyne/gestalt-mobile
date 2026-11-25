@@ -43,6 +43,8 @@ export function registerForgetSession(
         });
       if (operation.phase !== 'completed')
         return reply.code(503).send({ code: 'SESSION_FORGET_FAILED', operation });
+      if (operation.scratchRetained && !operation.keepFilesRequested)
+        reply.header('x-gestalt-scratch-retained', 'true');
       return reply.code(204).send();
     }
     if (!deps.find(id)) return reply.code(404).send({ code: 'SESSION_NOT_FOUND' });

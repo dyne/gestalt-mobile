@@ -40,11 +40,12 @@ export class SessionForgetting {
   constructor(
     private readonly options: {
       relay: {
-        forgetSession(id: string, keepFilesFor?: string): Promise<void>;
+        forgetSession(id: string, keepFilesFor?: string): Promise<void | 'retained'>;
         getSession(id: string): Promise<RelaySession>;
       };
       publish(states: ReadonlyMap<string, SessionForgetState>): void;
       onComplete(session: RelaySession): void;
+      onScratchRetained(): void;
       onError(error: unknown): void;
       pollMs?: number;
     },
@@ -110,7 +111,8 @@ export class SessionForgetting {
 
   async #request(id: string, keepFilesFor?: string): Promise<void> {
     try {
-      await this.options.relay.forgetSession(id, keepFilesFor);
+      const cleanup = await this.options.relay.forgetSession(id, keepFilesFor);
+      if (!this.#disposed && cleanup === 'retained') this.options.onScratchRetained();
       this.#finish(id);
     } catch (error) {
       if (this.#disposed || this.#completed.has(id)) return;

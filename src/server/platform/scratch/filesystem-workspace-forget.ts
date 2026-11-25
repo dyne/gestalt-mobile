@@ -34,7 +34,9 @@ export class FilesystemWorkspaceForget {
     const workspace = canonicalSessionWorkspace(session.workspacePath);
     const others = knownSessions().filter((other) => other.id !== session.id);
     if (others.some((other) => canonicalSessionWorkspace(other.workspacePath) === workspace))
-      return 'retained';
+      return new FilesystemScratchCleanup().cleanSession(session, authorized, knownSessions, {
+        retainBorrowed: true,
+      });
     const temporary = join(workspace, 'tmp');
     for (const other of others) {
       if (workspaceContains(temporary, canonicalSessionWorkspace(other.workspacePath)))
