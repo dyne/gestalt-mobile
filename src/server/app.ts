@@ -7,6 +7,7 @@
 import { registerChatTransportDiagnostics } from './platform/http/chat-transport-diagnostics.js';
 import type { TransportDiagnostic } from '../shared/contracts/chat-transport-diagnostics.js';
 
+import { basename } from 'node:path';
 import fastifyStatic from '@fastify/static';
 import fastifyCookie from '@fastify/cookie';
 import fastify, { type FastifyInstance } from 'fastify';
@@ -296,7 +297,16 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   if (deps.transportDiagnostic) registerChatTransportDiagnostics(app, deps.transportDiagnostic);
   await app.register(fastifyCookie);
   if (deps.pwaIcon) registerPwaRoutes(app, deps.pwaIcon);
-  if (deps.staticDir) await app.register(fastifyStatic, { root: deps.staticDir });
+  if (deps.staticDir) {
+    await app.register(fastifyStatic, {
+      root: deps.staticDir,
+      setHeaders(reply, path) {
+        if (/^ui-icons-[\w-]+\.svg$/.test(basename(path))) {
+          reply.header('Cache-Control', 'public, max-age=31536000, immutable');
+        }
+      },
+    });
+  }
   if (deps.auth)
     registerAuthorizationBoundary(app, {
       repository: deps.auth.repository,
