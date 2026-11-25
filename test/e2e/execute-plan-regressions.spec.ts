@@ -188,9 +188,18 @@ for (const code of [
       await page.getByRole('button', { name: 'Open Project roadmap' }).click();
       const execute = page.getByRole('button', { name: 'Execute', exact: true });
       await expect(execute).toBeDisabled();
-      await expect(page.getByText('Checking whether this plan can be executed…')).toBeVisible();
+      const checking = page
+        .getByRole('status')
+        .filter({ hasText: 'Checking whether this plan can be executed…' });
+      await expect(checking).toBeVisible();
+      const animation = () =>
+        checking.evaluate((element) => getComputedStyle(element, '::before').animationName);
+      await expect.poll(animation).not.toBe('none');
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await expect.poll(animation).toBe('none');
       release();
       await expect(page.getByText(reason)).toBeVisible();
+      await expect(checking).toHaveCount(0);
       await expect(execute).toBeDisabled();
       expect(await execute.getAttribute('aria-describedby')).toBeTruthy();
       expect(state.launchRequests).toEqual([]);

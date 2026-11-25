@@ -31,6 +31,23 @@ export class FilesystemOrgPlanContext {
     private readonly session: (id: string) => SessionContext | null,
   ) {}
 
+  /** Resolve the reference and its project against one catalog read for this preview. */
+  forPreview(): FilesystemOrgPlanContext {
+    let pending: ReturnType<WorkspaceSnapshotReader['snapshot']> | undefined;
+    const snapshot = () => (pending ??= this.workspaces.snapshot());
+    return new FilesystemOrgPlanContext(
+      {
+        snapshot,
+        resolve: async (id) => {
+          const entry = (await snapshot()).find((workspace) => workspace.id === id);
+          if (!entry) throw new Error('WORKSPACE_NOT_FOUND');
+          return entry;
+        },
+      },
+      this.session,
+    );
+  }
+
   async resolveReference(
     reference: OrgPlanReference,
   ): Promise<{ workspacePath: string; planName: string } | null> {

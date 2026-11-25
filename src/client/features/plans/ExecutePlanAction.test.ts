@@ -14,6 +14,7 @@ import type {
   OrgPlanLaunchResult,
 } from '../../../shared/contracts/org-plan-execution.js';
 import { newSessionFallback } from '../../../shared/contracts/session-defaults.js';
+import type { RelaySession } from '../sessions/relay-client.js';
 
 const reference = {
   kind: 'workspace' as const,
@@ -98,6 +99,49 @@ afterEach(() => {
 });
 
 describe('Execute plan confirmation', () => {
+  it('opens an eligible plan while replacement waits for confirmed session status', async () => {
+    let finish!: (session: RelaySession) => void;
+    const status = new Promise<RelaySession>((resolve) => {
+      finish = resolve;
+    });
+    const transport = {
+      prepareOrgPlanSupervision: vi.fn().mockResolvedValue({
+        ...eligible,
+        workspaceSession: { sessionId: 'other', replaceAllowed: true },
+      }),
+      getSession: vi.fn(() => status),
+      startOrgPlanSupervision: vi.fn(),
+    };
+    const idle: RelaySession = {
+      id: 'other',
+      state: 'ready',
+      sessionStatus: {
+        state: 'idle',
+        reason: 'complete',
+        confidence: 'fresh',
+        observedAt: new Date().toISOString(),
+        nextExpectedAction: 'Ready.',
+      },
+    };
+    try {
+      render(ExecutePlanAction, { reference, transport });
+      await waitFor(() => expect(transport.getSession).toHaveBeenCalledWith('other'));
+      const execute = screen.getByRole('button', { name: 'Execute' }) as HTMLButtonElement;
+      expect(execute.disabled).toBe(false);
+      await fireEvent.click(execute);
+      expect(screen.getByText('Checking session status…')).toBeTruthy();
+      const replace = screen.getByRole('button', {
+        name: 'Replace and execute',
+      }) as HTMLButtonElement;
+      expect(replace.disabled).toBe(true);
+      finish(idle);
+      await waitFor(() => expect(replace.disabled).toBe(false));
+      expect(transport.startOrgPlanSupervision).not.toHaveBeenCalled();
+    } finally {
+      finish(idle);
+      await tick();
+    }
+  });
   it('reuses one preparation across Execute, repeated profile changes, and launch', async () => {
     const { transport, onresult } = setup();
     await open();
