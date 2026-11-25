@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import Icon from '../../components/Icon.svelte';
   import { onMount } from 'svelte';
   import { MAX_UPLOAD_BYTES } from '../../../shared/contracts/file-upload.js';
   import {
@@ -328,11 +329,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           aria-controls="prompt-action-panel"
           onclick={() => (actionMenuOpen = !actionMenuOpen)}
         >
-          <svg aria-hidden="true" viewBox="0 0 24 24">
-            <circle cx="6" cy="12" r="1.5" />
-            <circle cx="12" cy="12" r="1.5" />
-            <circle cx="18" cy="12" r="1.5" />
-          </svg>
+          <Icon name="more" size="1.35rem" />
         </button>
         {#if actionMenuOpen}
           <div id="prompt-action-panel" class="action-panel" aria-label="Prompt actions">
@@ -368,9 +365,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         disabled={uploading}
         onclick={pickFiles}
       >
-        <svg aria-hidden="true" viewBox="0 0 24 24">
-          <path d="M12 16V4m-4 4 4-4 4 4M4 16v4h16v-4" />
-        </svg>
+        <Icon name="upload" size="1.35rem" />
       </button>
     {:else}
       <button
@@ -379,9 +374,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         disabled={!sendEnabled}
         onclick={retryFromPrompt ? onretry : onsend}
       >
-        <svg aria-hidden="true" viewBox="0 0 24 24">
-          <path d="M9 10 5 14l4 4M5 14h8a6 6 0 0 0 6-6V6" />
-        </svg>
+        <Icon name="send" size="1.35rem" />
       </button>
     {/if}
   </div>
@@ -455,6 +448,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     outline-offset: 1px;
   }
   .prompt-row {
+    --icon-stroke-width: 2;
     display: flex;
     align-items: end;
     gap: 0.25rem;
@@ -492,15 +486,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .prompt-row > button:hover:not(:disabled) {
     background: var(--theme-control-pressed);
     color: var(--theme-control-pressed-contrast);
-  }
-  .prompt-row svg {
-    inline-size: 1.35rem;
-    block-size: 1.35rem;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 2;
-    stroke-linecap: round;
-    stroke-linejoin: round;
   }
   .prompt-action {
     position: relative;
