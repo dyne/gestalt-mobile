@@ -534,6 +534,8 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
         { method: 'DELETE' },
       ).then(async (response) => {
         if (!response.ok) throw await failure(response);
+        if (response.headers.get('x-gestalt-scratch-retained') === 'true')
+          return 'retained' as const;
       }),
     getHistory: async (sessionId: string, observation?: HistoryObservation) => {
       const response = await fetcher(

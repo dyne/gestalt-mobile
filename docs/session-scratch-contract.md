@@ -193,8 +193,10 @@ The launcher implements CLI allocation before cleanup may recognize CLI owners.
 Mobile's durable roster is its authority, covering running, open and saved/
 reopenable sessions even without a runtime, browser connection or active turn.
 Stop/release keeps scratch. Forget first stops and releases owned work before
-targeted cleanup and durable roster retirement. Intermediate Forget may retain
-scratch while other saved sessions remain for the same canonical folder. Final
+targeted cleanup and durable roster retirement. When other saved sessions share
+the workspace, Forget removes the forgotten session's verified owner directory
+and runtime payload. An outstanding borrower keeps that owner's scratch until
+release and a subsequent Clean TMP. Shared workspace files stay in place. Final
 Forget instead owns deletion of the entire explicitly disposable workspace `tmp`
 directory, after confirmed runtime shutdown and nested known-session checks.
 Resuming forgotten history requires a new allocation. Allocation/association APIs
@@ -395,7 +397,9 @@ history, auth and profiles are never removed.
 Cleanup targets only the session's validated managed owner/removal directories,
 under its durable operation's authority. A successful request returns 204 after
 cleanup and atomic roster/operation finalization. Intermediate operations may
-record `scratchRetained: true`. Final Forget removes all contents of the selected
+record `scratchRetained: true`. A successful DELETE reports protected scratch
+in the `x-gestalt-scratch-retained: true` header so Mobile can suggest Clean TMP.
+Explicit keep-files recovery suppresses this notification. Final Forget removes all contents of the selected
 workspace's `tmp` after retiring its validated external runtime roots and released
 nested owners, preserving source, Git and persistent `.gestalt` data outside
 that directory. A known workspace contained inside `tmp` blocks final deletion

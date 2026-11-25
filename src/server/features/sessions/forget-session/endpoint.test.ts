@@ -39,16 +39,20 @@ describe('DELETE /api/sessions/:id', () => {
     }
   });
 
-  it('returns idempotent success for an already completed operation after roster removal', async () => {
+  it.each([
+    [{}, undefined],
+    [{ scratchRetained: true as const }, 'true'],
+    [{ scratchRetained: true as const, keepFilesRequested: true as const }, undefined],
+  ] as const)('reports protected scratch on completed Forget (%j)', async (result, header) => {
     const app = fastify();
     registerForgetSession(app, {
       find: () => null,
-      forget: async () => ({ ...operation, phase: 'completed' }),
+      forget: async () => ({ ...operation, ...result, phase: 'completed' }),
     });
     try {
-      expect(
-        (await app.inject({ method: 'DELETE', url: '/api/sessions/session-1' })).statusCode,
-      ).toBe(204);
+      const reply = await app.inject({ method: 'DELETE', url: '/api/sessions/session-1' });
+      expect(reply.statusCode).toBe(204);
+      expect(reply.headers['x-gestalt-scratch-retained']).toBe(header);
     } finally {
       await app.close();
     }
