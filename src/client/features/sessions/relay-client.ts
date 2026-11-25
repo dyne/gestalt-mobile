@@ -387,6 +387,7 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       workspaceId: string,
       input: {
         source: string;
+        newName?: string;
         destinationDirectory: string;
         conflict: 'reject' | 'replace' | 'keep-both';
       },

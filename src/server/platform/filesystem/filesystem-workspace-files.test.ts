@@ -252,6 +252,82 @@ describe('FilesystemWorkspaceFiles', () => {
     });
   });
 
+  it('copies project content recursively and omits generated directories by exact name', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-folder-copy-'));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    const project = join(root, 'project');
+    const omitted = [
+      'tmp',
+      '.git',
+      'src/.cache',
+      'src/nested/build',
+      'src/node_modules',
+      'src/nested/dist',
+    ];
+    for (const path of [...omitted, 'builder', 'src/nested/empty']) {
+      await mkdir(join(project, path), { recursive: true });
+    }
+    await writeFile(join(project, 'src/nested/build/artifact'), 'original');
+    await writeFile(join(project, 'src/nested/cache'), 'regular file');
+    await writeFile(join(project, '.env.example'), 'example');
+    await mkdir(join(root, 'out'));
+    const files = new FilesystemWorkspaceFiles();
+    expect(
+      await files.copy(root, {
+        source: 'project',
+        destinationDirectory: 'out',
+        conflict: 'reject',
+      }),
+    ).toMatchObject({ kind: 'available', path: 'out/project' });
+    const copied = join(root, 'out/project');
+    for (const path of omitted)
+      await expect(lstat(join(copied, path))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readdir(join(copied, 'builder'))).toEqual([]);
+    expect(await readdir(join(copied, 'src/nested/empty'))).toEqual([]);
+    expect(await readFile(join(copied, 'src/nested/cache'), 'utf8')).toBe('regular file');
+    expect(await readFile(join(copied, '.env.example'), 'utf8')).toBe('example');
+    expect(await readFile(join(project, 'src/nested/build/artifact'), 'utf8')).toBe('original');
+  });
+
+  it('renames files and folders in place and preserves both entries on a collision', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-rename-'));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    await mkdir(join(root, 'project/build'), { recursive: true });
+    await writeFile(join(root, 'project/build/a'), 'one');
+    await writeFile(join(root, 'project/build/b'), 'two');
+    const files = new FilesystemWorkspaceFiles();
+    const file = {
+      source: 'project/build/a',
+      destinationDirectory: 'project/build',
+      conflict: 'reject' as const,
+    };
+    expect(await files.move(root, { ...file, newName: 'b' })).toEqual({
+      kind: 'conflict',
+      replaceAllowed: false,
+    });
+    expect(await readFile(join(root, 'project/build/b'), 'utf8')).toBe('two');
+    for (const newName of ['../outside', '.git', '   '])
+      expect(await files.move(root, { ...file, newName })).toEqual({ kind: 'invalid-destination' });
+    expect(await files.copy(root, { ...file, newName: 'c' })).toEqual({
+      kind: 'invalid-destination',
+    });
+    expect(await files.move(root, { ...file, newName: 'c' })).toMatchObject({
+      kind: 'available',
+      path: 'project/build/c',
+    });
+    expect(
+      await files.move(root, {
+        source: 'project',
+        destinationDirectory: '',
+        conflict: 'reject',
+        newName: 'My project',
+      }),
+    ).toMatchObject({ kind: 'available', path: 'My project' });
+    expect(await readdir(root)).toEqual(['My project']);
+    expect(await readdir(join(root, 'My project/build'))).toEqual(['b', 'c']);
+    expect(await readFile(join(root, 'My project/build/c'), 'utf8')).toBe('one');
+  });
+
   it('copies, moves, uploads and deletes only workspace-relative regular entries', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-files-'));
     await mkdir(join(root, 'from', 'nested'), { recursive: true });

@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <svelte:options runes={true} />
 
 <script lang="ts">
+  import Icon from '../../components/Icon.svelte';
   import type { RelayWorkspaceFile } from '../sessions/relay-client.js';
   import type { FileBrowserController } from './file-browser-controller.js';
   type Node = { entry: RelayWorkspaceFile; level: number; parent: string };
@@ -14,6 +15,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     revision,
     directory = '',
     destinationMode = false,
+    destination,
+    onmanage,
     ondestinationselect = () => {},
     onselectionchange = () => {},
   }: {
@@ -21,6 +24,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     revision: number;
     directory?: string;
     destinationMode?: boolean;
+    destination?: string;
+    onmanage?: (path: string) => void;
     ondestinationselect?: (path: string) => void;
     onselectionchange?: (path: string) => void;
   } = $props();
@@ -60,6 +65,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     else void controller.expand(entry.path);
   }
   function key(event: KeyboardEvent, node: Node, index: number) {
+    if (event.target !== event.currentTarget) return;
     event.stopPropagation();
     const item = node.entry;
     const parent = node.parent;
@@ -103,6 +109,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         break;
     }
   }
+  function selected(path: string) {
+    void revision;
+    return (destinationMode ? destination : controller.selectedPath) === path;
+  }
   function select(entry: RelayWorkspaceFile): void {
     if (entry.kind === 'symlink') return;
     if (destinationMode) {
@@ -131,8 +141,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         role="treeitem"
         aria-level={level}
         aria-expanded={directory ? expanded(entry.path) : undefined}
-        aria-selected={entry.kind === 'symlink' ? 'false' : controller.selectedPath === entry.path}
-        aria-disabled={entry.kind === 'symlink'}
+        aria-selected={entry.kind === 'symlink' ? 'false' : selected(entry.path)}
+        aria-disabled={entry.kind === 'symlink' || (destinationMode && !directory)}
         aria-describedby={entry.kind === 'symlink' ? `${entry.path}-unsupported` : undefined}
         tabindex={focused === entry.path || (!focused && index === 0) ? 0 : -1}
         onfocus={() => (focused = entry.path)}
@@ -150,12 +160,31 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               onclick={(event) => {
                 event.stopPropagation();
                 toggle(entry);
-              }}>{expanded(entry.path) ? '−' : '+'}</button
-            >{:else}<span class="disclosure"></span>{/if}
+              }}
+              ><span class:expanded={expanded(entry.path)}
+                ><Icon name="chevron" size=".85rem" /></span
+              ></button
+            >{/if}
+          <span class="kind-icon" class:folder={directory}
+            ><Icon name={directory ? 'sessions' : 'document'} /></span
+          >
           <span class="tree-label">{entry.name}</span>{#if destinationMode && !directory}
             <span class="unsupported">Files cannot be destinations</span>
           {:else if entry.kind === 'symlink'}
             <span id={`${entry.path}-unsupported`} class="unsupported">Unsupported link</span>
+          {/if}
+          {#if onmanage && !destinationMode && entry.kind !== 'symlink'}
+            <button
+              class="item-menu"
+              type="button"
+              aria-label={`Actions for ${entry.name}`}
+              title={`Actions for ${entry.name}`}
+              onclick={(event) => {
+                event.stopPropagation();
+                controller.select(entry.path);
+                onmanage?.(entry.path);
+              }}><Icon name="more" size="1.1rem" /></button
+            >
           {/if}
         </div>
         {#if directory && expanded(entry.path)}
@@ -184,37 +213,88 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <style>
   .file-tree {
-    display: grid;
-    gap: 0.2rem;
+    container-type: inline-size;
     min-inline-size: 0;
-    overflow-x: clip;
   }
   .tree-row {
     display: flex;
-    flex-wrap: wrap;
-    min-inline-size: 0;
-    padding-inline-start: min(calc((var(--level) - 1) * 0.75rem), 4rem);
-  }
-  button {
-    min-block-size: 2.75rem;
-    min-inline-size: 2.75rem;
-    overflow-wrap: anywhere;
+    align-items: center;
+    gap: 0.45rem;
+    min-height: 44px;
+    padding-inline: min(calc((var(--level) - 1) * 0.85rem + 0.25rem), 3rem) 0.25rem;
+    border-bottom: 1px solid var(--theme-divider);
+    border-inline-start: 3px solid transparent;
   }
   .treeitem {
-    flex: 1;
-    text-align: start;
-    min-block-size: 2.75rem;
-    min-inline-size: 2.75rem;
-    overflow-wrap: anywhere;
+    min-inline-size: 0;
+    outline-offset: -3px;
+  }
+  .treeitem[aria-disabled='false'] > .tree-row {
+    cursor: pointer;
+  }
+  .treeitem[aria-disabled='false'] > .tree-row:hover {
+    background: var(--theme-control-hover);
+  }
+  .treeitem[aria-selected='true'] > .tree-row {
+    background: var(--theme-accent-wash);
+    border-inline-start-color: var(--theme-accent);
   }
   .tree-label {
     flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-size: 0.9375rem;
+    line-height: 1.35;
   }
-  .disclosure {
-    flex: 0 0 2.75rem;
+  .disclosure,
+  .item-menu {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    flex: none;
+    border: 0;
+    background: transparent;
+    color: var(--theme-text-muted);
+    padding: 0;
+  }
+  .disclosure span {
+    display: flex;
+  }
+  .disclosure .expanded {
+    transform: rotate(90deg);
+  }
+  .item-menu:hover,
+  .disclosure:hover {
+    background: var(--theme-control-hover);
+    color: var(--theme-text);
+  }
+  .kind-icon {
+    display: inline-flex;
+    color: var(--theme-text-muted);
+  }
+  .kind-icon.folder {
+    color: var(--theme-accent);
+  }
+  .kind-icon:first-child {
+    margin-inline-start: calc(44px + 0.45rem);
   }
   .unsupported {
+    max-inline-size: 35%;
+    font-size: 0.75rem;
     color: var(--theme-text-muted);
-    font-size: 0.875rem;
+    overflow-wrap: anywhere;
+  }
+  @container (max-width: 13rem) {
+    .kind-icon {
+      display: none;
+    }
+    .tree-row {
+      gap: 4px;
+      padding-inline-end: 0;
+    }
+    .tree-row:has(.kind-icon:first-child) .tree-label {
+      margin-inline-start: 44px;
+    }
   }
 </style>

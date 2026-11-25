@@ -368,6 +368,14 @@ export class FilesystemWorkspaceFiles implements WorkspaceFileSource {
   ): Promise<FileMutationResult> {
     if (
       !validRelative(input.source) ||
+      (input.newName !== undefined &&
+        (!moving ||
+          input.conflict !== 'reject' ||
+          typeof input.newName !== 'string' ||
+          !input.newName.trim() ||
+          !validName(input.newName) ||
+          Buffer.byteLength(input.newName) > 255 ||
+          dirnameRelative(input.source) !== input.destinationDirectory)) ||
       (input.destinationDirectory !== '' && !validRelative(input.destinationDirectory))
     )
       return { kind: 'invalid-destination' };
@@ -387,7 +395,11 @@ export class FilesystemWorkspaceFiles implements WorkspaceFileSource {
       await Promise.all([sourceParent.close(), parent.close()]);
       return { kind: 'missing' };
     }
-    if (dirnameRelative(input.source) === input.destinationDirectory && moving) {
+    if (
+      dirnameRelative(input.source) === input.destinationDirectory &&
+      moving &&
+      (!input.newName || input.newName === basename(source))
+    ) {
       await Promise.all([sourceParent.close(), parent.close()]);
       return { kind: 'same-parent' };
     }
@@ -401,12 +413,14 @@ export class FilesystemWorkspaceFiles implements WorkspaceFileSource {
     }
     const target = await this.targetName(
       parent.path,
-      basename(source),
+      input.newName ?? basename(source),
       input.conflict,
       sourceMetadata.isFile() ? 'file' : 'directory',
     );
     if (typeof target !== 'string') {
       await Promise.all([sourceParent.close(), parent.close()]);
+      if (input.newName && target.kind === 'conflict')
+        return { kind: 'conflict', replaceAllowed: false };
       return target;
     }
     try {
@@ -456,7 +470,9 @@ export class FilesystemWorkspaceFiles implements WorkspaceFileSource {
         entryKind: sourceMetadata.isDirectory() ? 'directory' : 'file',
         conflict: input.conflict,
       };
-    } catch {
+    } catch (error) {
+      if (input.newName && (error as NodeJS.ErrnoException).code === 'EEXIST')
+        return { kind: 'conflict', replaceAllowed: false };
       return { kind: 'unreadable' };
     } finally {
       await Promise.all([sourceParent.close(), parent.close()]);
@@ -728,6 +744,31 @@ async function stableAnchor(root: string, directory: string, anchor: string): Pr
     return false;
   }
 }
+// Match directory components, so similarly named source files are copied normally.
+const omittedCopyDirectories = new Set([
+  'tmp',
+  'temp',
+  '.tmp',
+  '.temp',
+  'cache',
+  '.cache',
+  'build',
+  'dist',
+  'node_modules',
+  '__pycache__',
+  '.pytest_cache',
+  '.mypy_cache',
+  '.ruff_cache',
+  '.next',
+  '.nuxt',
+  '.svelte-kit',
+  '.vite',
+  '.parcel-cache',
+  '.gradle',
+  '.turbo',
+  'coverage',
+]);
+
 async function copyTree(source: string, target: string, directory: boolean): Promise<void> {
   if (!directory) {
     const sourceHandle = await open(source, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -742,7 +783,8 @@ async function copyTree(source: string, target: string, directory: boolean): Pro
   for (const name of await readdir(source)) {
     const childSource = join(source, name);
     const metadata = await lstat(childSource);
-    if (metadata.isSymbolicLink() || name === '.git') throw new Error('unsupported source');
+    if (name === '.git' || (metadata.isDirectory() && omittedCopyDirectories.has(name))) continue;
+    if (!metadata.isFile() && !metadata.isDirectory()) throw new Error('unsupported source');
     if (metadata.isDirectory()) {
       const child = await openDirectory(childSource);
       if (!child) throw new Error('source changed');
