@@ -8,6 +8,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DirectoryReader } from './file-browser-controller.js';
 import FileBrowser from './FileBrowser.svelte';
 
 const root = {
@@ -28,12 +29,6 @@ beforeEach(() => {
   };
 });
 afterEach(cleanup);
-
-type DirectoryReader = (
-  workspaceId: string,
-  input?: { directory?: string; cursor?: string; limit?: number },
-  signal?: AbortSignal,
-) => Promise<{ directory: string; entries: readonly never[] }>;
 
 function renderBrowser(
   listDirectory: DirectoryReader = vi.fn(async () => ({ directory: '', entries: [] })),
@@ -151,13 +146,17 @@ describe('FileBrowser modal lifecycle', () => {
   });
 
   it('copies through an explicit destination picker and selects the server-returned name', async () => {
-    const listDirectory = vi.fn().mockResolvedValue({
-      directory: '',
-      entries: [
-        { name: 'report.txt', path: 'report.txt', kind: 'file' as const },
-        { name: 'archive', path: 'archive', kind: 'directory' as const },
-      ],
-    });
+    const copyPath = 'archive/report (copy).txt';
+    const listDirectory = vi.fn<DirectoryReader>(async (_id, input) => ({
+      directory: input?.directory ?? '',
+      entries:
+        input?.directory === 'archive'
+          ? [{ name: 'report (copy).txt', path: copyPath, kind: 'file' as const }]
+          : [
+              { name: 'report.txt', path: 'report.txt', kind: 'file' as const },
+              { name: 'archive', path: 'archive', kind: 'directory' as const },
+            ],
+    }));
     const copyEntry = vi
       .fn()
       .mockResolvedValue({ path: 'archive/report (copy).txt', kind: 'file' });
@@ -174,7 +173,12 @@ describe('FileBrowser modal lifecycle', () => {
       destinationDirectory: 'archive',
       conflict: 'reject',
     });
-    expect(onsuccess).toHaveBeenCalledWith('Copied archive/report (copy).txt.');
+    await waitFor(() =>
+      expect(onsuccess).toHaveBeenCalledWith('Copied archive/report (copy).txt.'),
+    );
+    expect(screen.getByRole('treeitem', { selected: true }).textContent).toContain(
+      'report (copy).txt',
+    );
   });
 
   it('focuses the conflict panel and offers only eligible conflict choices', async () => {

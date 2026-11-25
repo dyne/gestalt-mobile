@@ -79,7 +79,15 @@ export class FileBrowserController {
   }
   async refresh(path = ''): Promise<void> {
     this.invalidateBranch(path);
+    await this.reloadExpanded(path);
+  }
+  private async reloadExpanded(path: string): Promise<void> {
     await this.load(path);
+    if (!this.expanded.has(path)) return;
+    const children = this.state(path).entries.filter(
+      (entry) => entry.kind === 'directory' && this.expanded.has(entry.path),
+    );
+    await Promise.all(children.map((entry) => this.reloadExpanded(entry.path)));
   }
   select(path: string): void {
     this.selectedPath = path;

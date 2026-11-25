@@ -29,4 +29,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <symbol id="more" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="18" cy="12" r="1.5" /></symbol>
   <symbol id="upload" viewBox="0 0 24 24"><path d="M12 16V4m-4 4 4-4 4 4M4 16v4h16v-4" /></symbol>
   <symbol id="send" viewBox="0 0 24 24"><path d="M9 10 5 14l4 4M5 14h8a6 6 0 0 0 6-6V6" /></symbol>
+  <symbol id="document" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z M14 3v5h4 M9 13h6 M9 17h4"/></symbol>
+  <symbol id="rename" viewBox="0 0 24 24"><path d="m14 5 5 5 M4 20l5-1 12-12-5-5L4 14z"/></symbol>
+  <symbol id="chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  <symbol id="folder-add" viewBox="0 0 24 24"><path d="M3 6h7l2 3h9v11H3z M12 11v7 M8.5 14.5h7"/></symbol>
+  <symbol id="move" viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v11H3v-4 M2 12h12 m-4-4 4 4-4 4"/></symbol>
 </svg>

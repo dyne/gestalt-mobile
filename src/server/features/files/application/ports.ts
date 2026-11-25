@@ -32,6 +32,7 @@ export type FileMutationResult =
         | 'unreadable';
     };
 export type CopyMoveInput = Readonly<{
+  newName?: string;
   source: string;
   destinationDirectory: string;
   conflict: FileConflict;

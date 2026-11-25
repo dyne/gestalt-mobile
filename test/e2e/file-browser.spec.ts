@@ -322,3 +322,43 @@ test('JSON starts folded and supports one-level controls and global folding', as
   await viewer.getByRole('button', { name: 'Show source' }).click();
   await expect(viewer.locator('pre')).toHaveText(content);
 });
+
+test('renames from file actions and keeps an editable name after a collision', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await openBrowser(page);
+  let name = 'note.txt';
+  await page.route(/\/api\/workspaces\/repo\/files(?:\?.*)?$/, (route) =>
+    route.fulfill({ json: { directory: '', entries: [{ name, path: name, kind: 'file' }] } }),
+  );
+  await page.route('**/api/workspaces/repo/files/move', async (route) => {
+    const input = route.request().postDataJSON();
+    expect(input).toMatchObject({
+      source: 'note.txt',
+      destinationDirectory: '',
+      conflict: 'reject',
+    });
+    expect(await route.request().headerValue('idempotency-key')).toBeTruthy();
+    if (input.newName === 'README.md') {
+      return route.fulfill({ status: 409, json: { code: 'FILE_CONFLICT', replaceAllowed: false } });
+    }
+    name = input.newName;
+    return route.fulfill({ json: { path: name, entryKind: 'file', kind: 'available' } });
+  });
+  await page.getByRole('button', { name: 'Actions for note.txt' }).click();
+  await page.getByRole('button', { name: 'Rename', exact: true }).click();
+  const field = page.getByRole('textbox', { name: 'New name' });
+  await expect(field).toBeFocused();
+  await expect(field).toHaveValue('note.txt');
+  await field.fill('README.md');
+  await field.press('Enter');
+  await expect(page.getByText('That name is already in use. Choose another name.')).toBeVisible();
+  await expect(field).toHaveValue('README.md');
+  await field.fill('Meeting notes.md');
+  await field.press('Enter');
+  await expect(
+    page
+      .getByRole('tree', { name: 'Files', exact: true })
+      .getByRole('treeitem', { selected: true }),
+  ).toContainText('Meeting notes.md');
+  await expect(page.getByRole('button', { name: 'Actions for note.txt' })).toHaveCount(0);
+});

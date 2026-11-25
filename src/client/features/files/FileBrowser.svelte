@@ -23,6 +23,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     canUseDestination,
     idleTransfer,
     pickDestination,
+    parent as parentPath,
     startTransfer,
     submitTransfer,
     transferConflict,
@@ -56,6 +57,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       workspaceId: string,
       input: {
         source: string;
+        newName?: string;
         destinationDirectory: string;
         conflict: 'reject' | 'replace' | 'keep-both';
       },
@@ -107,10 +109,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let selectedPath = $state('');
   let newFolderParent = $state<string | null>(null);
   let folderName = $state('');
+  let renamePath = $state<string | null>(null);
+  let newName = $state('');
+  let renameError = $state('');
+  let renaming = $state(false);
+  let renameInput = $state<HTMLInputElement>();
+  let itemActions = $state<HTMLElement>();
+
   let creatingFolder = $state(false);
   let folderNameInput = $state<HTMLInputElement | null>(null);
   let newFolderButton = $state<HTMLButtonElement | null>(null);
   let deleteConfirmation = $state(false);
+  const editing = $derived(renamePath !== null || newFolderParent !== null || deleteConfirmation);
   let deleting = $state(false);
   let deleteCancel = $state<HTMLButtonElement | null>(null);
   let uploadInput = $state<HTMLInputElement | null>(null);
@@ -123,6 +133,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     return controller?.state('') ?? { entries: [], loading: true, error: false };
   });
   let selectedEntry = $derived.by(() => {
+    void revision;
     if (!controller || !selectedPath) return undefined;
     const parent = selectedPath.includes('/')
       ? selectedPath.slice(0, selectedPath.lastIndexOf('/'))
@@ -150,7 +161,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   onDestroy(() => controller?.close());
 
   function close(): void {
-    if (transfer.phase === 'submitting' || deleting || creatingFolder) return;
+    if (transfer.phase === 'submitting' || deleting || creatingFolder || renaming) return;
     uploadAbort?.abort();
     controller?.close();
     dialog?.close();
@@ -284,11 +295,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function handleCancel(event: Event): void {
-    if (transfer.phase === 'submitting' || deleting || creatingFolder) {
+    if (transfer.phase === 'submitting' || deleting || creatingFolder || renaming) {
       event.preventDefault();
       return;
     }
     event.preventDefault();
+    if (renamePath !== null) {
+      void cancelRename();
+      return;
+    }
     if (newFolderParent !== null) {
       void cancelNewFolder();
       return;
@@ -321,10 +336,57 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     deleteCancel?.focus();
   }
 
-  function sourceEntry() {
-    return controller
-      ?.state(transfer.source ? transfer.source.slice(0, transfer.source.lastIndexOf('/')) : '')
-      .entries.find((entry) => entry.path === transfer.source);
+  async function manage(path: string) {
+    selectedPath = path;
+    await tick();
+    itemActions?.focus();
+  }
+  async function openRename() {
+    if (!selectedEntry) return;
+    renamePath = selectedPath;
+    newName = selectedEntry.name;
+    renameError = '';
+    await tick();
+    renameInput?.focus();
+    renameInput?.select();
+  }
+  async function cancelRename() {
+    if (renaming) return;
+    renamePath = null;
+    await tick();
+    itemActions?.focus();
+  }
+  async function renameSelected(event: SubmitEvent) {
+    event.preventDefault();
+    if (renaming || !renamePath || !controller || !newName.trim()) return;
+    const source = renamePath;
+    const directory = parentPath(source);
+    renaming = true;
+    renameError = '';
+    try {
+      const result = await moveEntry(
+        root.id,
+        { source, destinationDirectory: directory, newName, conflict: 'reject' },
+        createIdempotencyKey(),
+      );
+      await controller.refresh(directory);
+      selectedPath = result.path;
+      controller.select(result.path);
+      renamePath = null;
+      onmutation();
+      onsuccess(`Renamed to ${newName}.`);
+    } catch (error) {
+      const code = (error as RelayRequestError).code;
+      renameError =
+        code === 'FILE_CONFLICT' || code === 'SYMLINK_UNSUPPORTED'
+          ? 'That name is already in use. Choose another name.'
+          : 'Could not rename this item. Check the name and try again.';
+    } finally {
+      renaming = false;
+      await tick();
+      if (renamePath !== null) renameInput?.focus();
+      else itemActions?.focus();
+    }
   }
   function beginTransfer(kind: TransferKind): void {
     if (!selectedPath) return;
@@ -351,13 +413,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         { source: next.source, destinationDirectory: next.destination, conflict },
         createIdempotencyKey(),
       );
-      const sourceParent = next.source.includes('/')
-        ? next.source.slice(0, next.source.lastIndexOf('/'))
-        : '';
-      if (next.kind === 'copy') await controller.refresh(next.destination);
-      else {
-        await Promise.all([controller.refresh(sourceParent), controller.refresh(next.destination)]);
-      }
+      const sourceParent = parentPath(next.source);
+      if (next.kind === 'move' && sourceParent !== next.destination)
+        await controller.refresh(sourceParent);
+      await controller.refresh(next.destination);
+      await controller.expand(next.destination);
+      selectedPath = result.path;
       controller.select(result.path);
       onsuccess(`${next.kind === 'copy' ? 'Copied' : 'Moved'} ${result.path}.`);
       onmutation();
@@ -379,23 +440,43 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <dialog bind:this={dialog} aria-labelledby="file-browser-title" {onclose} oncancel={handleCancel}>
   <section class="file-browser-shell">
     <header>
-      <div>
-        <h2 id="file-browser-title" bind:this={heading} tabindex="-1">{title}</h2>
-        <p>
-          {transfer.phase === 'picking'
-            ? 'Choose destination folder.'
-            : 'Browse folders and select a position.'}
-        </p>
+      <div class="workspace-heading">
+        <span class="workspace-icon"><Icon name="sessions" size="1.5rem" /></span>
+        <div>
+          <h2 id="file-browser-title" aria-label={title} bind:this={heading} tabindex="-1">
+            Files
+          </h2>
+          <p class="workspace-path">
+            {root.relativePath === '.' ? '~/' : `~/${root.relativePath}`}
+          </p>
+        </div>
       </div>
-      <button
-        type="button"
-        class="close"
-        aria-label="Close file browser"
-        title="Close file browser"
-        onclick={close}><Icon name="close" /></button
-      >
+      <div class="header-tools">
+        <button
+          type="button"
+          onclick={() => void controller?.refresh()}
+          disabled={rootState.loading ||
+            editing ||
+            uploading ||
+            uploadConflict !== null ||
+            transfer.phase !== 'idle'}
+          class="refresh"
+          aria-label="Refresh"
+          title="Refresh"><Icon name="refresh" /></button
+        >
+        <button
+          type="button"
+          class="close"
+          aria-label="Close file browser"
+          title="Close file browser"
+          onclick={close}><Icon name="close" /></button
+        >
+      </div>
     </header>
-    <div class="browser-actions">
+    <div
+      class="browser-actions toolbar"
+      inert={editing || uploading || uploadConflict !== null || transfer.phase !== 'idle'}
+    >
       {#if createDirectory}
         <button
           bind:this={newFolderButton}
@@ -407,15 +488,24 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             uploading ||
             deleting ||
             transfer.phase !== 'idle' ||
-            (selectedEntry !== undefined && selectedEntry.kind !== 'directory')}>New folder</button
+            (selectedEntry !== undefined && selectedEntry.kind !== 'directory')}
+          ><Icon name="folder-add" />New folder</button
         >
       {/if}
+      <input
+        bind:this={uploadInput}
+        class="visually-hidden"
+        type="file"
+        multiple
+        aria-label="Choose files to upload"
+        onchange={(event) => pickUploads(event.currentTarget.files)}
+      />
       <button
+        class="upload"
         type="button"
-        onclick={() => void controller?.refresh()}
-        disabled={rootState.loading}
-        aria-label="Refresh"
-        title="Refresh"><Icon name="refresh" /></button
+        onclick={() => uploadInput?.click()}
+        disabled={selectedEntry?.kind === 'file' || uploading}
+        ><Icon name="upload" />Upload files</button
       >
     </div>
     {#if newFolderParent !== null}
@@ -440,26 +530,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         </div>
       </form>
     {/if}
-    <div class="upload-actions">
-      <input
-        bind:this={uploadInput}
-        class="visually-hidden"
-        type="file"
-        multiple
-        aria-label="Choose files to upload"
-        onchange={(event) => pickUploads(event.currentTarget.files)}
-      />
-      <p>
-        Upload destination: {selectedEntry?.kind === 'file'
-          ? 'Select a folder first'
-          : selectedPath || 'root folder'}
-      </p>
-      <button
-        type="button"
-        onclick={() => uploadInput?.click()}
-        disabled={selectedEntry?.kind === 'file' || uploading}>Upload files</button
-      >
-    </div>
     {#if uploadOutcomes.length}
       <section class="picker" aria-label="Upload queue" aria-live="polite">
         <p>
@@ -488,15 +558,73 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           >{/if}
       </section>
     {/if}
-    {#if controller && transfer.phase === 'idle' && selectedEntry && selectedEntry.kind !== 'symlink'}
-      <div class="browser-actions" aria-label="Selected file actions">
-        {#if onview}<button type="button" onclick={() => onview?.(selectedPath)}>View</button>{/if}
-        <button type="button" onclick={() => beginTransfer('copy')} aria-label="Copy" title="Copy"
-          ><Icon name="copy" /></button
-        >
-        <button type="button" onclick={() => beginTransfer('move')}>Move</button>
-        <button type="button" onclick={() => void openDeleteConfirmation()}>Delete</button>
-      </div>
+    {#if controller && transfer.phase === 'idle' && selectedEntry && selectedEntry.kind !== 'symlink' && !editing}
+      <section
+        class="selection"
+        inert={uploading || uploadConflict !== null}
+        tabindex="-1"
+        bind:this={itemActions}
+        aria-label="Selected file actions"
+      >
+        <div class="selection-title">
+          <strong>{selectedPath}</strong>
+          <button
+            aria-label="Clear selection"
+            title="Clear selection"
+            onclick={() => {
+              selectedPath = '';
+              controller?.select('');
+              heading?.focus();
+            }}><Icon name="close" size="1rem" /></button
+          >
+        </div>
+        <div class="browser-actions item-tools">
+          {#if onview}<button type="button" onclick={() => onview?.(selectedPath)}
+              ><Icon name="open" />View</button
+            >{/if}
+          <button type="button" onclick={() => beginTransfer('copy')}
+            ><Icon name="copy" />Copy</button
+          >
+          <button type="button" onclick={() => beginTransfer('move')}
+            ><Icon name="move" />Move</button
+          >
+          <button type="button" onclick={() => void openRename()}
+            ><Icon name="rename" />Rename</button
+          >
+          <button class="danger" type="button" onclick={() => void openDeleteConfirmation()}
+            ><Icon name="clean" />Delete</button
+          >
+        </div>
+      </section>
+    {/if}
+    {#if renamePath !== null}
+      <form class="picker" aria-label="Rename item" onsubmit={renameSelected}>
+        <label for="rename-file">New name</label>
+        <input
+          id="rename-file"
+          bind:this={renameInput}
+          bind:value={newName}
+          required
+          maxlength="255"
+          disabled={renaming}
+          aria-describedby={renameError ? 'rename-error' : undefined}
+          oninput={() => (renameError = '')}
+        />
+        {#if renameError}<p id="rename-error" role="alert">{renameError}</p>{/if}
+        <div class="browser-actions">
+          <button
+            class="primary"
+            type="submit"
+            disabled={renaming ||
+              !newName.trim() ||
+              newName === renamePath.split('/').at(-1) ||
+              /[/\\]/.test(newName)}>{renaming ? 'Renaming…' : 'Rename'}</button
+          >
+          <button type="button" disabled={renaming} onclick={() => void cancelRename()}
+            >Cancel</button
+          >
+        </div>
+      </form>
     {/if}
     {#if deleteConfirmation && selectedEntry}
       <section class="picker" aria-label="Delete confirmation" aria-live="assertive">
@@ -520,6 +648,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {#if transfer.phase === 'picking'}
       <section class="picker" aria-label="Choose destination folder" aria-live="polite">
         <p><strong>{transfer.kind === 'copy' ? 'Copy' : 'Move'}:</strong> {transfer.source}</p>
+        {#if transfer.kind === 'copy' && selectedEntry?.kind === 'directory'}<p class="copy-note">
+            Skips temporary folders, caches, dependencies and build output.
+          </p>{/if}
         <p>
           Destination: {transfer.destination === ''
             ? 'root folder'
@@ -574,11 +705,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <p role="status">This folder is empty.</p>
     {/if}
     {#if controller}
-      {#key revision}
+      <div
+        class="listing"
+        inert={editing ||
+          uploading ||
+          uploadConflict !== null ||
+          transfer.phase === 'submitting' ||
+          transfer.phase === 'conflict'}
+      >
         <FileTree
           {controller}
           {revision}
           destinationMode={transfer.phase === 'picking'}
+          destination={transfer.destination}
+          onmanage={manage}
           ondestinationselect={chooseDestination}
           onselectionchange={async (path) => {
             selectedPath = path;
@@ -591,7 +731,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             onview(path);
           }}
         />
-      {/key}
+      </div>
     {/if}
   </section>
 </dialog>
@@ -614,9 +754,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   .file-browser-shell {
     display: grid;
-    gap: 1rem;
+    gap: 0;
     max-block-size: calc(100dvh - 1rem);
-    padding: 1rem;
+    padding: 0;
     overflow: auto;
     overflow-x: hidden;
     min-inline-size: 0;
@@ -641,7 +781,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     color: var(--theme-text-muted);
   }
   button {
-    min-block-size: 2.75rem;
+    min-block-size: clamp(44px, 2.75rem, 56px);
     min-inline-size: 2.75rem;
   }
   .close {
@@ -652,13 +792,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     display: flex;
     gap: 0.5rem;
     flex-wrap: wrap;
-  }
-  .upload-actions {
-    display: grid;
-    gap: 0.5rem;
-  }
-  .upload-actions p {
-    color: var(--theme-text-muted);
   }
   .visually-hidden {
     position: absolute;
@@ -674,6 +807,145 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     padding: 0.75rem;
     border: 1px solid var(--theme-border);
     border-radius: 0.5rem;
+  }
+  header {
+    padding: 1rem 1.15rem;
+    align-items: center;
+    background: var(--theme-surface);
+  }
+  .workspace-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    min-width: 0;
+  }
+  .workspace-heading > div {
+    min-width: 0;
+  }
+  .workspace-icon {
+    width: 2.65rem;
+    height: 2.65rem;
+    display: grid;
+    place-items: center;
+    flex: none;
+    background: var(--theme-accent-wash);
+    color: var(--theme-accent);
+    border-radius: 0.65rem;
+  }
+  header h2 {
+    font: 650 1.4rem / 1.15 var(--theme-font-display);
+    letter-spacing: -0.02em;
+  }
+  .workspace-path {
+    font: 0.8125rem / 1.4 var(--theme-font-code);
+    margin-top: 0.15rem;
+  }
+  .close,
+  .refresh,
+  .selection-title button {
+    display: grid;
+    place-items: center;
+    background: transparent;
+    color: var(--theme-text-muted);
+    border: 0;
+    padding: 0;
+  }
+  .toolbar {
+    border-block: 1px solid var(--theme-divider);
+    padding: 0.4rem 0.8rem;
+    background: var(--theme-surface-subtle);
+    align-items: center;
+    gap: 0.25rem;
+  }
+  .toolbar button,
+  .item-tools button {
+    display: inline-flex;
+    gap: 0.4rem;
+    align-items: center;
+    justify-content: center;
+  }
+  .toolbar button:not(.refresh),
+  .item-tools button {
+    padding: 0.35rem 0.6rem;
+    font-size: 0.875rem;
+    border-color: transparent;
+    background: transparent;
+  }
+  .toolbar button {
+    white-space: nowrap;
+  }
+  .toolbar .upload {
+    color: var(--theme-accent);
+    font-weight: 650;
+  }
+  .header-tools {
+    display: flex;
+    flex: none;
+  }
+  .header-tools button {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+  .toolbar button:hover:enabled,
+  .item-tools button:hover:enabled,
+  .close:hover {
+    background: var(--theme-control-hover);
+  }
+  .selection {
+    padding: 0.4rem 0.8rem;
+    border-bottom: 1px solid var(--theme-divider);
+    background: var(--theme-accent-wash);
+  }
+  .selection-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font: 0.875rem var(--theme-font-code);
+    overflow-wrap: anywhere;
+  }
+  .item-tools {
+    gap: 0 0.25rem;
+  }
+  .item-tools .danger,
+  #rename-error {
+    color: var(--theme-error);
+  }
+  .listing {
+    padding: 0.35rem 0.7rem 1rem;
+    min-height: 10rem;
+  }
+  .picker {
+    margin: 0.6rem 0.8rem;
+    background: var(--theme-surface-subtle);
+  }
+  .picker input {
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .copy-note {
+    font-size: 0.875rem;
+    color: var(--theme-text-muted);
+  }
+  .primary {
+    background: var(--theme-accent);
+    color: var(--theme-accent-contrast);
+  }
+  .file-browser-shell > p,
+  .file-browser-shell > section[aria-label='File browser error'] {
+    padding: 0.8rem 1rem;
+  }
+  @media (max-width: 380px) {
+    .workspace-icon {
+      display: none;
+    }
+    header {
+      gap: 8px;
+      padding-inline: 12px;
+    }
   }
   @media (max-width: 40rem) {
     dialog {

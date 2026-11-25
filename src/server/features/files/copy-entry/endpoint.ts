@@ -30,6 +30,8 @@ export async function mutation(
     !body ||
     typeof body.source !== 'string' ||
     typeof body.destinationDirectory !== 'string' ||
+    (body.newName !== undefined &&
+      (operation !== 'move' || body.conflict !== 'reject' || typeof body.newName !== 'string')) ||
     !['reject', 'replace', 'keep-both'].includes(body.conflict ?? '')
   )
     return reply.code(400).send({ code: 'INVALID_FILE_MUTATION' });
