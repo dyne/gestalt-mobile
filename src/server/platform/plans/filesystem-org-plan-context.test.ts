@@ -42,13 +42,14 @@ async function fixture() {
     { workspaceId: string; workspacePath: string; lastOrgPlan?: { path: string } }
   >();
   const context = new FilesystemOrgPlanContext(workspaces, (id) => sessions.get(id) ?? null);
-  const prepare = (reference: OrgPlanReference, expectedRevision?: string) =>
-    prepareOrgPlanSupervision(
+  const prepare = (reference: OrgPlanReference, expectedRevision?: string) => {
+    const admission = expectedRevision ? context : context.forPreview();
+    return prepareOrgPlanSupervision(
       reference,
       {
-        resolveReference: (ref) => context.resolveReference(ref),
+        resolveReference: (ref) => admission.resolveReference(ref),
         read: (path, name) => plans.readExecution(path, name),
-        workspace: (path, revision) => context.workspace(path, revision),
+        workspace: (path, revision) => admission.workspace(path, revision),
         runtimeAvailable: async () => ({ available: true }),
         owner: async () => null,
         policy: assessModelPolicyAdmission,
@@ -67,6 +68,7 @@ async function fixture() {
       },
       expectedRevision,
     );
+  };
   const rootId = (await workspaces.list())[0]!.id;
   return { root, workspaces, context, prepare, sessions, rootId };
 }
@@ -95,9 +97,19 @@ describe('FilesystemOrgPlanContext', () => {
     });
     expect(snapshot).toHaveBeenCalledTimes(1);
     expect((await snapshot.mock.results[0]!.value).length).toBeGreaterThan(300);
-    // The sole resolve checks the incoming root identity (its fast path); no per-node scans.
-    expect(resolve).toHaveBeenCalledExactlyOnceWith(f.rootId);
+    expect(resolve).not.toHaveBeenCalled();
     expect(list).not.toHaveBeenCalled();
+    f.sessions.set('retained', {
+      workspaceId: f.rootId,
+      workspacePath: f.root,
+      lastOrgPlan: { path: join(f.root, 'project', '.gestalt', 'plan.org') },
+    });
+    expect(await f.prepare({ kind: 'retained-session', sessionId: 'retained' })).toEqual({
+      ...result,
+      reference: { kind: 'retained-session', sessionId: 'retained' },
+    });
+    expect(snapshot).toHaveBeenCalledTimes(2);
+    expect(resolve).not.toHaveBeenCalled();
   });
   it.each(['directory', 'worktree file'])(
     'chooses the plan project (%s), independently of root catalog and another session/base',

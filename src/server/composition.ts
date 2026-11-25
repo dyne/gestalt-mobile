@@ -2669,11 +2669,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     expectedRevision?: string,
     skillProfile?: string,
     ownUnpublishedLaunchId?: string,
-  ) =>
-    prepareOrgPlanSupervision(
+  ) => {
+    const context = expectedRevision ? orgPlanContext : orgPlanContext.forPreview();
+    return prepareOrgPlanSupervision(
       reference,
       {
-        resolveReference: (ref) => orgPlanContext.resolveReference(ref),
+        resolveReference: (ref) => context.resolveReference(ref),
         workspaceSession: async (workspacePath) => {
           const occupant = workspaceSession(workspacePath);
           if (
@@ -2687,7 +2688,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           }
           return occupant;
         },
-        workspace: (path, revision) => orgPlanContext.workspace(path, revision),
+        workspace: (path, revision) => context.workspace(path, revision),
         read: (workspacePath, planName) =>
           workspacePlanCatalog.readExecution(workspacePath, planName),
         runtimeAvailable: async () =>
@@ -2754,6 +2755,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       expectedRevision,
       skillProfile,
     );
+  };
   // Both transports and future internal consumers retain the same scoped admission boundary.
   const startPlanSupervision = (
     request: import('../shared/contracts/org-plan-execution.js').OrgPlanLaunchRequest,

@@ -35,6 +35,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   const id = $props.id();
   let preparation = $state<OrgPlanPreparation | null>(null);
   let loading = $state(true);
+  let checkingSession = $state(false);
   let validating = $state(false);
   let submitting = $state(false);
   let selected = $state('');
@@ -111,6 +112,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       const request = new AbortController();
       preparation = null;
       loading = true;
+      checkingSession = false;
       ++validationGeneration;
       validating = false;
       initialFocusPending = false;
@@ -127,16 +129,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         .prepareOrgPlanSupervision(ref, undefined, undefined, request.signal)
         .then(async (result) => {
           if (current !== generation || disposed) return;
-          let occupant: RelaySession | null = null;
+          preparation = result;
+          loading = false;
+          if (result.kind !== 'eligible' || !result.workspaceSession || !api.getSession) return;
+          checkingSession = true;
           try {
-            occupant = await readWorkspaceSession(result, api);
+            const occupant = await readWorkspaceSession(result, api);
+            if (current === generation && !disposed) existingSession = occupant;
           } catch (error) {
             if (current === generation && !disposed)
               report(error instanceof Error ? error.message : 'Could not check session status.');
-          }
-          if (current === generation && !disposed) {
-            preparation = result;
-            existingSession = occupant;
+          } finally {
+            if (current === generation && !disposed) checkingSession = false;
           }
         })
         .catch((error) => {
@@ -283,7 +287,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     describedby={reason ? `${id}-reason` : undefined}
     onclick={open}>Execute</AppControl
   >
-  {#if reason}<span id={`${id}-reason`} class="reason">{reason}</span>{/if}
+  {#if reason}<span id={`${id}-reason`} class="reason" class:checking={loading} role="status"
+      >{reason}</span
+    >{/if}
 </div>
 <dialog
   bind:this={dialog}
@@ -332,7 +338,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {#if existingStatus}
         <SessionActivityStatus status={existingStatus} />
       {:else}
-        <p>{validating ? 'Checking session status…' : 'Session status unavailable.'}</p>
+        <p class:checking={checkingSession || validating} role="status">
+          {checkingSession || validating
+            ? 'Checking session status…'
+            : 'Session status unavailable.'}
+        </p>
       {/if}
       {#if confirmed.workspaceSession.retryClose}
         <p>
@@ -344,7 +354,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           Replace closes this idle session and starts the supervisor. The previous session and its
           history stay saved.
         </p>
-      {:else}
+      {:else if !checkingSession && !validating}
         <p>Replacement requires a confirmed idle session. Refresh to check again.</p>
       {/if}
     </section>
@@ -360,7 +370,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <div class="dialog-actions">
     <AppControl onclick={dismiss}>{submitting ? 'Close' : 'Cancel'}</AppControl>
     {#if problem || (confirmed?.workspaceSession && !canReplace)}<AppControl
-        disabled={busy}
+        disabled={busy || checkingSession}
         icon="refresh"
         label="Refresh"
         onclick={() => void refreshAvailability()}
@@ -406,6 +416,27 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     border: 1px solid var(--theme-border);
     border-radius: var(--theme-radius);
     overflow-wrap: anywhere;
+  }
+  .checking::before {
+    content: '';
+    display: inline-block;
+    inline-size: 0.8em;
+    block-size: 0.8em;
+    margin-inline-end: 0.5em;
+    border: 2px solid var(--theme-border);
+    border-block-start-color: currentColor;
+    border-radius: 50%;
+    animation: availability-spin 1s linear infinite;
+  }
+  @keyframes availability-spin {
+    to {
+      transform: rotate(1turn);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .checking::before {
+      animation: none;
+    }
   }
   .workspace-conflict :is(h3, p) {
     margin: 0 0 0.4rem;
