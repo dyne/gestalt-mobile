@@ -52,24 +52,7 @@ export function registerSessionRoutes(
   if (deps.recentThreads) {
     registerListRecentThreads(app, {
       ...deps.recentThreads,
-      metadata: (threadId, provider) => {
-        const session = sessions
-          ?.list?.()
-          .find(
-            (candidate) =>
-              candidate.threadId === threadId && (candidate.provider ?? 'codex') === provider,
-          );
-        if (!session) return null;
-        return {
-          ...(session.model === undefined ? {} : { model: session.model }),
-          ...(session.effectiveSkillSelection?.selectedProfileName === undefined
-            ? {}
-            : { skillProfile: session.effectiveSkillSelection.selectedProfileName }),
-          ...(session.lastOrgPlan === undefined
-            ? {}
-            : { orgPlanFilename: session.lastOrgPlan.filename }),
-        };
-      },
+      listManaged: () => sessions?.list?.() ?? [],
     });
   }
   if (sessions) {

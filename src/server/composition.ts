@@ -949,7 +949,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const recentThreadsForRelay = {
     list: async (): Promise<
       import('./features/sessions/list-recent-threads/endpoint.js').RecentThread[]
-    > => [...(await recentThreads.list()), ...(await kimiRecentSessions.list())],
+    > => (await Promise.all([recentThreads.list(), kimiRecentSessions.list()])).flat(),
   };
   const recoverExecutionPolicy = async (
     session: RelaySessionSnapshot,

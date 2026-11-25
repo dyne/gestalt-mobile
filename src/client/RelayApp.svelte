@@ -285,7 +285,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   >(new Map());
   let sessionListEpoch = 0;
   let sessionRosterRevision = 0;
-  let sessionListAbort: AbortController | null = null;
+  let bootstrapRosterPending = $state(true);
+  let rosterLoaded = $state(false);
+  let sessionListAbort = $state.raw<AbortController | null>(null);
+  let recentListState = $state<'loading' | 'ready' | 'error'>('loading');
+  let recentListRequest: Promise<void> | null = null;
   let chatEnabled = $derived(sessions.some((session) => session.id === sessionId));
   let recentSessions = $state<RecentSession[]>([]);
   let sandbox = $state<NonNullable<StartSessionSettings['sandbox']>>(newSessionFallback.sandbox);
@@ -462,7 +466,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         void sessionCache.saveSelectedSession(null);
         planController.select(null);
       }
-      void refreshSessionLists().then(() => {
+      void refreshSessionLists(true).then(() => {
         recentSessions = retainForgottenSession(recentSessions, forgottenSession);
       });
     },
@@ -794,7 +798,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     rememberTreeSelection(sessionWorkspaceId || null);
   });
 
-  onMount(async () => {
+  onMount(() => {
     if (
       evidenceContext === 'sessions' ||
       evidenceContext === 'git' ||
@@ -802,6 +806,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       toastEvidence === 'stacked'
     )
       return;
+    if (!detachedSessionId) void refreshRecentSessions();
+    // Fast bootstraps already include the roster. Give slow catalogs a head start
+    // of one short interval before requesting the roster independently.
+    const rosterTimer = setTimeout(() => {
+      if (!detachedSessionId && bootstrapRosterPending && !rosterLoaded && !sessionListAbort)
+        void refreshSessions(true).catch(() => {}); // Bootstrap still owns startup errors.
+    }, 150);
+    void initializeSessionContext();
+    return () => {
+      clearTimeout(rosterTimer);
+      sessionListAbort?.abort();
+      recentListRequest = null;
+    };
+  });
+
+  async function initializeSessionContext() {
     const bootstrapRevision = sessionRosterRevision;
     try {
       const bootstrap = await loadBootstrap(authorizedFetch);
@@ -809,6 +829,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       // Preserve a roster updated since bootstrap began, even if another refresh fails.
       if (sessionRosterRevision === bootstrapRevision)
         sessions = sessionForgetting.reconcile(bootstrap.sessions).map(withSessionPlan);
+      rosterLoaded = true;
+      bootstrapRosterPending = false;
       sessionWorkspaceId =
         refreshSelection(
           sessionWorkspaceId || null,
@@ -894,7 +916,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       );
       activityController.bootstrap(active, sessionId);
       autopilotController.bootstrap(active);
-      if (!detachedSessionId) void refreshRecentSessions();
       planController.select(sessionId);
       if (sessionId) {
         chatController.select(sessionId);
@@ -902,9 +923,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         shellStatus = 'This session is no longer open in Gestalt Mobile.';
       }
     } catch (error) {
+      bootstrapRosterPending = false;
       shellStatus = reportRelayError(error, 'RELAY_UNAVAILABLE');
     }
-  });
+  }
 
   function enterChatContext(): void {
     if (planOverlayOpen) resetPlanOverlay();
@@ -1149,15 +1171,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     queueMicrotask(() => debugTraceTrigger?.focus());
   }
 
-  async function refreshSessions() {
+  async function refreshSessions(initial = false) {
     const epoch = ++sessionListEpoch;
+    const revision = sessionRosterRevision;
     sessionListAbort?.abort();
     const abort = new AbortController();
     sessionListAbort = abort;
     try {
       const next = await relay.listSessions(abort.signal);
       if (epoch !== sessionListEpoch || abort.signal.aborted) return;
+      if (initial && (rosterLoaded || revision !== sessionRosterRevision)) return;
       sessions = sessionForgetting.reconcile(next).map(withSessionPlan);
+      rosterLoaded = true;
       sessionRosterRevision += 1;
       const active = observedSessions(
         sessions.filter((session) => ['ready', 'turnActive'].includes(session.state)),
@@ -1195,17 +1220,37 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (id === sessionId) void refreshSessions().catch(() => {});
   }
 
-  async function refreshRecentSessions() {
-    try {
-      recentSessions = await relay.listRecentSessions();
-    } catch {
-      recentSessions = [];
-    }
+  function refreshRecentSessions(force = false): Promise<void> {
+    if (recentListRequest && !force) return recentListRequest;
+    if (recentListState === 'error') recentListState = 'loading';
+    const request = relay
+      .listRecentSessions()
+      .then(
+        (next) => {
+          if (recentListRequest !== request) return;
+          recentSessions = next;
+          recentListState = 'ready';
+        },
+        () => {
+          if (recentListRequest !== request) return;
+          if (recentListState !== 'ready') recentListState = 'error';
+          toastQueue.enqueue({
+            kind: 'warning',
+            code: 'RECENT_SESSIONS_READ_FAILED',
+            message: 'Recent sessions could not be refreshed.',
+          });
+        },
+      )
+      .finally(() => {
+        if (recentListRequest === request) recentListRequest = null;
+      });
+    recentListRequest = request;
+    return request;
   }
 
-  async function refreshSessionLists() {
+  async function refreshSessionLists(afterMutation = false) {
     try {
-      await Promise.all([refreshSessions(), refreshRecentSessions()]);
+      await Promise.all([refreshSessions(), refreshRecentSessions(afterMutation)]);
     } catch (error) {
       shellStatus = reportRelayError(error, 'SESSION_REFRESH_FAILED');
     }
@@ -1259,7 +1304,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         sessions = [...sessions, session];
         sessionRosterRevision += 1;
       }
-      void refreshSessionLists();
+      void refreshSessionLists(true);
       await openSession(session.id);
     } catch (error) {
       shellStatus = reportRelayError(error, 'SESSION_HISTORY_READ_FAILED');
@@ -1280,7 +1325,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         activityController.select(null);
         planController.select(null);
       }
-      await refreshSessionLists();
+      await refreshSessionLists(true);
       shellStatus = 'Session closed.';
     } catch (error) {
       shellStatus = reportRelayError(error, 'SESSION_CLOSE_FAILED');
@@ -2190,6 +2235,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         message: 'Could not refresh Codex allowance. Retrying automatically.',
       })}
     {sessions}
+    rosterState={rosterLoaded
+      ? 'ready'
+      : bootstrapRosterPending || sessionListAbort
+        ? 'loading'
+        : 'error'}
+    {recentListState}
     {forgettingStates}
     {recentSessions}
     selectedSessionId={sessionId}

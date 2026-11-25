@@ -47,6 +47,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     savingAutoReset?: boolean;
     onautoreset?: (enabled: boolean) => void;
     sessions: RelaySession[];
+    rosterState?: 'loading' | 'ready' | 'error';
+    recentListState?: 'loading' | 'ready' | 'error';
     forgettingStates?: ReadonlyMap<string, SessionForgetState>;
     recentSessions: RecentSession[];
     selectedSessionId: string | null;
@@ -118,6 +120,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     savingAutoReset,
     onautoreset,
     sessions,
+    rosterState = 'ready',
+    recentListState = 'ready',
     forgettingStates = new Map(),
     recentSessions,
     selectedSessionId,
@@ -205,11 +209,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 </script>
 
+{#snippet loadingSessions(label: string)}
+  <p class="loading-sessions" role="status">
+    <span class="session-spinner" aria-hidden="true"></span>{label}
+  </p>
+{/snippet}
+
 {#snippet forgettingStatus(state: SessionForgetState | undefined)}
   {#if state && state.phase !== 'completed'}
     <p class="session-forget-status" role="status" aria-atomic="true">
       {#if isSessionForgetting(state)}
-        <span class="forget-spinner" aria-hidden="true"></span>
+        <span class="session-spinner forget-spinner" aria-hidden="true"></span>
       {/if}
       <span>
         {state.phase === 'failed'
@@ -496,7 +506,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {/each}
     </ul>
   {:else if !openSessions.length}
-    <p class="empty-sessions">No saved sessions yet.</p>
+    {#if rosterState === 'loading'}
+      {@render loadingSessions('Loading sessions…')}
+    {:else}
+      <p class="empty-sessions">
+        {rosterState === 'error' ? 'Sessions could not be loaded.' : 'No saved sessions yet.'}
+      </p>
+    {/if}
   {/if}
   {#if !rosterOnly}
     <form
@@ -700,7 +716,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     </form>
     <section aria-labelledby="recent-sessions-title">
       <h3 id="recent-sessions-title">Recent sessions</h3>
-      {#if otherRecentSessions.length}
+      {#if recentListState === 'loading' || (rosterState === 'loading' && recentSessions.length > 0)}
+        {@render loadingSessions('Loading recent sessions…')}
+      {:else if otherRecentSessions.length}
         <ul class="session-list recent-session-list" aria-label="Recent sessions">
           {#each otherRecentSessions as session ((session.provider ?? 'codex') + ':' + session.id)}
             {@const managed = savedSessions.find(
@@ -743,7 +761,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           {/each}
         </ul>
       {:else}
-        <p>No other recent sessions found.</p>
+        <p>
+          {recentListState === 'error'
+            ? 'Recent sessions could not be loaded.'
+            : 'No other recent sessions found.'}
+        </p>
       {/if}
     </section>
   {/if}
@@ -795,17 +817,24 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     overflow-wrap: anywhere;
   }
 
-  .forget-spinner {
+  .loading-sessions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--theme-text-muted);
+  }
+
+  .session-spinner {
     flex: none;
     inline-size: 0.8em;
     block-size: 0.8em;
     border: 2px solid var(--theme-border);
     border-block-start-color: var(--theme-text);
     border-radius: 50%;
-    animation: forget-spin 1s linear infinite;
+    animation: session-spin 1s linear infinite;
   }
 
-  @keyframes forget-spin {
+  @keyframes session-spin {
     to {
       transform: rotate(360deg);
     }
@@ -1124,7 +1153,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .forget-spinner {
+    .session-spinner {
       animation: none;
     }
   }
