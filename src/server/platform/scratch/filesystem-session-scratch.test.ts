@@ -13,17 +13,23 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  rename,
   rm,
   symlink,
   writeFile,
 } from 'node:fs/promises';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   FilesystemSessionScratch,
   mobileScratchOwnerId,
   scratchMarkerName,
 } from './filesystem-session-scratch.js';
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...original, rename: vi.fn(original.rename) };
+});
 
 const execute = promisify(execFile);
 const fixtures: string[] = [];
@@ -46,6 +52,36 @@ async function fixture() {
 }
 
 describe('FilesystemSessionScratch', () => {
+  it('keeps the lease catalog readable while an old runtime publishes its release', async () => {
+    const session = await fixture();
+    const lease = await new FilesystemSessionScratch().borrow(session);
+    const directory = join(lease.directory, 'leases');
+    const [record] = await readdir(directory);
+    const publication = Promise.withResolvers<void>();
+    const original = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const heldRename = vi.mocked(rename).mockImplementationOnce(async (from, to) => {
+      await publication.promise;
+      await original.rename(from, to);
+    });
+    heldRename.mockClear();
+    const released = lease.release();
+    try {
+      await vi.waitFor(() =>
+        expect(heldRename).toHaveBeenCalledExactlyOnceWith(
+          expect.any(String),
+          join(directory, record),
+        ),
+      );
+      // The manager validates every directory entry when it borrows for Playwright.
+      expect(await readdir(directory)).toEqual([record]);
+      expect(JSON.parse(await readFile(join(directory, record), 'utf8')).state).toBe('active');
+    } finally {
+      publication.resolve();
+      await released;
+    }
+    expect(JSON.parse(await readFile(join(directory, record), 'utf8')).state).toBe('released');
+  });
+
   it('allocates private workspace scratch and runs a generated executable from a nested repository cwd', async () => {
     const session = await fixture();
     const nested = join(session.workspacePath, 'nested repository');
