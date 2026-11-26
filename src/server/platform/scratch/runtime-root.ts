@@ -5,7 +5,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { lstat, mkdir, open, readdir, realpath } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, readdir, realpath } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { privateDirectory, readMarker } from './scratch-filesystem.js';
 
@@ -85,7 +85,13 @@ export async function allocateRuntime(owner: RuntimeOwner): Promise<RuntimeBindi
 export async function validateRuntime(
   owner: RuntimeOwner,
   runtime: RuntimeBinding,
-  allowRetiring = false,
+  {
+    allowRetiring = false,
+    allowMissing = false,
+  }: {
+    allowRetiring?: boolean;
+    allowMissing?: boolean;
+  } = {},
 ): Promise<boolean> {
   const container = await runtimeContainer();
   if (
@@ -101,13 +107,17 @@ export async function validateRuntime(
     (runtime.retiring !== undefined && (runtime.retiring !== true || !allowRetiring))
   )
     reject();
-  await privateDirectory(container, false);
+  try {
+    await privateDirectory(container, false);
+  } catch (error) {
+    if (allowMissing && (error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
   try {
     if ((await runtimeIdentity(runtime.directory)) !== runtime.identity) reject();
   } catch (error) {
-    // This flag belongs only to attribution/cleanup. Actual retirement still
-    // requires the authoritative roster, released leases and both owner fences.
-    if (allowRetiring && (error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    if ((allowMissing || allowRetiring) && (error as NodeJS.ErrnoException).code === 'ENOENT')
+      return false;
     throw error;
   }
   let actual: unknown;
@@ -120,6 +130,16 @@ export async function validateRuntime(
   }
   if (JSON.stringify(actual) !== JSON.stringify(runtimeRecord(owner, runtime))) reject();
   return true;
+}
+
+/** Only Linux supplies the boot-time evidence used to recover old Mobile bindings. */
+export async function linuxBootTime(): Promise<number | undefined> {
+  if (process.platform !== 'linux') return undefined;
+  const stat = await readFile('/proc/stat', 'utf8').catch(() => '');
+  const seconds = /^btime (\d+)$/m.exec(stat)?.[1];
+  const time = Number(seconds) * 1000;
+  if (Number.isSafeInteger(time) && time > 0 && time <= Date.now()) return time;
+  return undefined;
 }
 
 /** A missing workspace does not authorize abandoning an external payload root. */

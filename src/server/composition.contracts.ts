@@ -7,7 +7,7 @@
 import { once } from 'node:events';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
@@ -43,6 +43,12 @@ import {
 } from './features/auth/domain/identifiers.js';
 import { deviceNickname } from './features/auth/domain/device-nickname.js';
 import { workspaceId } from './platform/catalog/workspace-id.js';
+import {
+  mobileScratchOwnerId,
+  readMarker,
+  scratchMarkerName,
+} from './platform/scratch/scratch-filesystem.js';
+import type { ScratchMarker } from './platform/scratch/filesystem-session-scratch.js';
 import {
   FilesystemPlanStatusSource,
   planStatusDirectoryPath,
@@ -10259,6 +10265,112 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('sessions', () => {
+    it.skipIf(process.platform !== 'linux')(
+      'accepts a prompt on the original thread after a reboot clears its runtime scratch',
+      async () => {
+        const root = await mkdtemp(join(tmpdir(), 'gestalt-reboot-root-'));
+        const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-reboot-state-'));
+        ownTemporaryPaths(root, dataDir);
+        const workspace = join(root, 'workspace');
+        await mkdir(workspace);
+        const handles: LiveServerHandle[] = [];
+        const app = await composeAuthorizedApp({
+          root,
+          dataDir,
+          relyingParty,
+          installedCodexVersion: 'codex-cli 0.172.0',
+          startAppServers: true,
+          launchAppServer: liveAppServer(handles),
+          profiles: {
+            list: async () => [],
+            require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
+          },
+        });
+        let markerPath: string | undefined;
+        try {
+          const id = await createComposedSession(app);
+          const url = `/api/sessions/${id}`;
+          const { threadId } = await vi.waitFor(async () => {
+            const session = (await app.inject(url)).json();
+            expect(session.state).toBe('ready');
+            return session as { threadId: string };
+          });
+          expect((await app.inject({ method: 'POST', url: `${url}/stop` })).statusCode).toBe(202);
+          const owner = join(workspace, 'tmp', 'sessions', mobileScratchOwnerId(id));
+          markerPath = join(owner, scratchMarkerName);
+          const marker = (await readMarker(markerPath)) as ScratchMarker;
+          const runtime = marker.runtime!;
+          const payload = join(owner, 'retained.txt');
+          await writeFile(payload, 'workspace payload');
+          await rm(runtime.directory, { recursive: true });
+          // Simulate a pre-boot runtime directory using the persisted birth time.
+          const preBoot = new Date('2000-01-01T00:00:00.000Z');
+          const [device, inode] = runtime.identity.split(':');
+          const leaseId = randomUUID();
+          const leasePath = join(owner, 'leases', `${leaseId}.json`);
+          const previousLease = JSON.stringify({
+            schemaVersion: 1,
+            ownerId: marker.ownerId,
+            workspacePath: workspace,
+            leaseId,
+            state: 'active',
+            processIdentity: randomUUID(),
+            createdAt: preBoot.toISOString(),
+            updatedAt: preBoot.toISOString(),
+            consumers: ['runtime-before-reboot'],
+          });
+          await writeFile(leasePath, previousLease, { mode: 0o600 });
+          await writeFile(
+            markerPath,
+            JSON.stringify({
+              ...marker,
+              createdAt: preBoot.toISOString(),
+              runtime: {
+                ...runtime,
+                identity: `${device}:${inode}:${BigInt(preBoot.getTime()) * 1_000_000n}`,
+              },
+            }),
+          );
+
+          const response = await app.inject({
+            method: 'POST',
+            url: `${url}/turns`,
+            payload: { text: 'fixture' },
+          });
+          expect(response.statusCode, JSON.stringify(response.json().code)).toBe(202);
+          expect(response.json()).toMatchObject({ threadId, state: 'turnActive' });
+          const writer = handles.find((handle) => handle.calls.includes('thread/resume'))!;
+          expect(writer.requests).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                method: 'thread/resume',
+                params: expect.objectContaining({ threadId }),
+              }),
+              expect.objectContaining({
+                method: 'turn/start',
+                params: expect.objectContaining({ threadId }),
+              }),
+            ]),
+          );
+          expect(
+            handles.flatMap((handle) => handle.calls).filter((method) => method === 'thread/start'),
+          ).toHaveLength(1);
+          const updated = (await readMarker(markerPath)) as ScratchMarker;
+          expect(updated.runtime?.directory).not.toBe(runtime.directory);
+          expect(updated.providerThreads).toEqual(marker.providerThreads);
+          expect(await readFile(payload, 'utf8')).toBe('workspace payload');
+          expect(await readFile(leasePath, 'utf8')).toBe(previousLease);
+        } finally {
+          await app.close();
+          if (markerPath) {
+            const marker = (await readMarker(markerPath)) as ScratchMarker;
+            if (marker.runtime)
+              await rm(marker.runtime.directory, { recursive: true, force: true });
+          }
+        }
+      },
+    );
+
     it('redeems one weekly reset credit on a matched terminal Codex failure and records a receipt', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-weekly-reset-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-weekly-reset-state-'));

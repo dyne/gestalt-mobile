@@ -184,6 +184,31 @@ else: raise AssertionError('${capacity} bytes must fail')`;
     expect(await readFile(join(rootOf(first), 'retained'), 'utf8')).toBe('keep');
   });
 
+  it.skipIf(process.platform !== 'linux')(
+    'does not assign new runtime scratch with only current-boot evidence',
+    async () => {
+      const session = await fixture();
+      const scratch = new FilesystemSessionScratch();
+      const lease = await scratch.borrow(session);
+      restore.push(() => lease.release());
+      const markerPath = join(lease.directory, scratchMarkerName);
+      const original = await readFile(markerPath, 'utf8');
+      const marker = JSON.parse(original);
+      await rm(rootOf(lease), { recursive: true });
+
+      await expect(scratch.allocate(session)).rejects.toThrow('SESSION_SCRATCH_RUNTIME_MISSING');
+      expect(await readFile(markerPath, 'utf8')).toBe(original);
+
+      const [device, inode] = marker.runtime.identity.split(':');
+      marker.runtime.identity = `${device}:${inode}:946684800000000000`;
+      marker.createdAt = '2000-01-01T00:00:00.000Z';
+      const preBoot = JSON.stringify(marker);
+      await writeFile(markerPath, preBoot);
+      await expect(scratch.allocate(session)).rejects.toThrow('SESSION_SCRATCH_RUNTIME_MISSING');
+      expect(await readFile(markerPath, 'utf8')).toBe(preBoot);
+    },
+  );
+
   it('retains active borrowers and roster owners, then cleans both roots after authoritative release', async () => {
     const session = await fixture();
     const scratch = new FilesystemSessionScratch();

@@ -214,7 +214,8 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
         const leases = await readManagedScratchLeases(directory, marker);
         if (leases.some((lease) => lease.state !== 'released' || lease.consumers.length !== 0)) {
           if (authorized && marker.ownerKind === 'mobile-session') {
-            if (marker.runtime) await validateRuntime(marker, marker.runtime, true);
+            if (marker.runtime)
+              await validateRuntime(marker, marker.runtime, { allowRetiring: true });
             counts.leasedMobileSessions.push({
               sessionId: marker.sessionId,
               runtimeDirectory: marker.runtime?.directory,
@@ -230,7 +231,10 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
             authorizedSessionId,
             containment,
           );
-          if (marker.runtime && (await validateRuntime(marker, marker.runtime, true)))
+          if (
+            marker.runtime &&
+            (await validateRuntime(marker, marker.runtime, { allowRetiring: true }))
+          )
             await this.retireNestedNamespaces(
               marker.runtime.directory,
               protectedSessions,
@@ -245,7 +249,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
         const readOnlyDirectories = await this.validatePayload(directory, inspectionBudget());
         let readOnlyRuntimeDirectories: ReadOnlyPayloadDirectory[] = [];
         if (marker.runtime) {
-          const present = await validateRuntime(marker, marker.runtime, true);
+          const present = await validateRuntime(marker, marker.runtime, { allowRetiring: true });
           if (present) {
             await this.assertProtection(
               directory,
@@ -452,7 +456,7 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
   ) {
     if (!marker.runtime) return;
     const runtime = marker.runtime;
-    if (!(await validateRuntime(marker, runtime, true))) return;
+    if (!(await validateRuntime(marker, runtime, { allowRetiring: true }))) return;
     // Persist retirement intent before either authority record is removed.
     // After a crash an absent runtime is acceptable only with this exact record;
     // a replacement inode or a nonempty directory without its marker is retained.
@@ -472,13 +476,13 @@ export class FilesystemScratchCleanup implements ScratchCleanupStorage {
     const attributed = children.some((child) => child.toString() === runtimeMarkerName);
     if (!attributed && children.length) reject('unrecognized');
     if (attributed) {
-      await validateRuntime(marker, marker.runtime, true);
+      await validateRuntime(marker, marker.runtime, { allowRetiring: true });
       await prepareReadOnlyDirectories(runtime.directory, readOnlyDirectories);
       for (const child of children) {
         if (child.toString() !== runtimeMarkerName)
           await rm(payloadPath(runtime.directory, child), { recursive: true });
       }
-      await validateRuntime(marker, marker.runtime, true);
+      await validateRuntime(marker, marker.runtime, { allowRetiring: true });
       await rm(join(runtime.directory, runtimeMarkerName));
     }
     if ((await runtimeIdentity(runtime.directory)) !== runtime.identity) reject('unsafe');
