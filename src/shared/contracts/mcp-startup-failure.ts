@@ -4,7 +4,12 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-export const startupServers = ['context-mode', 'gestalt-context-mode', 'gestalt-serena'] as const;
+export const startupServers = [
+  'context-mode',
+  'gestalt-context-mode',
+  'gestalt-serena',
+  'gestalt-playwright',
+] as const;
 export const startupPhases = ['artifact', 'spawn', 'initialize', 'startup'] as const;
 export const startupFailureCodes = [
   'artifact-unavailable',
@@ -169,6 +174,7 @@ export function mcpStartupActivity(status: McpStartupStatus) {
 }
 
 export function startupToolLabel(server: McpStartupFailure['serverName']): string {
+  if (server === 'gestalt-playwright') return 'Playwright';
   return server === 'gestalt-serena' ? 'Serena' : 'Context Mode';
 }
 
@@ -185,6 +191,8 @@ export function startupFailureReason(code: McpStartupFailure['code']): string {
 }
 
 export function startupRecoveryGuidance(server: McpStartupFailure['serverName']): string {
+  if (server === 'gestalt-playwright')
+    return 'Chat remains available. Check the session browser status before retrying activation.';
   return server === 'gestalt-serena'
     ? 'Optional tool unavailable. Continue with native code tools. Operators can inspect it with gestalt serena doctor.'
     : 'Required tool unavailable. The affected startup cannot continue until Context Mode is available. Operators can inspect it with ctx-doctor.';

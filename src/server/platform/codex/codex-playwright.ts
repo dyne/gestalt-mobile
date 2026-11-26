@@ -506,6 +506,7 @@ export class CodexPlaywright {
   async verify(rpc: Rpc, threadId: string, state: CodexCapabilityState): Promise<boolean> {
     const prepared = this.prepared.get(state);
     if (!prepared?.enabled) return true;
+    let reason = 'connection-or-tools-unavailable';
     try {
       while (Date.now() < prepared.deadline) {
         const result = (await beforeDeadline(
@@ -524,12 +525,19 @@ export class CodexPlaywright {
           }[];
         };
         const server = result.data?.find((entry) => entry.name === playwrightServerName);
-        if (
-          prepared.current() &&
-          server?.runtimeStatus === 'connected' &&
-          !server.toolsError &&
-          playwrightTools.every((tool) => Object.hasOwn(server.tools ?? {}, tool))
-        ) {
+        if (!prepared.current()) {
+          reason = 'authority-changed';
+          break;
+        }
+        if (server?.runtimeStatus === 'connected') {
+          if (server.toolsError) {
+            reason = 'tool-discovery-failed';
+            break;
+          }
+          if (!playwrightTools.every((tool) => Object.hasOwn(server.tools ?? {}, tool))) {
+            reason = 'required-tools-missing';
+            break;
+          }
           prepared.binding.connected = true;
           prepared.binding.root = threadId;
           return true;
@@ -540,7 +548,7 @@ export class CodexPlaywright {
     } catch {
       /* Keep chat and Serena usable. */
     }
-    prepared.binding.reason = 'connection-or-tools-unavailable';
+    prepared.binding.reason = reason;
     prepared.fail();
     return false;
   }
@@ -574,7 +582,7 @@ export class CodexPlaywright {
     )
       return;
     binding.connected = false;
-    binding.reason = 'connection-or-tools-unavailable';
+    binding.reason ??= 'connection-or-tools-unavailable';
   }
   base(state: CodexCapabilityState): CodexCapabilityState {
     return this.prepared.get(state)?.base ?? state;

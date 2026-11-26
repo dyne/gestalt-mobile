@@ -19,6 +19,7 @@ function fixture(
   retrieval?: ConstructorParameters<typeof CodexSessionRuntime>[13],
 ) {
   let requested = false;
+  let browserCatalogComplete = true;
   const calls: { method: string; params: unknown }[] = [];
   const close = vi.fn(),
     release = vi.fn(),
@@ -35,7 +36,11 @@ function fixture(
               {
                 name: playwrightServerName,
                 runtimeStatus: 'connected',
-                tools: Object.fromEntries(playwrightTools.map((tool) => [tool, {}])),
+                tools: Object.fromEntries(
+                  (browserCatalogComplete ? playwrightTools : playwrightTools.slice(1)).map(
+                    (tool) => [tool, {}],
+                  ),
+                ),
               },
             ],
           };
@@ -132,11 +137,14 @@ function fixture(
     request: () => {
       requested = true;
     },
+    browserCatalogComplete: (complete: boolean) => {
+      browserCatalogComplete = complete;
+    },
   };
 }
 
 describe('Mobile browser owned-runtime resume boundary', () => {
-  it('explains pending activation and connects the retained request on the next root turn', async () => {
+  it.each([true, false])('verifies Playwright on the next turn (%s)', async (complete) => {
     const workspace = await mkdtemp(join(tmpdir(), 'browser-next-turn-'));
     const skillPath = join(workspace, 'SKILL.md');
     await writeFile(skillPath, '# Browser\nUse verified browser tools.');
@@ -178,6 +186,7 @@ describe('Mobile browser owned-runtime resume boundary', () => {
       bound: (state, threadId) => browser.bound(state, threadId),
       release: (id) => browser.release(id),
     });
+    f.browserCatalogComplete(complete);
     try {
       const started = await f.runtime.start(
         { ...f.session, workspacePath: workspace },
@@ -213,6 +222,27 @@ describe('Mobile browser owned-runtime resume boundary', () => {
       expect(next.threadId).toBe(first.threadId);
       expect(f.launch).toHaveBeenCalledTimes(2);
       expect(installation.ready).toHaveBeenCalledTimes(1);
+      if (!complete) {
+        expect(await control('status')).toMatchObject({
+          status: 'unavailable',
+          reason: 'required-tools-missing',
+          packageStatus: 'ready',
+          chrome: { status: 'ready' },
+        });
+        expect(f.calls.at(-1)?.params).toMatchObject({
+          input: [{ text: 'continue browser work' }],
+        });
+        f.browserCatalogComplete(true);
+        expect(await control('start')).toMatchObject({ status: 'pending' });
+        const retry = await f.runtime.startTurn(
+          RelaySession.rehydrate(next).completeTurn(next.activeTurnId!, '2026-10-28T00:00:04Z')
+            .snapshot,
+          'continue browser work',
+          undefined,
+          '2026-10-28T00:00:05Z',
+        );
+        expect(retry.threadId).toBe(first.threadId);
+      }
       expect(await control('status')).toMatchObject({
         status: 'connected',
         chrome: { status: 'ready' },

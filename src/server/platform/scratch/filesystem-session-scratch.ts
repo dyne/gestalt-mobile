@@ -137,22 +137,29 @@ export class FilesystemSessionScratch implements SessionScratch {
                 JSON.stringify(current.consumers) !== JSON.stringify(record.consumers)
               )
                 throw new Error('SESSION_SCRATCH_LEASE_CHANGED');
-              const staging = join(leases, `.${randomUUID()}.json`);
+              // Managed tools scan leases while old runtimes are retiring.
+              // Keep the staging file outside the catalog until publication.
+              const staging = join(context.directory, `.lease-${randomUUID()}.json`);
               const file = await open(staging, 'wx', 0o600);
               try {
-                await file.writeFile(
-                  JSON.stringify({
-                    ...record,
-                    state: 'released',
-                    consumers: [],
-                    updatedAt: new Date().toISOString(),
-                  }),
-                );
-                await file.sync();
-              } finally {
-                await file.close();
+                try {
+                  await file.writeFile(
+                    JSON.stringify({
+                      ...record,
+                      state: 'released',
+                      consumers: [],
+                      updatedAt: new Date().toISOString(),
+                    }),
+                  );
+                  await file.sync();
+                } finally {
+                  await file.close();
+                }
+                await rename(staging, path);
+              } catch (error) {
+                await unlink(staging).catch(() => undefined);
+                throw error;
               }
-              await rename(staging, path);
               released = true;
             },
           };

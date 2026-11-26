@@ -333,7 +333,8 @@ describe('control-plane trace export', () => {
       runId: '00000000-0000-4000-8000-000000000001',
     });
   });
-  it('sanitizes startup metadata on persistence and export and rejects mismatched runtime correlation', async () => {
+  const startupTraceServers = ['context-mode', 'gestalt-playwright'];
+  it.each(startupTraceServers)('redacts startup evidence for %s', async (serverName) => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-startup-trace-'));
     directories.push(directory);
     const path = join(directory, 'relay.sqlite');
@@ -348,7 +349,7 @@ describe('control-plane trace export', () => {
     const journal = new SqliteEventJournal(database);
     const status = new McpStartupTracker().observe({
       method: 'mcpServer/startupStatus/updated',
-      params: { name: 'context-mode', status: 'failed', threadId: 'child' },
+      params: { name: serverName, status: 'failed', threadId: 'child', error: 'secret' },
     })!;
     const poisoned = {
       ...status,
@@ -382,7 +383,7 @@ describe('control-plane trace export', () => {
       payload: status,
     });
     expect(formatControlPlaneTrace(exportControlPlaneTrace(path, 's1'))).toContain(
-      'server=context-mode thread=child',
+      `server=${serverName} thread=child`,
     );
     expect(formatControlPlaneTrace(exportControlPlaneTrace(path, 's1'))).toContain(
       'phase=startup code=startup-failed exit=unavailable signal=unavailable artifact=unavailable',
