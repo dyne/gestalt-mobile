@@ -30,7 +30,14 @@ export {
   scratchContextVariable,
 } from './scratch-filesystem.js';
 import { withScratchContainment } from './containment-fence.js';
-import { allocateRuntime, validateRuntime, type RuntimeBinding } from './runtime-root.js';
+import { readManagedScratchLeases } from './managed-scratch-owner.js';
+import {
+  allocateRuntime,
+  linuxBootTime,
+  runtimeMarkerName,
+  validateRuntime,
+  type RuntimeBinding,
+} from './runtime-root.js';
 
 export type ScratchMarker = {
   schemaVersion: 1 | 2;
@@ -74,6 +81,68 @@ function validateMarker(value: unknown, expected: ScratchMarker): ScratchMarker 
   )
     throw new Error('SESSION_SCRATCH_MARKER_MISMATCH');
   return marker;
+}
+
+async function publishOwnerMarker(directory: string, marker: ScratchMarker): Promise<void> {
+  const staging = join(directory, `.owner-${randomUUID()}.json`);
+  const handle = await open(staging, 'wx', 0o600);
+  try {
+    try {
+      await handle.writeFile(`${JSON.stringify(marker)}\n`);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await privateDirectory(directory, false);
+    await rename(staging, join(directory, scratchMarkerName));
+  } catch (error) {
+    await unlink(staging).catch(() => undefined);
+    throw error;
+  }
+}
+
+/** A legacy Mobile owner can survive a Linux reboot that clears its runtime in /tmp. */
+async function recoverMissingMobileRuntime(directory: string, marker: ScratchMarker) {
+  const runtime = marker.runtime!;
+  if (await validateRuntime(marker, runtime, { allowMissing: true })) return;
+
+  const boot = await linuxBootTime();
+  const birth = BigInt(runtime.identity.split(':')[2]!);
+  const missing = new Error('SESSION_SCRATCH_RUNTIME_MISSING');
+  if (
+    boot === undefined ||
+    birth === 0n ||
+    birth >= BigInt(boot) * 1_000_000n ||
+    Date.parse(marker.createdAt) >= boot
+  )
+    throw missing;
+
+  const leases = await readManagedScratchLeases(directory, marker);
+  if (
+    leases.some(
+      (lease) =>
+        lease.state === 'active' &&
+        (Date.parse(lease.createdAt) >= boot || Date.parse(lease.updatedAt) >= boot),
+    )
+  )
+    throw missing;
+
+  // Publish under the existing workspace and owner fences. Keep old lease
+  // records protective and replace only the locator for the missing runtime.
+  const replacement = await allocateRuntime(marker);
+  try {
+    await publishOwnerMarker(directory, { ...marker, runtime: replacement });
+  } catch (error) {
+    // This allocation was never handed to a borrower. Only remove its own
+    // locator and empty directory if identity and ownership still agree.
+    await (async () => {
+      await validateRuntime(marker, replacement);
+      await unlink(join(replacement.directory, runtimeMarkerName));
+      await rmdir(replacement.directory);
+    })().catch(() => undefined);
+    throw error;
+  }
+  marker.runtime = replacement;
 }
 
 export class FilesystemSessionScratch implements SessionScratch {
@@ -301,20 +370,7 @@ export class FilesystemSessionScratch implements SessionScratch {
           )
             return;
           marker.providerThreads.push({ provider, threadId });
-          const staging = join(context.directory, `.owner-${randomUUID()}.json`);
-          const handle = await open(staging, 'wx', 0o600);
-          try {
-            await handle.writeFile(`${JSON.stringify(marker)}\n`);
-            await handle.sync();
-            await handle.close();
-            await privateDirectory(context.directory, false);
-            await rename(staging, join(context.directory, scratchMarkerName));
-          } finally {
-            await handle.close();
-            await unlink(staging).catch((error: NodeJS.ErrnoException) => {
-              if (error.code !== 'ENOENT') throw error;
-            });
-          }
+          await publishOwnerMarker(context.directory, marker);
         } finally {
           await releaseFence();
         }
@@ -403,7 +459,11 @@ export class FilesystemSessionScratch implements SessionScratch {
       } else {
         marker = validateMarker(await readMarker(markerPath), expected);
       }
-      if (marker.schemaVersion === 2) await validateRuntime(marker, marker.runtime!);
+      if (marker.schemaVersion === 2) {
+        if (!created && marker.ownerKind === 'mobile-session')
+          await recoverMissingMobileRuntime(directory, marker);
+        else await validateRuntime(marker, marker.runtime!);
+      }
       await privateDirectory(directory, false);
       const runtimeDirectory = marker.runtime?.directory ?? directory;
       const context: SessionScratchContext = {

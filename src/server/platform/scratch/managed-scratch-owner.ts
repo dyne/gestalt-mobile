@@ -137,7 +137,8 @@ export async function readManagedScratchAttribution(directory: string, allowReti
   await privateDirectory(container, false);
   await privateDirectory(directory, false);
   const marker = await readManagedScratchOwner(directory, workspacePath, ownerId);
-  if (marker.runtime) await validateRuntime(marker, marker.runtime, allowRetired);
+  if (marker.runtime)
+    await validateRuntime(marker, marker.runtime, { allowRetiring: allowRetired });
   return { directory, workspacePath, ownerId, marker };
 }
 
