@@ -21,7 +21,10 @@ export type RelayConfig = {
   iconPath?: string;
   /** Host tests use runtime workspace configuration unless explicitly disabled. */
   testRunnerEnabled?: boolean;
+  preview?: PreviewConfig;
 };
+
+export type PreviewConfig = Readonly<{ origin: string; port: number; targetPort: number }>;
 
 export type RelyingPartyConfig = Readonly<{
   /** Stable browser origin used for every WebAuthn ceremony. */
@@ -41,6 +44,8 @@ const optionNames = new Set([
   '--port',
   '--data-dir',
   '--public-origin',
+  '--preview-origin',
+  '--preview-target-port',
   '--skills',
   '--icon',
 ]);
@@ -81,6 +86,7 @@ export function parseConfig(args: string[], cwd = process.cwd()): RelayConfig {
   const publicOrigin = values.has('--public-origin')
     ? normalizePublicOrigin(values.get('--public-origin')!)
     : defaultPublicOrigin(host, port, passkeyAuthEnabled);
+  const preview = parsePreview(values, publicOrigin, port, passkeyAuthEnabled);
 
   return {
     host,
@@ -92,7 +98,43 @@ export function parseConfig(args: string[], cwd = process.cwd()): RelayConfig {
     skillsProfile: values.get('--skills'),
     iconPath: values.has('--icon') ? resolveIconPath(cwd, values.get('--icon')!) : undefined,
     testRunnerEnabled: !flags.has('--disable-test-runner'),
+    ...(preview ? { preview } : {}),
   };
+}
+
+function parsePreview(
+  values: Map<string, string>,
+  publicOrigin: string,
+  relayPort: number,
+  passkeyAuthEnabled: boolean,
+): PreviewConfig | undefined {
+  const originValue = values.get('--preview-origin');
+  const targetValue = values.get('--preview-target-port');
+  if (!originValue) {
+    if (targetValue) throw new CliUsageError('--preview-target-port requires --preview-origin');
+    return;
+  }
+  if (!passkeyAuthEnabled) throw new CliUsageError('Previews require passkey authentication');
+  const origin = new URL(normalizePublicOrigin(originValue, '--preview-origin'));
+  const relay = new URL(publicOrigin);
+  if (origin.protocol !== 'https:' || relay.protocol !== 'https:')
+    throw new CliUsageError('Previews require HTTPS origins for Mobile and the preview site');
+  if (origin.hostname === relay.hostname || origin.hostname.endsWith(`.${relay.hostname}`))
+    throw new CliUsageError(
+      '--preview-origin requires an independent hostname for preview content',
+    );
+  const port = 8080;
+  if (relayPort === port) throw new CliUsageError('The preview gateway requires port 8080');
+  const targetPort = Number(targetValue ?? '5173');
+  if (
+    !Number.isInteger(targetPort) ||
+    targetPort < 1024 ||
+    targetPort > 65535 ||
+    targetPort === relayPort ||
+    targetPort === port
+  )
+    throw new CliUsageError('--preview-target-port must be a distinct unprivileged local port');
+  return { origin: origin.origin, port, targetPort };
 }
 
 function resolveIconPath(cwd: string, value: string): string {
@@ -101,32 +143,27 @@ function resolveIconPath(cwd: string, value: string): string {
   return resolve(cwd, value);
 }
 
-export function normalizePublicOrigin(value: string): string {
+export function normalizePublicOrigin(value: string, option = '--public-origin'): string {
   if (!/^[a-z][a-z\d+.-]*:\/\/[^/?#\s\\\\]+\/?$/i.test(value))
-    throw new CliUsageError(
-      '--public-origin must be a bare origin without a path, query, or fragment',
-    );
+    throw new CliUsageError(`${option} must be a bare origin without a path, query, or fragment`);
 
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    throw new CliUsageError(`Invalid --public-origin: ${value}`);
+    throw new CliUsageError(`Invalid ${option}: ${value}`);
   }
 
   if (url.username || url.password)
-    throw new CliUsageError('--public-origin must not include credentials');
+    throw new CliUsageError(`${option} must not include credentials`);
   if (url.pathname !== '/' || url.search || url.hash)
-    throw new CliUsageError(
-      '--public-origin must be a bare origin without a path, query, or fragment',
-    );
+    throw new CliUsageError(`${option} must be a bare origin without a path, query, or fragment`);
 
   const hostname = url.hostname.replace(/^\[|\]$/g, '');
-  if (isIP(hostname))
-    throw new CliUsageError('--public-origin must use a hostname, not an IP address');
+  if (isIP(hostname)) throw new CliUsageError(`${option} must use a hostname, not an IP address`);
   if (url.protocol === 'http:' && url.hostname === 'localhost') return url.origin;
   if (url.protocol !== 'https:')
-    throw new CliUsageError('--public-origin must use HTTPS, except for http://localhost');
+    throw new CliUsageError(`${option} must use HTTPS, except for http://localhost`);
   return url.origin;
 }
 

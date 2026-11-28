@@ -324,6 +324,12 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
   }
 
   return {
+    openPreview: (id: string) =>
+      request<import('../../../shared/contracts/preview.js').OpenPreview>(
+        `/api/sessions/${encodeURIComponent(id)}/preview`,
+        {},
+      ),
+    stopPreview: (id: string) => remove(`/api/sessions/${encodeURIComponent(id)}/preview`),
     debugConfirmation: (id: string, attentionRequestId?: string) =>
       get<DebugConfirmation>(
         `/api/sessions/${encodeURIComponent(id)}/debug${attentionRequestId ? `?attentionRequestId=${encodeURIComponent(attentionRequestId)}` : ''}`,

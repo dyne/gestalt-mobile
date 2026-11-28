@@ -33,6 +33,7 @@ export type Bootstrap = {
     git: true;
     protocolCompatible: boolean;
     providers?: ProviderAvailability;
+    preview?: true;
   };
 };
 

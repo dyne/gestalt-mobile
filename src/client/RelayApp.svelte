@@ -343,6 +343,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     sessions.find((session) => session.id === sessionId)?.workspacePath ?? null,
   );
   let selectedSession = $derived(sessions.find((session) => session.id === sessionId) ?? null);
+  let previewEnabled = $state(false);
   const readinessEligible = $derived(
     Boolean(
       selectedSession &&
@@ -374,6 +375,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           tab: 'chat',
           available: (session) => Boolean(session.threadId),
           run: () => void openDebug(),
+        },
+        {
+          id: 'open-preview',
+          label: 'Open preview',
+          tab: 'chat',
+          available: (session) => previewEnabled && session.desiredState === 'active',
+          run: () => void openPreview(),
+        },
+        {
+          id: 'stop-preview',
+          label: 'Stop preview',
+          tab: 'chat',
+          available: (session) => previewEnabled && session.desiredState === 'active',
+          run: () => void stopPreview(),
         },
       ],
       tab,
@@ -449,6 +464,36 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     return '';
   });
   const relay = createRelayClient((input, init) => authorizedFetch(input, init));
+
+  async function openPreview(): Promise<void> {
+    const id = selectedSession?.id;
+    if (!id) return;
+    const preview = window.open('about:blank', '_blank');
+    if (!preview) {
+      reportRelayError(null, 'PREVIEW_POPUP_BLOCKED');
+      return;
+    }
+    preview.opener = null;
+    try {
+      const { url } = await relay.openPreview(id);
+      preview.location.replace(url);
+    } catch (error) {
+      preview.close();
+      reportRelayError(error, 'PREVIEW_OPEN_FAILED');
+    }
+  }
+
+  async function stopPreview(): Promise<void> {
+    const id = selectedSession?.id;
+    if (!id) return;
+    try {
+      await relay.stopPreview(id);
+      toastQueue.enqueue({ kind: 'success', message: 'Preview stopped.' });
+    } catch (error) {
+      reportRelayError(error, 'PREVIEW_STOP_FAILED');
+    }
+  }
+
   const sessionForgetting = new SessionForgetting({
     relay,
     publish: (next) => (forgettingStates = next),
@@ -855,6 +900,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         kimi: selectedSessionModels.kimi || (bootstrap.models?.kimi?.[0] ?? ''),
       };
       providerCapabilities = bootstrap.capabilities?.providers ?? null;
+      previewEnabled = bootstrap.capabilities?.preview === true;
       try {
         if (bootstrap.sessionDefaultsError) throw new Error('SESSION_DEFAULTS_READ_FAILED');
         const saved = bootstrap.sessionDefaults;

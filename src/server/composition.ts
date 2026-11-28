@@ -16,6 +16,8 @@ import { debuglog } from 'node:util';
 import { SqliteTransportDiagnostics } from './platform/persistence/sqlite-transport-diagnostics.js';
 import { buildApp } from './app.js';
 import { ManagedUpgrade } from './platform/maintenance/managed-upgrade.js';
+import { PreviewService } from './features/previews/application/service.js';
+import { createPreviewGateway } from './platform/previews/gateway.js';
 import { LocalHostTestRunner } from './platform/host-tests/runner.js';
 import { FilesystemSessionScratch } from './platform/scratch/filesystem-session-scratch.js';
 import { FilesystemScratchCleanup } from './platform/scratch/filesystem-scratch-cleanup.js';
@@ -220,6 +222,7 @@ export type ComposeRelayAppOptions = {
   /** Canonical, configuration-derived WebAuthn contract; never request-derived. */
   relyingParty: RelyingPartyConfig;
   passkeyAuthEnabled?: boolean;
+  preview?: import('./config.js').PreviewConfig;
   staticDir?: string;
   pwaIcon?: PwaIcon;
   testRunnerEnabled?: boolean;
@@ -283,6 +286,8 @@ export type ComposeRelayAppOptions = {
 
 export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const passkeyAuthEnabled = options.passkeyAuthEnabled ?? true;
+  if (options.preview && !passkeyAuthEnabled)
+    throw new Error('Previews require passkey authentication');
   const relyingParty = createRelyingPartyConfig(options.relyingParty.publicOrigin);
   if (
     relyingParty.rpId !== options.relyingParty.rpId ||
@@ -2869,6 +2874,22 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           : null,
       onSettled: ordinaryTurnDependencies.onSettled,
     });
+  const preview = (() => {
+    if (!options.preview || !authorization) return;
+    const repository = authorization;
+    const clock = options.authorizationClock ?? (() => new Date());
+    const service = new PreviewService({
+      sessionActive: (id) =>
+        sessions.find(id)?.desiredState === 'active' && !forgetOperations.find(id),
+      loginValid: (id) => repository.sessionDevice(id, clock().toISOString()) !== null,
+      now: () => clock().getTime(),
+      token: () => randomBytes(32).toString('base64url'),
+    });
+    return {
+      routes: { service, origin: options.preview.origin },
+      gateway: createPreviewGateway(options.preview, service),
+    };
+  })();
   let app;
   try {
     if (options.testRunnerEnabled !== false) {
@@ -2894,6 +2915,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     app = await buildApp({
       transportDiagnostic: (id, event) => transportDiagnostics.record(id, event),
       upgrade: new ManagedUpgrade(options.root),
+      preview: preview?.routes,
       ...(authorization
         ? {
             auth: {
@@ -2983,6 +3005,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         headerIconUrl: options.pwaIcon ? pwaIconUrl(options.pwaIcon) : undefined,
         protocolCompatible: protocol.compatible,
         providers: providerAvailability,
+        preview: Boolean(preview),
       },
       selfDebug: runtime
         ? {
@@ -3419,6 +3442,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
     );
   };
+  if (preview)
+    app.addHook('onReady', async () => {
+      await preview.gateway.start();
+    });
   app.addHook('onListen', async () => {
     for (const id of forgetOperations.pendingIds())
       void forgetSessions.execute(id).catch(() => undefined);
@@ -3457,6 +3484,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     closing = true;
     providerRecovery.dispose();
     runtime?.cancelHistoryReads();
+    await preview?.gateway.close();
   });
   app.addHook('onClose', async () => {
     await hostTests?.close();

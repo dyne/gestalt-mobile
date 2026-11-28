@@ -46,6 +46,8 @@ Options:
   --host <address>   Listen address (default: 127.0.0.1)
   --port <number>    Listen port (default: 3000)
   --public-origin <origin> Exact HTTPS browser origin for passkeys (localhost may use HTTP)
+  --preview-origin <origin> Enable the preview gateway on 127.0.0.1:8080 for this HTTPS origin
+  --preview-target-port <number> Loopback dev server port (default: 5173)
   --disable-passkey-auth Disable passkey access control (unsafe on shared or network hosts)
   --data-dir <path>  Directory for persistent application data
   --icon <path>      SVG or PNG used as the installed PWA application icon
@@ -429,6 +431,7 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
     testRunnerEnabled: config.testRunnerEnabled,
     relyingParty: config.relyingParty,
     passkeyAuthEnabled: config.passkeyAuthEnabled,
+    ...(config.preview ? { preview: config.preview } : {}),
     staticDir: packagedClientDir(moduleUrl),
     pwaIcon,
     profiles: new LauncherProfileCatalog(),

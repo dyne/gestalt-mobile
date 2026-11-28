@@ -402,6 +402,35 @@ two local relay processes behind `https://relay.example.org`), but an RP-ID/
 hostname change is refused once credentials exist because it would strand those
 credentials. Do not expose `--host 0.0.0.0` before that boundary is in place.
 
+### Preview a local web server
+
+Start the app's dev server on `127.0.0.1:5173`. Add a separate HTTPS hostname
+to the same reverse proxy and point it at Mobile's preview gateway:
+
+```caddyfile
+preview.example.org {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+Add `--preview-origin https://preview.example.org` to the existing Mobile
+invocation. Keep `--public-origin` set to the enrolled Mobile hostname. Preview
+mode requires passkey authentication and HTTPS for both hostnames. Use
+`--preview-target-port <port>` for a dev server on another loopback port.
+
+In an active chat, choose **Open preview** to publish the configured server and
+open it in a browser tab. Mobile authorizes the tab from the current passkey
+login and issues it a preview cookie valid for one hour or until that login is
+revoked. The gateway forwards the app and its WebSockets. Choose **Stop preview**
+to revoke access, including existing connections. Closing or forgetting the
+chat also revokes access. Restarting Mobile clears any active publication.
+
+The gateway serves one configured app and one active chat at a time. Run the
+app's server separately and dedicate the preview hostname to that app. For
+Vite, use `npm run dev -- --host 127.0.0.1 --port 5173 --strictPort` and add the
+exact preview hostname to `server.allowedHosts` or set
+`__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` to that hostname.
+
 ### Move to a different hostname
 
 Stop every Gestalt Mobile relay using the same account. Run the reset on the
