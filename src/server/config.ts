@@ -45,6 +45,7 @@ const optionNames = new Set([
   '--data-dir',
   '--public-origin',
   '--preview-origin',
+  '--preview-gateway-port',
   '--preview-target-port',
   '--skills',
   '--icon',
@@ -109,14 +110,19 @@ function parsePreview(
   passkeyAuthEnabled: boolean,
 ): PreviewConfig | undefined {
   const originValue = values.get('--preview-origin');
+  const gatewayValue = values.get('--preview-gateway-port');
   const targetValue = values.get('--preview-target-port');
   if (!originValue) {
+    if (gatewayValue) throw new CliUsageError('--preview-gateway-port requires --preview-origin');
     if (targetValue) throw new CliUsageError('--preview-target-port requires --preview-origin');
     return;
   }
   return createPreviewConfig(
-    originValue,
-    Number(targetValue ?? '5173'),
+    {
+      origin: originValue,
+      gatewayPort: gatewayValue === undefined ? undefined : Number(gatewayValue),
+      targetPort: targetValue === undefined ? undefined : Number(targetValue),
+    },
     publicOrigin,
     relayPort,
     passkeyAuthEnabled,
@@ -124,14 +130,13 @@ function parsePreview(
 }
 
 export function createPreviewConfig(
-  originValue: string,
-  targetPort: number,
+  settings: { origin: string; gatewayPort?: number; targetPort?: number },
   publicOrigin: string,
   relayPort: number,
   passkeyAuthEnabled: boolean,
 ): PreviewConfig {
   if (!passkeyAuthEnabled) throw new CliUsageError('Previews require passkey authentication');
-  const origin = new URL(normalizePublicOrigin(originValue, '--preview-origin'));
+  const origin = new URL(normalizePublicOrigin(settings.origin, '--preview-origin'));
   const relay = new URL(publicOrigin);
   if (origin.protocol !== 'https:' || relay.protocol !== 'https:')
     throw new CliUsageError('Previews require HTTPS origins for Mobile and the preview site');
@@ -139,17 +144,17 @@ export function createPreviewConfig(
     throw new CliUsageError(
       '--preview-origin requires an independent hostname for preview content',
     );
-  const port = 8080;
-  if (relayPort === port) throw new CliUsageError('The preview gateway requires port 8080');
-  if (
-    !Number.isInteger(targetPort) ||
-    targetPort < 1024 ||
-    targetPort > 65535 ||
-    targetPort === relayPort ||
-    targetPort === port
-  )
+  const port = settings.gatewayPort ?? 8080;
+  if (!isUnprivilegedPort(port) || port === relayPort)
+    throw new CliUsageError('--preview-gateway-port must be a distinct unprivileged local port');
+  const targetPort = settings.targetPort ?? 5173;
+  if (!isUnprivilegedPort(targetPort) || targetPort === relayPort || targetPort === port)
     throw new CliUsageError('--preview-target-port must be a distinct unprivileged local port');
   return { origin: origin.origin, port, targetPort };
+}
+
+function isUnprivilegedPort(port: number): boolean {
+  return Number.isInteger(port) && port >= 1024 && port <= 65535;
 }
 
 function resolveIconPath(cwd: string, value: string): string {

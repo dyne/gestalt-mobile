@@ -13,10 +13,12 @@ import { createPreviewConfig } from '../../config.js';
 const previewSettings = z.strictObject({
   relayOrigin: z.string(),
   origin: z.string(),
+  gatewayPort: z.number().optional(),
   targetPort: z.number().optional(),
 });
+const previewFile = z.union([previewSettings, z.array(previewSettings)]);
 
-export function previewHostConfigPath(home: string): string {
+function previewHostConfigPath(home: string): string {
   return join(home, '.codex-gestalt', 'gestalt-mobile', 'preview.json');
 }
 
@@ -40,15 +42,12 @@ export async function readPreviewHostConfig(home: string, publicOrigin: string, 
     const buffer = Buffer.alloc(4097);
     const { bytesRead } = await file.read(buffer);
     if (bytesRead === buffer.length) throw new Error('Invalid preview configuration file');
-    const settings = previewSettings.parse(JSON.parse(buffer.toString('utf8', 0, bytesRead)));
-    if (settings.relayOrigin !== publicOrigin) return;
-    return createPreviewConfig(
-      settings.origin,
-      settings.targetPort ?? 5173,
-      publicOrigin,
-      relayPort,
-      true,
-    );
+    const fileSettings = previewFile.parse(JSON.parse(buffer.toString('utf8', 0, bytesRead)));
+    const entries = Array.isArray(fileSettings) ? fileSettings : [fileSettings];
+    const matching = entries.filter((entry) => entry.relayOrigin === publicOrigin);
+    if (matching.length > 1) throw new Error('Duplicate relay origin in preview configuration');
+    const [settings] = matching;
+    if (settings) return createPreviewConfig(settings, publicOrigin, relayPort, true);
   } finally {
     await file.close();
   }

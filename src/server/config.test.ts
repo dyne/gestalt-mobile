@@ -60,10 +60,35 @@ describe('parseConfig', () => {
     expect(() => parseConfig([...args, '--disable-passkey-auth'])).toThrow(
       'Previews require passkey authentication',
     );
-    expect(() => parseConfig([...args, '--port', '8080'])).toThrow('requires port 8080');
+    expect(() => parseConfig([...args, '--port', '8080'])).toThrow('--preview-gateway-port');
     expect(() => parseConfig([...args, '--preview-target-port', '3000'])).toThrow(
       'distinct unprivileged local port',
     );
+  });
+
+  it('configures separate relay, gateway and app ports for another instance', () => {
+    const args = [
+      '--public-origin',
+      'https://relay.example',
+      '--preview-origin',
+      'https://preview.example',
+      '--port',
+      '8080',
+      '--preview-gateway-port',
+      '8081',
+    ];
+    expect(parseConfig([...args, '--preview-target-port', '5174']).preview).toEqual({
+      origin: 'https://preview.example',
+      port: 8081,
+      targetPort: 5174,
+    });
+    expect(() => parseConfig([...args, '--preview-target-port', '8081'])).toThrow(
+      '--preview-target-port',
+    );
+    expect(() => parseConfig(['--preview-gateway-port', '8081'])).toThrow(
+      'requires --preview-origin',
+    );
+    expect(() => parseConfig([...args.slice(0, -1), '80'])).toThrow('--preview-gateway-port');
   });
 
   it.each([

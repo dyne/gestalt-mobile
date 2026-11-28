@@ -46,7 +46,8 @@ Options:
   --host <address>   Listen address (default: 127.0.0.1)
   --port <number>    Listen port (default: 3000)
   --public-origin <origin> Exact HTTPS browser origin for passkeys (localhost may use HTTP)
-  --preview-origin <origin> Enable the preview gateway on 127.0.0.1:8080 for this HTTPS origin
+  --preview-origin <origin> Enable the loopback preview gateway for this HTTPS origin
+  --preview-gateway-port <number> Loopback port Caddy forwards to (default: 8080)
   --preview-target-port <number> Loopback dev server port (default: 5173)
   --disable-passkey-auth Disable passkey access control (unsafe on shared or network hosts)
   --data-dir <path>  Directory for persistent application data

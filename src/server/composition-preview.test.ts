@@ -9,7 +9,7 @@ import { createServer, request } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { expect, it, onTestFinished, vi } from 'vitest';
+import { expect, it, onTestFinished } from 'vitest';
 import { composeRelayApp } from './composition.js';
 import { createRelyingPartyConfig } from './config.js';
 import { deviceNickname } from './features/auth/domain/device-nickname.js';
@@ -25,13 +25,13 @@ import {
 } from './platform/auth/sqlite-authorization-store.js';
 import { SqliteSessionRepository } from './platform/persistence/sqlite-session-repository.js';
 import { openRelayDatabase } from './platform/persistence/sqlite.js';
-import * as gatewayModule from './platform/previews/gateway.js';
 
 function previewRequest(
   port: number,
   path: string,
-  options: { cookie?: string; code?: string } = {},
+  options: { cookie?: string; code?: string; origin?: string } = {},
 ): Promise<{ status?: number; body: string; cookie?: string }> {
+  const origin = new URL(options.origin ?? 'https://preview.example');
   return new Promise((resolve, reject) => {
     const req = request(
       {
@@ -40,8 +40,8 @@ function previewRequest(
         path,
         method: options.code ? 'POST' : 'GET',
         headers: {
-          host: 'preview.example',
-          ...(options.code ? { origin: 'https://preview.example' } : {}),
+          host: origin.host,
+          ...(options.code ? { origin: origin.origin } : {}),
           ...(options.cookie ? { cookie: options.cookie } : {}),
         },
       },
@@ -60,36 +60,28 @@ function previewRequest(
   });
 }
 
-async function listenUpstream(body: string): Promise<number> {
+async function listenUpstream(body: string) {
   const server = createServer((_request, response) => response.end(body));
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', resolve);
   });
-  onTestFinished(() => new Promise<void>((resolve) => server.close(() => resolve())));
-  return (server.address() as AddressInfo).port;
+  let closed: Promise<void> | undefined;
+  const close = () => (closed ??= new Promise<void>((resolve) => server.close(() => resolve())));
+  onTestFinished(close);
+  return { port: (server.address() as AddressInfo).port, close };
 }
 
-it('enables the fixed preview gateway from host configuration after the relay is ready', async () => {
+it('reloads independent preview gateways on two relays without replacing the active chat', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mobile-preview-reload-'));
   onTestFinished(() => rm(root, { recursive: true, force: true }));
   const relyingParty = createRelyingPartyConfig('https://relay.example');
+  const otherRelyingParty = createRelyingPartyConfig('https://relay.example:8443');
+  const otherOrigin = 'https://other-preview.example';
   const home = join(root, 'home');
   const dataDir = join(root, 'relay');
   const workspaceRoot = join(root, 'workspaces');
   await mkdir(join(workspaceRoot, 'project'), { recursive: true });
-  const realGateway = gatewayModule.createPreviewGateway;
-  let livePort = 0;
-  const createGateway = vi
-    .spyOn(gatewayModule, 'createPreviewGateway')
-    .mockImplementation((config, service) => {
-      const gateway = realGateway({ ...config, port: 0 }, service);
-      return {
-        close: gateway.close,
-        start: async () => (livePort = await gateway.start()),
-      };
-    });
-  onTestFinished(() => createGateway.mockRestore());
   const store = new SqliteAuthorizationStore(home, relyingParty);
   const deviceId = authorizedDeviceId('fixture-device');
   try {
@@ -112,7 +104,7 @@ it('enables the fixed preview gateway from host configuration after the relay is
   } finally {
     store.close();
   }
-  const app = await composeRelayApp({
+  const options: Parameters<typeof composeRelayApp>[0] = {
     root: workspaceRoot,
     dataDir,
     homeDirectory: home,
@@ -125,8 +117,24 @@ it('enables the fixed preview gateway from host configuration after the relay is
         throw new Error('PROFILE_NOT_FOUND');
       },
     },
-  });
+  };
+  const app = await composeRelayApp(options);
   onTestFinished(() => app.close());
+  const [first, second, initial, replacement, otherGateway] = await Promise.all([
+    listenUpstream('first dev server'),
+    listenUpstream('second dev server'),
+    listenUpstream(''),
+    listenUpstream(''),
+    listenUpstream(''),
+  ]);
+  await Promise.all([initial.close(), replacement.close(), otherGateway.close()]);
+  const other = await composeRelayApp({
+    ...options,
+    dataDir: join(root, 'other-relay'),
+    relyingParty: otherRelyingParty,
+    preview: { origin: otherOrigin, port: first.port, targetPort: second.port },
+  });
+  onTestFinished(() => other.close());
   await app.ready();
 
   const headers = {
@@ -137,6 +145,11 @@ it('enables the fixed preview gateway from host configuration after the relay is
     app.inject({
       url: '/api/bootstrap',
       headers,
+    });
+  const bootstrapOther = () =>
+    other.inject({
+      url: '/api/bootstrap',
+      headers: { ...headers, origin: otherRelyingParty.publicOrigin },
     });
   const before = await bootstrap();
   expect(before.statusCode).toBe(200);
@@ -159,7 +172,7 @@ it('enables the fixed preview gateway from host configuration after the relay is
     db.close();
   }
 
-  async function openPreview(): Promise<string> {
+  async function openPreview(port: number): Promise<string> {
     const response = await app.inject({
       method: 'POST',
       url: `/api/sessions/${sessionId}/preview`,
@@ -167,57 +180,78 @@ it('enables the fixed preview gateway from host configuration after the relay is
     });
     expect(response.statusCode, response.body).toBe(200);
     const url = new URL(response.json().url);
-    const exchange = await previewRequest(livePort, url.pathname, { code: url.hash.slice(1) });
+    expect(url.origin).toBe('https://preview.example');
+    const exchange = await previewRequest(port, url.pathname, { code: url.hash.slice(1) });
     expect(exchange.status).toBe(204);
     expect(exchange.cookie).toBeDefined();
     return exchange.cookie!;
   }
 
   const path = join(dirname(authorizationDatabasePath(home)), 'preview.json');
-  const writeConfig = (targetPort: number) =>
+  const writeConfig = (gatewayPort: number, targetPort: number) =>
     writeFile(
       path,
-      JSON.stringify({
-        relayOrigin: relyingParty.publicOrigin,
-        origin: 'https://preview.example',
-        targetPort,
-      }),
+      JSON.stringify([
+        {
+          relayOrigin: relyingParty.publicOrigin,
+          origin: 'https://preview.example',
+          gatewayPort,
+          targetPort,
+        },
+        {
+          relayOrigin: otherRelyingParty.publicOrigin,
+          origin: otherOrigin,
+          gatewayPort: otherGateway.port,
+          targetPort: second.port,
+        },
+      ]),
       { mode: 0o600 },
     );
-  const firstPort = await listenUpstream('first dev server');
-  const secondPort = await listenUpstream('second dev server');
-  await writeConfig(firstPort);
+  await writeConfig(initial.port, first.port);
+  await other.ready();
+  await expect(
+    previewRequest(otherGateway.port, '/.gestalt-preview', { origin: otherOrigin }),
+  ).resolves.toMatchObject({ status: 200 });
 
-  const after = await bootstrap();
-  expect(after.statusCode).toBe(200);
-  expect(after.json().capabilities.preview).toBe(true);
-  expect(createGateway).toHaveBeenCalledTimes(1);
-  expect(createGateway.mock.calls[0]?.[0]).toMatchObject({ port: 8080, targetPort: firstPort });
-  const oldCookie = await openPreview();
-  await expect(previewRequest(livePort, '/', { cookie: oldCookie })).resolves.toMatchObject({
+  const enabled = await Promise.all([bootstrap(), bootstrapOther()]);
+  expect(enabled.map((response) => response.statusCode)).toEqual([200, 200]);
+  expect(enabled.map((response) => response.json().capabilities.preview)).toEqual([true, true]);
+  await expect(previewRequest(otherGateway.port, '/.gestalt-preview')).resolves.toMatchObject({
+    status: 421,
+  });
+  const oldCookie = await openPreview(initial.port);
+  await expect(previewRequest(initial.port, '/', { cookie: oldCookie })).resolves.toMatchObject({
     status: 200,
     body: 'first dev server',
   });
 
-  await writeConfig(secondPort);
+  await writeConfig(replacement.port, second.port);
   const changed = await Promise.all([bootstrap(), bootstrap()]);
   expect(changed.map((response) => response.json().capabilities.preview)).toEqual([true, true]);
   expect(changed[0]?.json().sessions).toContainEqual(
     expect.objectContaining({ id: sessionId, threadId: 'preview-thread', desiredState: 'active' }),
   );
-  expect(createGateway).toHaveBeenCalledTimes(2);
-  expect(createGateway.mock.calls[1]?.[0]).toMatchObject({ port: 8080, targetPort: secondPort });
-  await expect(previewRequest(livePort, '/', { cookie: oldCookie })).resolves.toMatchObject({
-    status: 401,
-  });
-  const newCookie = await openPreview();
-  await expect(previewRequest(livePort, '/', { cookie: newCookie })).resolves.toMatchObject({
-    status: 200,
-    body: 'second dev server',
-  });
+  await expect(previewRequest(initial.port, '/')).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+  await expect(previewRequest(replacement.port, '/', { cookie: oldCookie })).resolves.toMatchObject(
+    {
+      status: 401,
+    },
+  );
+  const newCookie = await openPreview(replacement.port);
+  await expect(previewRequest(replacement.port, '/', { cookie: newCookie })).resolves.toMatchObject(
+    {
+      status: 200,
+      body: 'second dev server',
+    },
+  );
 
-  await writeConfig(3000);
+  await writeConfig(replacement.port, 3000);
   expect((await bootstrap()).json().capabilities).not.toHaveProperty('preview');
-  expect(createGateway).toHaveBeenCalledTimes(2);
-  await expect(previewRequest(livePort, '/')).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+  await expect(previewRequest(replacement.port, '/')).rejects.toMatchObject({
+    code: 'ECONNREFUSED',
+  });
+  expect((await bootstrapOther()).json().capabilities.preview).toBe(true);
+  await expect(
+    previewRequest(otherGateway.port, '/.gestalt-preview', { origin: otherOrigin }),
+  ).resolves.toMatchObject({ status: 200 });
 });
