@@ -20,7 +20,7 @@ export class PreviewPublication {
     private readonly impeccableHelper: (id: string) => Promise<ImpeccableHelper | undefined>,
   ) {}
 
-  async start(config: PreviewConfig): Promise<string> {
+  private async start(config: PreviewConfig): Promise<string> {
     const gateway = createPreviewGateway(
       { ...config, impeccableHelper: this.impeccableHelper },
       this.service,

@@ -3491,10 +3491,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
     );
   };
-  const initialPreview = options.preview;
-  if (preview && initialPreview)
+  if (preview)
     app.addHook('onReady', async () => {
-      await preview.publication.start(initialPreview);
+      await preview.publication.refresh();
     });
   app.addHook('onListen', async () => {
     for (const id of forgetOperations.pendingIds())

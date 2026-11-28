@@ -362,21 +362,22 @@ checks with `npm run format:check`, `npm run license:check`, `npm run check`,
 
 ## Command-line options
 
-| Option                           | Default              | Purpose                                                            |
-| -------------------------------- | -------------------- | ------------------------------------------------------------------ |
-| `--cwd <path>`                   | Current directory    | Root containing selectable workspaces                              |
-| `--host <address>`               | `127.0.0.1`          | HTTP listen address                                                |
-| `--port <number>`                | `3000`               | HTTP listen port, from 1 through 65535                             |
-| `--public-origin <origin>`       | Loopback Vite origin | Exact browser origin for passkeys, required for non-loopback hosts |
-| `--preview-origin <origin>`      | Disabled             | Separate HTTPS hostname for passkey-protected web previews         |
-| `--preview-target-port <number>` | `5173`               | Port of the loopback app server used by web previews               |
-| `--disable-passkey-auth`         | Off                  | Disable passkey access control and serve every client directly     |
-| `--data-dir <path>`              | XDG state directory  | Directory containing `relay.sqlite`                                |
-| `--icon <path>`                  | Gestalt icons        | SVG or PNG used when installing the PWA                            |
-| `--skills <profile>`             |                      | Apply a saved global profile to every session                      |
-| `--skills list`                  |                      | List global profiles without starting the server                   |
-| `--help`                         |                      | Print usage without starting the application                       |
-| `--version`                      |                      | Print the installed package version                                |
+| Option                            | Default              | Purpose                                                            |
+| --------------------------------- | -------------------- | ------------------------------------------------------------------ |
+| `--cwd <path>`                    | Current directory    | Root containing selectable workspaces                              |
+| `--host <address>`                | `127.0.0.1`          | HTTP listen address                                                |
+| `--port <number>`                 | `3000`               | HTTP listen port, from 1 through 65535                             |
+| `--public-origin <origin>`        | Loopback Vite origin | Exact browser origin for passkeys, required for non-loopback hosts |
+| `--preview-origin <origin>`       | Disabled             | Separate HTTPS hostname for passkey-protected web previews         |
+| `--preview-gateway-port <number>` | `8080`               | Loopback listener for the preview site's reverse proxy             |
+| `--preview-target-port <number>`  | `5173`               | Port of the loopback app server used by web previews               |
+| `--disable-passkey-auth`          | Off                  | Disable passkey access control and serve every client directly     |
+| `--data-dir <path>`               | XDG state directory  | Directory containing `relay.sqlite`                                |
+| `--icon <path>`                   | Gestalt icons        | SVG or PNG used when installing the PWA                            |
+| `--skills <profile>`              |                      | Apply a saved global profile to every session                      |
+| `--skills list`                   |                      | List global profiles without starting the server                   |
+| `--help`                          |                      | Print usage without starting the application                       |
+| `--version`                       |                      | Print the installed package version                                |
 
 `--cwd` may be relative to the directory where the command is invoked. The
 resolved directory is the selectable root of a recursive workspace tree. Dot
