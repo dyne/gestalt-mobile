@@ -49,6 +49,50 @@ async function expectWebSocket(page: Page, expected: 'open' | 'closed'): Promise
     .toBe(expected);
 }
 
+async function expectPreviewFormSubmission(page: Page): Promise<void> {
+  const relayOrigin = new URL(page.url()).origin;
+  const grant = await page.request.post('/api/sessions/websocket-session/preview', {
+    headers: { origin: relayOrigin },
+  });
+  expect(grant.status()).toBe(200);
+  const { url } = await grant.json();
+  const previewOrigin = new URL(url).origin;
+  const formAction = new URL('/sign-in', previewOrigin).href;
+  const preview = await page.context().newPage();
+  try {
+    const unauthorized = await preview.request.post(formAction, {
+      headers: { origin: previewOrigin },
+    });
+    expect(unauthorized.status()).toBe(401);
+
+    const handoff = await preview.goto(url);
+    expect(await handoff?.headerValue('referrer-policy')).toBe('no-referrer');
+    const submit = preview.getByRole('button', { name: 'Sign in to the preview' });
+    await expect(submit).toBeVisible();
+
+    const [response] = await Promise.all([
+      preview.waitForResponse(
+        (result) => result.url() === formAction && result.request().method() === 'POST',
+      ),
+      submit.click(),
+    ]);
+    expect({
+      status: response.status(),
+      origin: await response.request().headerValue('origin'),
+    }).toEqual({ status: 200, origin: previewOrigin });
+    expect(await response.text()).toBe('Signed in to the preview');
+
+    for (const origin of ['null', relayOrigin]) {
+      const forbidden = await preview.request.post(formAction, {
+        headers: { origin, 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'navigate' },
+      });
+      expect(forbidden.status()).toBe(403);
+    }
+  } finally {
+    await preview.close();
+  }
+}
+
 test.describe('real SimpleWebAuthn browser journey', () => {
   test.describe.configure({ mode: 'serial' });
 
@@ -86,6 +130,7 @@ test.describe('real SimpleWebAuthn browser journey', () => {
     await firstPage.screenshot({ path: 'test-results/auth/real-login.png' });
     await firstPage.getByRole('button', { name: 'Sign in with a passkey' }).click();
     await expect(firstPage.getByRole('button', { name: 'Open configuration' })).toBeVisible();
+    await expectPreviewFormSubmission(firstPage);
 
     await openDeviceManagement(firstPage);
     await firstPage.getByRole('button', { name: 'Create enrollment link' }).click();
