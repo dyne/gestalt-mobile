@@ -20,7 +20,7 @@ export class SessionStartController {
   #state: SessionStartState = { starting: false, error: null };
   #generation = 0;
   #disposed = false;
-  #retryKey: string | null = null;
+  #retry: { signature: string; key: string } | null = null;
   constructor(
     private readonly transport: SessionStartTransport,
     private readonly key: () => string,
@@ -34,10 +34,12 @@ export class SessionStartController {
     if (this.#disposed || this.#state.starting || !workspaceId) return null;
     const generation = ++this.#generation;
     this.#publish({ starting: true, error: null });
-    const key = this.#retryKey ?? (this.#retryKey = this.key());
+    const signature = JSON.stringify([workspaceId, settings]);
+    if (this.#retry?.signature !== signature) this.#retry = { signature, key: this.key() };
+    const { key } = this.#retry;
     try {
       const session = await this.transport.start(workspaceId, settings, key);
-      if (this.#current(generation)) this.#retryKey = null;
+      if (this.#current(generation)) this.#retry = null;
       return this.#current(generation) ? session : null;
     } catch (error) {
       if (this.#current(generation)) {

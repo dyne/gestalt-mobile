@@ -303,6 +303,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   );
   let startRequestKey = $state<string | null>(null);
   let sessionStartState = $state<SessionStartState>({ starting: false, error: null });
+  let sessionReplacement = $state<{
+    source: RelaySession;
+    workspaceId: string;
+    settings: StartSessionSettings;
+  } | null>(null);
+  let preparingReplacement = $state(false);
+  let replacingSession = $state(false);
   let workspaceConflictSessionId = $state<string | undefined>();
   let startingSession = $derived(sessionStartState.starting);
   let openingSessionId = $state<string | null>(null);
@@ -668,7 +675,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       sessionStartState = next;
       workspaceConflictSessionId = next.conflict?.sessionId;
     },
-    (error) => (shellStatus = reportRelayError(error, 'SESSION_START_FAILED')),
+    (error) => {
+      if (!sessionStartController.state.conflict)
+        shellStatus = reportRelayError(error, 'SESSION_START_FAILED');
+    },
   );
   const gitController = new GitController(
     { getSummary: relay.getGitSummary, pull: relay.pullGit, checkout: relay.checkoutGitBranch },
@@ -1080,7 +1090,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function startSession() {
-    if (!sessionWorkspaceId || startingSession) return;
+    if (!sessionWorkspaceId || startingSession || preparingReplacement) return;
     const provider = kimiAvailable ? sessionProvider : 'codex';
     const errors = validateStartForm({
       workspaceId: sessionWorkspaceId,
@@ -1091,9 +1101,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       shellStatus = errors.profile;
       return;
     }
-    const isCurrent = sessionHandoffLease();
-    shellStatus = 'Starting session…';
-    const session = await sessionStartController.start(sessionWorkspaceId, {
+    const settings: StartSessionSettings = {
       provider,
       sandbox,
       approvalPolicy,
@@ -1108,12 +1116,62 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       ...(selectedSessionSkillProfile
         ? { skillProfile: selectedSessionSkillProfile }
         : { mandatorySkillsOnly: true }),
-    });
+    };
+    await startSelectedSession(sessionWorkspaceId, settings);
+  }
+
+  async function startSelectedSession(workspaceId: string, settings: StartSessionSettings) {
+    const isCurrent = sessionHandoffLease();
+    shellStatus = settings.replaceSessionId ? 'Preparing session handoff…' : 'Starting session…';
+    const session = await sessionStartController.start(workspaceId, settings);
+    const conflict = sessionStartController.state.conflict;
+    if (!session && conflict && settings.replaceSessionId) {
+      shellStatus = reportRelayError(
+        new Error('SESSION_REPLACEMENT_CHANGED'),
+        'SESSION_START_FAILED',
+      );
+    }
+    if (!session && conflict && !settings.replaceSessionId && isCurrent()) {
+      preparingReplacement = true;
+      try {
+        const source = await relay.getSession(conflict.sessionId);
+        if (isCurrent() && sessionWorkspaceId === workspaceId) {
+          sessionReplacement = { source, workspaceId, settings };
+          shellStatus = 'A session is already running in this workspace.';
+        }
+      } catch (error) {
+        shellStatus = reportRelayError(error, 'SESSION_START_FAILED');
+      } finally {
+        preparingReplacement = false;
+      }
+    }
     if (!session) return;
     try {
-      await presentStartedSession(session, 'empty', isCurrent);
+      await presentStartedSession(session, settings.replaceSessionId ? 'load' : 'empty', isCurrent);
+      if (session.pendingHandoffFile) {
+        toastQueue.enqueue({
+          kind: 'warning',
+          code: 'SESSION_HANDOFF_PENDING',
+          message: `The handoff is saved at ${session.pendingHandoffFile}. Ask the new session to read it.`,
+        });
+      }
     } catch (error) {
       reportRelayError(error, 'SESSION_START_FAILED');
+    }
+  }
+
+  async function confirmSessionReplacement() {
+    const replacement = sessionReplacement;
+    if (!replacement || startingSession) return;
+    sessionReplacement = null;
+    replacingSession = true;
+    try {
+      await startSelectedSession(replacement.workspaceId, {
+        ...replacement.settings,
+        replaceSessionId: replacement.source.id,
+      });
+    } finally {
+      replacingSession = false;
     }
   }
 
@@ -2371,8 +2429,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     skillProfiles={sessionSkillProfiles}
     selectedSkillProfile={selectedSessionSkillProfile}
     skillProfileError={sessionSkillProfileError}
-    {startingSession}
+    startingSession={startingSession || preparingReplacement}
+    {replacingSession}
     {workspaceConflictSessionId}
+    replacementSource={sessionReplacement?.source}
+    oncancelreplacement={() => (sessionReplacement = null)}
+    onconfirmreplacement={() => void confirmSessionReplacement()}
     {openingSessionId}
     savingDefaults={savingSessionDefaults}
     bind:advancedExpanded={sessionAdvancedExpanded}

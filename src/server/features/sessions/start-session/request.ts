@@ -13,6 +13,7 @@ const schema = z.object({
   profile: z.string().min(1),
   skillProfile: z.string().trim().min(1).optional(),
   mandatorySkillsOnly: z.literal(true).optional(),
+  replaceSessionId: z.string().min(1).max(256).optional(),
   model: z
     .string()
     .trim()

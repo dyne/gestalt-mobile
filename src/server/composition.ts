@@ -11,6 +11,7 @@ import { homedir } from 'node:os';
 import { FilesystemSessionDefaults } from './platform/persistence/filesystem-session-defaults.js';
 import { SessionModelConfig } from './platform/codex/session-model-config.js';
 import { basename, dirname, join, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { debuglog } from 'node:util';
 
 import { SqliteTransportDiagnostics } from './platform/persistence/sqlite-transport-diagnostics.js';
@@ -40,6 +41,10 @@ import {
   debugExecutionSettings,
 } from './features/self-debug/create-session.js';
 import { startSession } from './features/sessions/start-session/use-case.js';
+import {
+  createSessionReplacement,
+  sessionHandoffMessage,
+} from './features/sessions/start-session/replace-session.js';
 import {
   createStartTurn,
   readAcceptedTurn,
@@ -332,12 +337,15 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const orgPlanLaunches = new SqliteOrgPlanLaunchStore(database);
   // Admission spans asynchronous provider calls so Execute cannot reserve a workspace mid-start.
   const workspaceAdmissions = new Map<string, number>();
-  const replacingWorkspaceSessions = new Map<string, { sessionId: string; closing: boolean }>();
+  const replacingWorkspaceSessions = new Map<
+    string,
+    { sessionId: string; closing: boolean; successorId?: string }
+  >();
   const assertWorkspaceOwner = (session: Pick<RelaySessionSnapshot, 'id' | 'workspacePath'>) => {
-    if (
-      replacingWorkspaceSessions.size &&
-      replacingWorkspaceSessions.has(canonicalSessionWorkspace(session.workspacePath))
-    )
+    const replacement = replacingWorkspaceSessions.size
+      ? replacingWorkspaceSessions.get(canonicalSessionWorkspace(session.workspacePath))
+      : undefined;
+    if (replacement && replacement.successorId !== session.id)
       throw new WriterAcquisitionError('workspaceLocked');
     let owner = orgPlanLaunches.workspaceOwner(session.workspacePath);
     while (
@@ -2669,12 +2677,17 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       takeoverStore.releaseSession(id);
       if (replacingWorkspaceSessions.size) {
         const workspacePath = canonicalSessionWorkspace(current.workspacePath);
-        if (replacingWorkspaceSessions.get(workspacePath)?.sessionId === id)
+        const replacement = replacingWorkspaceSessions.get(workspacePath);
+        if (replacement?.sessionId === id && !replacement.successorId)
           replacingWorkspaceSessions.delete(workspacePath);
       }
     }
   };
-  const replaceIdleSession = async (workspacePath: string, id: string): Promise<boolean> => {
+  const replaceIdleSession = async (
+    workspacePath: string,
+    id: string,
+    next?: { priorUpdatedAt: string; session: RelaySessionSnapshot },
+  ): Promise<boolean> => {
     const initial = workspaceSession(workspacePath);
     if (initial?.sessionId !== id || !initial.replaceAllowed) return false;
     if (!initial.retryClose) await activity.refresh(id);
@@ -2682,6 +2695,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     const session = sessions.find(id);
     if (
       !session ||
+      (next && (occupant?.retryClose || session.updatedAt !== next.priorUpdatedAt)) ||
       forgetOperations.find(id) ||
       workspaceBusy(workspacePath, true) ||
       occupant?.sessionId !== id ||
@@ -2689,20 +2703,65 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     )
       return false;
     // Recheck and mark the saved session as released before yielding to provider teardown.
-    const replacement = { sessionId: id, closing: true };
+    const replacement = { sessionId: id, closing: true, successorId: next?.session.id };
     replacingWorkspaceSessions.set(workspacePath, replacement);
     try {
       if (!occupant.retryClose) saveSession(releaseSessionSnapshot(session));
       await closeReleasedSession(id);
+      if (next) {
+        try {
+          await publishSession(next.session);
+          return true;
+        } finally {
+          replacingWorkspaceSessions.delete(workspacePath);
+        }
+      }
       return !replacingWorkspaceSessions.has(workspacePath);
     } catch {
       if (sessions.find(id)?.desiredState === 'active')
         replacingWorkspaceSessions.delete(workspacePath);
+      replacement.successorId = undefined;
       return false;
     } finally {
       replacement.closing = false;
     }
   };
+  const replacementShutdown = new AbortController();
+  const replaceOrdinarySession = createSessionReplacement({
+    find: (id) => sessions.find(id),
+    workspaceKey: canonicalSessionWorkspace,
+    blocked: (session) => {
+      const automatic = autopilot.snapshot(session.id);
+      return Boolean(
+        !ownerRuntime(session) ||
+        forgetOperations.find(session.id) ||
+        blockingInteractions(session.id).length ||
+        automatic?.state === 'attentionRequired' ||
+        automatic?.health?.healthy ||
+        hostTests?.supervisionSummary(session.id).running,
+      );
+    },
+    ready: async (path, id) => {
+      await activity.refresh(id);
+      const occupant = workspaceSession(path);
+      return occupant?.sessionId === id && occupant.replaceAllowed && !occupant.retryClose;
+    },
+    submit: async (id, text) => {
+      const outcome = await submitSessionTurn({ sessionId: id, text, key: randomUUID() });
+      return outcome.kind === 'accepted' ? outcome.session.activeTurnId : null;
+    },
+    readHistory: (session) => ownerRuntime(session)!.readHistory(session),
+    saveHandoff: (session, contents) => sessionScratch.writeHandoff(session, contents),
+    replace: (path, source, successor) =>
+      replaceIdleSession(path, source.id, { priorUpdatedAt: source.updatedAt, session: successor }),
+    wait: async () => {
+      try {
+        await delay(1_000, undefined, { signal: replacementShutdown.signal });
+      } catch {
+        throw new Error('SESSION_REPLACEMENT_UNAVAILABLE');
+      }
+    },
+  });
   const prepareOrgPlan = (
     reference: import('../shared/contracts/org-plan-execution.js').OrgPlanReference,
     expectedRevision?: string,
@@ -3154,6 +3213,19 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         : undefined,
       sessionRoutes: {
         ...ordinarySessionLifecycle,
+        replace: runtime || kimiRuntime ? replaceOrdinarySession : undefined,
+        deliverHandoff: async (session, handoff) => {
+          try {
+            const result = await submitSessionTurn({
+              sessionId: session.id,
+              text: sessionHandoffMessage(handoff),
+              key: `session-handoff:${session.id}`,
+            });
+            return result.kind === 'accepted';
+          } catch {
+            return false;
+          }
+        },
         forget: (id, keepFilesFor) => forgetSessions.execute(id, keepFilesFor),
         forgetOperation: (id) => forgetOperations.find(id),
         createId: randomUUID,
@@ -3531,6 +3603,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   // history RPC must not keep us from reaching the normal runtime cleanup.
   app.addHook('preClose', async () => {
     closing = true;
+    replacementShutdown.abort();
     providerRecovery.dispose();
     runtime?.cancelHistoryReads();
     await preview?.publication.close();

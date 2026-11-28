@@ -8,6 +8,9 @@ import fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { registerStartSession } from './endpoint.js';
 import { registerProblemHandler } from '../../../platform/http/problem-handler.js';
+import { WorkspaceSessionConflict } from '../application/workspace-conflict.js';
+import { RelaySession } from '../model/relay-session.js';
+import { createSessionReplacement, sessionHandoffMessage } from './replace-session.js';
 
 const skills = {
   skillProfiles: {
@@ -23,6 +26,176 @@ const skills = {
 };
 
 describe('POST /api/sessions', () => {
+  it.each(['handoff ready', 'handoff failed', 'occupant changed'] as const)(
+    'only replaces the confirmed occupant after transferring history when %s',
+    async (scenario) => {
+      const app = fastify();
+      registerProblemHandler(app);
+      let source = RelaySession.create({
+        id: 'current',
+        workspaceId: 'w',
+        workspacePath: '/w',
+        profile: 'default',
+        model: 'old-model',
+        provider: 'codex',
+        effectiveSkillSelection: { skills: [] },
+        now: '1',
+      })
+        .bindThread('old-thread', '2')
+        .startTurn('active-work', '3');
+      const successor = new Map();
+      const activity: string[] = [];
+      const file = '/w/tmp/sessions/successor/previous-session.json';
+      const handoff = createSessionReplacement({
+        find: (id) => (id === source.snapshot.id ? source.snapshot : null),
+        workspaceKey: (path) => path,
+        blocked: () => false,
+        ready: async () => true,
+        wait: async () => {
+          const turnId = source.snapshot.activeTurnId!;
+          activity.push(`completed:${turnId}`);
+          source = source.completeTurn(turnId, '4');
+        },
+        submit: async (_id, text) => {
+          expect(text).toContain('short handoff');
+          activity.push('requested handoff');
+          source = source.startTurn('handoff', '5');
+          return 'handoff';
+        },
+        readHistory: async () => ({
+          turns: [
+            {
+              id: 'active-work',
+              startedAt: null,
+              completedAt: null,
+              items: [
+                {
+                  id: 'prompt',
+                  type: 'userMessage',
+                  content: [{ type: 'text', text: 'Continue the migration' }],
+                },
+              ],
+            },
+            {
+              id: 'handoff',
+              startedAt: null,
+              completedAt: null,
+              items:
+                scenario === 'handoff failed'
+                  ? []
+                  : [
+                      {
+                        id: 'answer',
+                        type: 'agentMessage',
+                        phase: 'final_answer',
+                        text: 'Next step is to review the migration.',
+                      },
+                    ],
+            },
+          ],
+        }),
+        saveHandoff: async (session, contents) => {
+          expect(session.id).toBe('successor');
+          expect(JSON.parse(contents)).toMatchObject({
+            sourceSessionId: 'current',
+            messages: [
+              { role: 'user', text: 'Continue the migration' },
+              { role: 'assistant', text: 'Next step is to review the migration.' },
+            ],
+          });
+          activity.push('saved conversation');
+          return file;
+        },
+        replace: async (_path, old, session) => {
+          expect(old.threadId).toBe('old-thread');
+          activity.push('released predecessor');
+          source = source.release('6');
+          successor.set(session.id, session);
+          return true;
+        },
+      });
+      registerStartSession(app, {
+        ...skills,
+        createId: () => 'successor',
+        now: () => '6',
+        save: (session) => {
+          successor.set(session.id, session);
+        },
+        publish: async () => {
+          throw new WorkspaceSessionConflict('SESSION_WORKSPACE_BUSY', 'current');
+        },
+        workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
+        profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+        replace: handoff,
+        activate: async (session) => {
+          expect(source.snapshot.state).toBe('released');
+          activity.push('activated successor');
+          return RelaySession.rehydrate(session).bindThread('new-thread', '7').snapshot;
+        },
+        deliverHandoff: async (session, context) => {
+          expect(session.threadId).toBe('new-thread');
+          expect(sessionHandoffMessage(context)).toContain(file);
+          expect(sessionHandoffMessage(context)).toContain('Next step is to review the migration.');
+          activity.push('delivered handoff');
+          return true;
+        },
+      });
+
+      try {
+        const settings = {
+          workspaceId: 'w',
+          profile: 'default',
+          provider: 'codex',
+          mandatorySkillsOnly: true,
+        };
+        const blocked = await app.inject({
+          method: 'POST',
+          url: '/api/sessions',
+          payload: settings,
+        });
+        expect(blocked.statusCode).toBe(409);
+        expect(blocked.json()).toMatchObject({
+          code: 'SESSION_WORKSPACE_BUSY',
+          sessionId: 'current',
+        });
+        expect(activity).toEqual([]);
+
+        const result = await app.inject({
+          method: 'POST',
+          url: '/api/sessions',
+          payload: {
+            ...settings,
+            replaceSessionId: scenario === 'occupant changed' ? 'other' : 'current',
+          },
+        });
+        if (scenario !== 'handoff ready') {
+          expect(result.statusCode).toBe(scenario === 'handoff failed' ? 503 : 409);
+          expect(source.snapshot.desiredState).toBe('active');
+          expect(successor.size).toBe(0);
+          return;
+        }
+        expect(result.statusCode).toBe(202);
+        expect(result.json()).toMatchObject({
+          id: 'successor',
+          threadId: 'new-thread',
+          effectiveSkillSelection: { mandatorySkillsOnly: true },
+        });
+        expect(source.snapshot).toMatchObject({ state: 'released', threadId: 'old-thread' });
+        expect(activity).toEqual([
+          'completed:active-work',
+          'requested handoff',
+          'completed:handoff',
+          'saved conversation',
+          'released predecessor',
+          'activated successor',
+          'delivered handoff',
+        ]);
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
   it.each([
     ['CODEX_MODEL_UNAVAILABLE', 400, 'Choose an available model'],
     ['KIMI_MODEL_UNAVAILABLE', 400, 'Choose an available model'],

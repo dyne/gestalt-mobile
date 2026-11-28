@@ -10267,6 +10267,125 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('sessions', () => {
+    it('closes the confirmed workspace writer after saving its handoff and starts a fresh thread', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'gestalt-replacement-root-'));
+      const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-replacement-state-'));
+      ownTemporaryPaths(root, dataDir);
+      const workspacePath = join(root, 'workspace');
+      await mkdir(workspacePath);
+      const handles: LiveServerHandle[] = [];
+      const app = await composeAuthorizedApp({
+        root,
+        dataDir,
+        relyingParty,
+        installedCodexVersion: 'codex-cli 0.172.0',
+        startAppServers: true,
+        launchAppServer: liveAppServer(handles),
+        profiles: {
+          list: async () => [],
+          require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
+        },
+      });
+      onTestFinished(() => app.close());
+      const id = await createComposedSession(app);
+      const source = (await app.inject(`/api/sessions/${id}`)).json();
+      const writer = handles.find((handle) => handle.calls.includes('thread/start'))!;
+      let handoffTurn = '';
+      writer.respond = (method) => {
+        if (method === 'turn/start') {
+          handoffTurn = 'handoff-turn';
+          return { turn: { id: handoffTurn } };
+        }
+        if (method === 'thread/list') return { data: [] };
+        if (method === 'thread/read')
+          return {
+            thread: {
+              id: source.threadId,
+              status: { type: 'idle' },
+              turns: handoffTurn
+                ? [
+                    {
+                      id: handoffTurn,
+                      status: 'completed',
+                      items: [
+                        {
+                          id: 'handoff-answer',
+                          type: 'agentMessage',
+                          phase: 'final_answer',
+                          text: 'Review the prepared migration.',
+                        },
+                      ],
+                    },
+                  ]
+                : [],
+            },
+          };
+        return undefined;
+      };
+      const settings = {
+        workspaceId: source.workspaceId,
+        profile: 'default',
+        provider: 'codex',
+        mandatorySkillsOnly: true,
+      };
+      const conflict = await app.inject({
+        method: 'POST',
+        url: '/api/sessions',
+        payload: settings,
+      });
+      expect(conflict.statusCode).toBe(409);
+      expect(conflict.json()).toMatchObject({ code: 'SESSION_WORKSPACE_BUSY', sessionId: id });
+
+      const replacement = Promise.resolve(
+        app.inject({
+          method: 'POST',
+          url: '/api/sessions',
+          payload: { ...settings, replaceSessionId: id },
+        }),
+      );
+      try {
+        await vi.waitFor(
+          async () => {
+            const observed = (await app.inject(`/api/sessions/${id}`)).json();
+            expect(observed).toMatchObject({ activeTurnId: 'handoff-turn' });
+          },
+          { timeout: 2_000 },
+        );
+      } finally {
+        if (handoffTurn)
+          writer.notify?.({
+            method: 'turn/completed',
+            params: { threadId: source.threadId, turn: { id: handoffTurn, status: 'completed' } },
+          });
+      }
+      const response = await replacement;
+      expect(response.statusCode, JSON.stringify(response.json().code)).toBe(202);
+      const successor = response.json();
+      expect(successor.threadId).not.toBe(source.threadId);
+      expect(successor.effectiveSkillSelection).toMatchObject({ mandatorySkillsOnly: true });
+      expect((await app.inject(`/api/sessions/${id}`)).json()).toMatchObject({
+        state: 'released',
+        threadId: source.threadId,
+      });
+      const file = join(
+        workspacePath,
+        'tmp',
+        'sessions',
+        mobileScratchOwnerId(successor.id),
+        'previous-session.json',
+      );
+      expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({
+        sourceSessionId: id,
+        summary: 'Review the prepared migration.',
+      });
+      const nextWriter = handles.find(
+        (handle) => handle !== writer && handle.calls.includes('thread/start'),
+      );
+      const turn = nextWriter?.requests.find((request) => request.method === 'turn/start');
+      expect(JSON.stringify(turn?.params)).toContain(file);
+      expect(JSON.stringify(turn?.params)).toContain('Review the prepared migration.');
+    });
+
     it.skipIf(process.platform !== 'linux')(
       'accepts a prompt on the original thread after a reboot clears its runtime scratch',
       async () => {

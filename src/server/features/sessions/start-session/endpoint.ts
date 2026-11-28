@@ -119,6 +119,34 @@ export function registerStartSession(
 /** Public guidance is allowlisted; runtime messages can contain private paths or credentials. */
 function sessionStartProblem(code: string) {
   switch (code) {
+    case 'SESSION_REPLACEMENT_CHANGED':
+      return problem(
+        code,
+        409,
+        'The running session changed. Review the workspace and try again.',
+        true,
+      );
+    case 'SESSION_REPLACEMENT_BUSY':
+      return problem(
+        code,
+        409,
+        'The running session has work or requests that need attention. Let it finish and try again.',
+        true,
+      );
+    case 'SESSION_HANDOFF_FAILED':
+      return problem(
+        code,
+        503,
+        'The handoff could not be saved. The previous session and its history are still available.',
+        true,
+      );
+    case 'SESSION_REPLACEMENT_UNAVAILABLE':
+      return problem(
+        code,
+        503,
+        'Session replacement requires an available provider runtime.',
+        true,
+      );
     case 'CODEX_MODEL_UNAVAILABLE':
     case 'KIMI_MODEL_UNAVAILABLE':
       return problem(

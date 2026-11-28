@@ -6,7 +6,17 @@
 
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, readdir, realpath, rename, rmdir, unlink } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  realpath,
+  rename,
+  rmdir,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { claimOwnerFence } from './owner-fence.js';
 import type {
@@ -347,6 +357,20 @@ export class FilesystemSessionScratch implements SessionScratch {
         }
       }),
     );
+  }
+
+  async writeHandoff(
+    session: Readonly<{ id: string; workspacePath: string }>,
+    contents: string,
+  ): Promise<string> {
+    const lease = await this.borrow(session);
+    try {
+      const path = join(lease.directory, 'previous-session.json');
+      await writeFile(path, contents, { mode: 0o600, flag: 'wx' });
+      return path;
+    } finally {
+      await lease.release();
+    }
   }
 
   async associateProviderThread(

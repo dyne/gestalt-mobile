@@ -79,7 +79,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     selectedSkillProfile: string;
     skillProfileError: string;
     startingSession: boolean;
+    replacingSession?: boolean;
     workspaceConflictSessionId?: string;
+    replacementSource?: RelaySession;
+    oncancelreplacement?: () => void;
+    onconfirmreplacement?: () => void;
     openingSessionId: string | null;
     onworkspacechange: (value: string) => void;
     onexpandedchange: (value: Set<string>) => void;
@@ -150,7 +154,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     selectedSkillProfile,
     skillProfileError,
     startingSession,
+    replacingSession = false,
     workspaceConflictSessionId,
+    replacementSource,
+    oncancelreplacement,
+    onconfirmreplacement,
     openingSessionId,
     onworkspacechange,
     onexpandedchange,
@@ -201,6 +209,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   );
   let selectedWorkspace = $derived(findTreeNode(workspaceTree, workspaceId));
   let closeDialog = $state<HTMLDialogElement | null>(null);
+  let replacementDialog = $state<HTMLDialogElement | null>(null);
+  $effect(() => {
+    if (replacementSource && replacementDialog && !replacementDialog.open)
+      replacementDialog.showModal();
+    if (!replacementSource && replacementDialog?.open) replacementDialog.close();
+  });
   let closingSessionId = $state<string | null>(null);
   function requestClose(id: string) {
     if (isSessionForgetting(forgettingStates.get(id))) return;
@@ -292,6 +306,37 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       }}>Close session</AppControl
     >
   </div>
+</dialog>
+
+<dialog
+  bind:this={replacementDialog}
+  aria-labelledby="replace-session-title"
+  aria-describedby="replace-session-description"
+  oncancel={oncancelreplacement}
+>
+  <h2 id="replace-session-title">Replace the running session?</h2>
+  {#if replacementSource}
+    <p id="replace-session-description">
+      Another session is running in this workspace. Gestalt will wait for its current turn to
+      finish, request a short handoff, and close it. The new session will open with your selected
+      settings and access to the previous conversation.
+    </p>
+    <dl class="replacement-details">
+      <dt>Model</dt>
+      <dd>{replacementSource.model || 'Provider default'}</dd>
+      <dt>Skill profile</dt>
+      <dd>
+        {replacementSource.effectiveSkillSelection?.selectedProfileName ??
+          (replacementSource.effectiveSkillSelection?.mandatorySkillsOnly
+            ? 'Mandatory skills only'
+            : 'Unspecified')}
+      </dd>
+    </dl>
+    <div class="dialog-actions">
+      <AppControl onclick={oncancelreplacement}>Cancel</AppControl>
+      <AppControl primary onclick={onconfirmreplacement}>Close and create session</AppControl>
+    </div>
+  {/if}
 </dialog>
 
 {#snippet debugDetails(session: RelaySession)}
@@ -710,7 +755,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             modelsLoading ||
             (models.length > 0 && !selectedModel)}
         >
-          {startingSession ? 'Creating…' : 'Create session'}
+          {replacingSession
+            ? 'Preparing handoff…'
+            : startingSession
+              ? 'Creating…'
+              : 'Create session'}
         </AppControl>
       </div>
     </form>
@@ -1030,6 +1079,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   dialog h2 {
     margin-block-start: 0;
+  }
+  .replacement-details {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 0.4rem 0.9rem;
+    overflow-wrap: anywhere;
+  }
+  .replacement-details dd {
+    margin: 0;
   }
   .dialog-actions {
     display: flex;
