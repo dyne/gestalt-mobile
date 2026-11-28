@@ -14,7 +14,7 @@ export function registerOpenPreview(
   app: FastifyInstance,
   deps: {
     service: Pick<PreviewService, 'open'>;
-    origin: string;
+    origin(): Promise<string | undefined>;
     impeccableAvailable?(sessionId: string): boolean | Promise<boolean>;
   },
 ): void {
@@ -29,11 +29,24 @@ export function registerOpenPreview(
           .code(403)
           .type('application/problem+json')
           .send(problem('IMPECCABLE_UNAVAILABLE', 403, 'Impeccable is unavailable in this chat.'));
+      const origin = await deps.origin();
+      if (!origin)
+        return reply
+          .code(503)
+          .type('application/problem+json')
+          .send(
+            problem(
+              'PREVIEW_UNAVAILABLE',
+              503,
+              'Ask the Mobile host operator to check web preview configuration.',
+              true,
+            ),
+          );
       const result = login
         ? deps.service.open(request.params.sessionId, login, impeccable ? 'impeccable' : 'view')
         : ({ kind: 'unauthorized' } as const);
       if (result.kind === 'opened') {
-        const url = new URL(previewHandoffPath, deps.origin);
+        const url = new URL(previewHandoffPath, origin);
         url.hash = result.code;
         return { url: url.href } satisfies OpenPreview;
       }

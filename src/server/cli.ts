@@ -431,6 +431,7 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
     testRunnerEnabled: config.testRunnerEnabled,
     relyingParty: config.relyingParty,
     passkeyAuthEnabled: config.passkeyAuthEnabled,
+    relayPort: config.port,
     ...(config.preview ? { preview: config.preview } : {}),
     staticDir: packagedClientDir(moduleUrl),
     pwaIcon,

@@ -17,8 +17,9 @@ import { SqliteTransportDiagnostics } from './platform/persistence/sqlite-transp
 import { buildApp } from './app.js';
 import { ManagedUpgrade } from './platform/maintenance/managed-upgrade.js';
 import { PreviewService } from './features/previews/application/service.js';
-import { createPreviewGateway } from './platform/previews/gateway.js';
+import { readPreviewHostConfig } from './platform/previews/host-config.js';
 import { findImpeccableHelper } from './platform/previews/impeccable.js';
+import { PreviewPublication } from './platform/previews/publication.js';
 import { hasImpeccableSkill } from '../shared/contracts/impeccable.js';
 import { LocalHostTestRunner } from './platform/host-tests/runner.js';
 import { FilesystemSessionScratch } from './platform/scratch/filesystem-session-scratch.js';
@@ -224,6 +225,7 @@ export type ComposeRelayAppOptions = {
   /** Canonical, configuration-derived WebAuthn contract; never request-derived. */
   relyingParty: RelyingPartyConfig;
   passkeyAuthEnabled?: boolean;
+  relayPort?: number;
   preview?: import('./config.js').PreviewConfig;
   staticDir?: string;
   pwaIcon?: PwaIcon;
@@ -2907,7 +2909,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       onSettled: ordinaryTurnDependencies.onSettled,
     });
   const preview = (() => {
-    if (!options.preview || !authorization) return;
+    if (!authorization || !relyingParty.publicOrigin.startsWith('https:')) return;
     const repository = authorization;
     const clock = options.authorizationClock ?? (() => new Date());
     const service = new PreviewService({
@@ -2917,18 +2919,22 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       now: () => clock().getTime(),
       token: () => randomBytes(32).toString('base64url'),
     });
+    const publication = new PreviewPublication(
+      service,
+      async () =>
+        (await readPreviewHostConfig(
+          homeDirectory,
+          relyingParty.publicOrigin,
+          options.relayPort ?? 3000,
+        )) ?? options.preview,
+      async (id) => {
+        const session = sessions.find(id);
+        if (session) return findImpeccableHelper(session.workspacePath);
+      },
+    );
     return {
-      routes: { service, origin: options.preview.origin, impeccableAvailable },
-      gateway: createPreviewGateway(
-        {
-          ...options.preview,
-          impeccableHelper: async (id) => {
-            const session = sessions.find(id);
-            if (session) return findImpeccableHelper(session.workspacePath);
-          },
-        },
-        service,
-      ),
+      routes: { service, origin: () => publication.refresh(), impeccableAvailable },
+      publication,
     };
   })();
   let app;
@@ -3046,7 +3052,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         headerIconUrl: options.pwaIcon ? pwaIconUrl(options.pwaIcon) : undefined,
         protocolCompatible: protocol.compatible,
         providers: providerAvailability,
-        preview: Boolean(preview),
+        preview: preview && (async () => Boolean(await preview.publication.refresh())),
         impeccable: true,
       },
       selfDebug: runtime
@@ -3485,9 +3491,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
     );
   };
-  if (preview)
+  const initialPreview = options.preview;
+  if (preview && initialPreview)
     app.addHook('onReady', async () => {
-      await preview.gateway.start();
+      await preview.publication.start(initialPreview);
     });
   app.addHook('onListen', async () => {
     for (const id of forgetOperations.pendingIds())
@@ -3527,7 +3534,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     closing = true;
     providerRecovery.dispose();
     runtime?.cancelHistoryReads();
-    await preview?.gateway.close();
+    await preview?.publication.close();
   });
   app.addHook('onClose', async () => {
     await hostTests?.close();

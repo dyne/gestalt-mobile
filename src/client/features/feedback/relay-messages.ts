@@ -15,6 +15,7 @@ const relayMessages = {
   PREVIEW_OPEN_FAILED: 'Could not open the preview. Try again.',
   PREVIEW_POPUP_BLOCKED: 'Allow pop-ups for Gestalt and open the preview again.',
   PREVIEW_STOP_FAILED: 'Could not stop the preview. Try again.',
+  PREVIEW_UNAVAILABLE: 'Ask the Mobile host operator to check web preview configuration.',
   IMPECCABLE_UNAVAILABLE: 'Impeccable is unavailable in this chat.',
   IMPECCABLE_ACTION_UNKNOWN: 'Type /impeccable to choose a design action.',
   SESSION_WORKSPACE_BUSY:
