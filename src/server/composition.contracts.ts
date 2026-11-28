@@ -9880,6 +9880,8 @@ describe('production composition', () => {
           'protected',
         ],
         ['GET', '/api/sessions/:id/attention', '/api/sessions/session-1/attention', 'protected'],
+        ['GET', '/api/sessions/:id/impeccable', '/api/sessions/session-1/impeccable', 'protected'],
+        ['HEAD', '/api/sessions/:id/impeccable', '/api/sessions/session-1/impeccable', 'protected'],
         [
           'POST',
           '/api/sessions/:id/activity/refresh',

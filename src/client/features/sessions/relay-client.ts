@@ -324,10 +324,12 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
   }
 
   return {
-    openPreview: (id: string) =>
+    impeccableAvailable: (id: string, signal: AbortSignal) =>
+      get<{ available: boolean }>(`/api/sessions/${encodeURIComponent(id)}/impeccable`, signal),
+    openPreview: (id: string, impeccable = false) =>
       request<import('../../../shared/contracts/preview.js').OpenPreview>(
         `/api/sessions/${encodeURIComponent(id)}/preview`,
-        {},
+        impeccable ? { impeccable: true } : {},
       ),
     stopPreview: (id: string) => remove(`/api/sessions/${encodeURIComponent(id)}/preview`),
     debugConfirmation: (id: string, attentionRequestId?: string) =>

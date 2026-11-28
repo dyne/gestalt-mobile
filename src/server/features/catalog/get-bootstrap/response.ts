@@ -29,5 +29,6 @@ export type BootstrapResponse = {
     protocolCompatible: boolean;
     providers: ProviderAvailability;
     preview?: true;
+    impeccable?: true;
   };
 };

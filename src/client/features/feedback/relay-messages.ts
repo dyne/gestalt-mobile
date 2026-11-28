@@ -15,6 +15,8 @@ const relayMessages = {
   PREVIEW_OPEN_FAILED: 'Could not open the preview. Try again.',
   PREVIEW_POPUP_BLOCKED: 'Allow pop-ups for Gestalt and open the preview again.',
   PREVIEW_STOP_FAILED: 'Could not stop the preview. Try again.',
+  IMPECCABLE_UNAVAILABLE: 'Impeccable is unavailable in this chat.',
+  IMPECCABLE_ACTION_UNKNOWN: 'Type /impeccable to choose a design action.',
   SESSION_WORKSPACE_BUSY:
     'A session is already running in this workspace. Open it or stop it first.',
   SESSION_WORKSPACE_CLEANING: 'This workspace is being forgotten. Retry when cleanup finishes.',

@@ -18,6 +18,8 @@ import { buildApp } from './app.js';
 import { ManagedUpgrade } from './platform/maintenance/managed-upgrade.js';
 import { PreviewService } from './features/previews/application/service.js';
 import { createPreviewGateway } from './platform/previews/gateway.js';
+import { findImpeccableHelper } from './platform/previews/impeccable.js';
+import { hasImpeccableSkill } from '../shared/contracts/impeccable.js';
 import { LocalHostTestRunner } from './platform/host-tests/runner.js';
 import { FilesystemSessionScratch } from './platform/scratch/filesystem-session-scratch.js';
 import { FilesystemScratchCleanup } from './platform/scratch/filesystem-scratch-cleanup.js';
@@ -939,6 +941,36 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       explicit: options.explicitSkillProfile?.skills,
       project: project?.skills,
     }).skillsConfig;
+  };
+  const impeccableAvailable = async (id: string): Promise<boolean> => {
+    const session = sessions.find(id);
+    if (!session) return false;
+    if (session.effectiveSkillSelection)
+      return hasImpeccableSkill(session.effectiveSkillSelection.skills);
+    try {
+      const [catalog, project] = await Promise.all([
+        session.provider === 'kimi'
+          ? kimiSkillCatalog.list(session.workspacePath)
+          : skillCatalog('codex', session.profile).list(session.workspacePath),
+        skillProfiles.readWorkspaceDefault(session.workspacePath),
+      ]);
+      const effective = compileSkillOverride({
+        discovered: catalog.skills,
+        explicit: options.explicitSkillProfile?.skills,
+        project: project?.skills,
+      }).skillsConfig;
+      const enabledPaths = new Set(
+        effective.filter((skill) => skill.enabled).map((skill) => skill.path),
+      );
+      return hasImpeccableSkill(
+        catalog.skills.map(({ name, path }) => ({
+          name,
+          enabled: enabledPaths.has(path),
+        })),
+      );
+    } catch {
+      return false;
+    }
   };
   const recentThreads = createRecentThreadLister({
     root,
@@ -2886,8 +2918,17 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       token: () => randomBytes(32).toString('base64url'),
     });
     return {
-      routes: { service, origin: options.preview.origin },
-      gateway: createPreviewGateway(options.preview, service),
+      routes: { service, origin: options.preview.origin, impeccableAvailable },
+      gateway: createPreviewGateway(
+        {
+          ...options.preview,
+          impeccableHelper: async (id) => {
+            const session = sessions.find(id);
+            if (session) return findImpeccableHelper(session.workspacePath);
+          },
+        },
+        service,
+      ),
     };
   })();
   let app;
@@ -3006,6 +3047,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         protocolCompatible: protocol.compatible,
         providers: providerAvailability,
         preview: Boolean(preview),
+        impeccable: true,
       },
       selfDebug: runtime
         ? {
@@ -3113,6 +3155,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         save: saveSession,
         publish: publishSession,
         find: (id) => withPendingInteractions(sessions.find(id)),
+        impeccableAvailable,
         list: () => sessions.list().map((session) => withPendingInteractions(session)!),
         plan: (id) => supervisedPlans.find(id),
         workspaces,

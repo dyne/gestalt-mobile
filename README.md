@@ -431,6 +431,19 @@ Vite, use `npm run dev -- --host 127.0.0.1 --port 5173 --strictPort` and add the
 exact preview hostname to `server.allowedHosts` or set
 `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` to that hostname.
 
+### Use Impeccable Live in a preview
+
+Enable Impeccable in the chat's skill profile. Type `/impeccable` in the chat
+composer to browse its design actions, or send a command such as
+`/impeccable audit`. The agent uses the current target when you omit it.
+
+With the app's dev server running, send `/impeccable live` to open an editable
+preview. The agent starts and polls Impeccable's loopback helper in the chat
+workspace. The browser uses the existing preview hostname for the picker and
+Live events. The ordinary **Open preview** action grants viewing access.
+**Stop preview** closes Live event streams and revokes the preview.
+Use Impeccable's **Exit** control to finish the agent's Live polling loop.
+
 ### Move to a different hostname
 
 Stop every Gestalt Mobile relay using the same account. Run the reset on the
