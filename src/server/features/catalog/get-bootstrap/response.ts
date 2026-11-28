@@ -28,5 +28,6 @@ export type BootstrapResponse = {
     git: true;
     protocolCompatible: boolean;
     providers: ProviderAvailability;
+    preview?: true;
   };
 };

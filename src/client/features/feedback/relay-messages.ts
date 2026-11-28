@@ -9,6 +9,12 @@ import { cleanupFolderPreview } from './cleanup-folder-feedback.js';
 import type { NotificationDetails } from './toast-queue.js';
 
 const relayMessages = {
+  PREVIEW_BUSY: 'Stop the preview in the other session first.',
+  PREVIEW_LIMIT: 'Too many preview authorizations. Try again later.',
+  PREVIEW_SESSION_INACTIVE: 'Open an active chat session first.',
+  PREVIEW_OPEN_FAILED: 'Could not open the preview. Try again.',
+  PREVIEW_POPUP_BLOCKED: 'Allow pop-ups for Gestalt and open the preview again.',
+  PREVIEW_STOP_FAILED: 'Could not stop the preview. Try again.',
   SESSION_WORKSPACE_BUSY:
     'A session is already running in this workspace. Open it or stop it first.',
   SESSION_WORKSPACE_CLEANING: 'This workspace is being forgotten. Retry when cleanup finishes.',

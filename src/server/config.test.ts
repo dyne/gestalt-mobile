@@ -44,6 +44,39 @@ describe('parseConfig', () => {
     });
   });
 
+  it('enables a loopback preview gateway for a separate HTTPS hostname', () => {
+    const args = [
+      '--public-origin',
+      'https://relay.example',
+      '--preview-origin',
+      'https://preview.example/',
+    ];
+    expect(parseConfig(args).preview).toEqual({
+      origin: 'https://preview.example',
+      port: 8080,
+      targetPort: 5173,
+    });
+    expect(parseConfig([...args, '--preview-target-port', '4321']).preview?.targetPort).toBe(4321);
+    expect(() => parseConfig([...args, '--disable-passkey-auth'])).toThrow(
+      'Previews require passkey authentication',
+    );
+    expect(() => parseConfig([...args, '--port', '8080'])).toThrow('requires port 8080');
+    expect(() => parseConfig([...args, '--preview-target-port', '3000'])).toThrow(
+      'distinct unprivileged local port',
+    );
+  });
+
+  it.each([
+    'https://relay.example:8443',
+    'https://preview.relay.example',
+    'http://localhost:8443',
+    'https://preview.example/path',
+  ])('rejects an invalid or shared preview origin %s', (origin) => {
+    expect(() =>
+      parseConfig(['--public-origin', 'https://relay.example', '--preview-origin', origin]),
+    ).toThrow(CliUsageError);
+  });
+
   it('parses every supported option and resolves a relative workspace from the caller', () => {
     expect(
       parseConfig(
