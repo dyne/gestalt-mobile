@@ -13,13 +13,19 @@ import {
   type PreviewService,
 } from '../../features/previews/application/service.js';
 import { cookieName, previewCookie, proxyHttp, proxyWebSocket, rejectUpgrade } from './proxy.js';
+import { impeccablePath, serveImpeccable, type ImpeccableHelper } from './impeccable.js';
 
 type Connection = { viewer: string; disconnect(): void };
-type GatewayOptions = { origin: string; port: number; targetPort: number };
+type GatewayOptions = {
+  origin: string;
+  port: number;
+  targetPort: number;
+  impeccableHelper?(sessionId: string): Promise<ImpeccableHelper | undefined>;
+};
 
 export function createPreviewGateway(
   options: GatewayOptions,
-  service: Pick<PreviewService, 'exchange' | 'authorized'>,
+  service: Pick<PreviewService, 'exchange' | 'authorized' | 'access'>,
 ) {
   const origin = new URL(options.origin);
   const target = { port: options.targetPort, origin };
@@ -61,9 +67,21 @@ export function createPreviewGateway(
     )
       return text(response, 403, 'This preview request is forbidden.');
     const viewer = readViewer(request);
-    if (!viewer || !service.authorized(viewer))
+    const access = viewer && service.access(viewer);
+    if (!viewer || !access)
       return text(response, 401, 'Open the preview from your Gestalt session.');
-    proxyHttp(request, response, target, track(viewer));
+    const editor = access.mode === 'impeccable' && options.impeccableHelper;
+    if (request.url?.startsWith(`${impeccablePath}/`)) {
+      if (!editor) return text(response, 403, 'Open Impeccable Live from your Gestalt session.');
+      return void serveImpeccable(
+        request,
+        response,
+        new URL(request.url, origin),
+        () => editor(access.sessionId),
+        track(viewer),
+      );
+    }
+    proxyHttp(request, response, target, track(viewer), Boolean(editor));
   });
 
   server.on('upgrade', (request, socket, head) => {
@@ -71,6 +89,7 @@ export function createPreviewGateway(
     if (
       !validRequest(request) ||
       request.url === previewHandoffPath ||
+      request.url?.startsWith(`${impeccablePath}/`) ||
       request.headers.upgrade?.toLowerCase() !== 'websocket' ||
       request.headers.origin !== origin.origin ||
       !viewer ||

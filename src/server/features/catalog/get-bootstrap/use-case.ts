@@ -19,6 +19,7 @@ export type BootstrapDependencies = {
   protocolCompatible: boolean;
   providers: ProviderAvailability;
   preview?: boolean;
+  impeccable?: boolean;
 };
 export async function getBootstrap(deps: BootstrapDependencies): Promise<BootstrapResponse> {
   const [workspaces, profiles, codexModels, kimiModels] = await Promise.all([
@@ -51,6 +52,7 @@ export async function getBootstrap(deps: BootstrapDependencies): Promise<Bootstr
       protocolCompatible: deps.protocolCompatible,
       providers: deps.providers,
       ...(deps.preview ? { preview: true } : {}),
+      ...(deps.impeccable ? { impeccable: true } : {}),
     },
   };
 }

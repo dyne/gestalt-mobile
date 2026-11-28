@@ -13,6 +13,7 @@ import {
 } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { pipeline } from 'node:stream';
+import { injectImpeccableBootstrap } from './impeccable.js';
 
 export const previewCookie = '__Host-gestalt-preview';
 
@@ -110,8 +111,12 @@ export function proxyHttp(
   response: ServerResponse,
   target: { port: number; origin: URL },
   track: Track,
+  impeccable = false,
 ): void {
-  const upstream = upstreamRequest(browser, requestHeaders(browser, target.origin), target.port);
+  const headers = requestHeaders(browser, target.origin);
+  const document = impeccable && browser.method === 'GET' && headers.accept?.includes('text/html');
+  if (document) headers['accept-encoding'] = 'identity';
+  const upstream = upstreamRequest(browser, headers, target.port);
   const untrack = track(() => {
     upstream.destroy();
     response.destroy();
@@ -128,8 +133,19 @@ export function proxyHttp(
   });
   upstream.once('response', (incoming) => {
     upstream.setTimeout(0);
-    response.writeHead(incoming.statusCode ?? 502, responseHeaders(incoming.headers));
-    pipeline(incoming, response, () => {});
+    const headers = responseHeaders(incoming.headers);
+    const decorate =
+      document &&
+      incoming.statusCode === 200 &&
+      headers['content-type']?.startsWith('text/html') &&
+      (!headers['content-encoding'] || headers['content-encoding'] === 'identity');
+    if (decorate) {
+      delete headers['content-length'];
+      delete headers.etag;
+    }
+    response.writeHead(incoming.statusCode ?? 502, headers);
+    if (decorate) pipeline(incoming, injectImpeccableBootstrap(), response, () => {});
+    else pipeline(incoming, response, () => {});
   });
   browser.pipe(upstream);
 }

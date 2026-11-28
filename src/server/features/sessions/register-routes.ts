@@ -11,6 +11,7 @@ import { authorizationSessionDevice } from '../../platform/http/authorization-bo
 import { stopSession } from './lifecycle/use-case.js';
 import { keepTemporaryFilesRoute, registerForgetSession } from './forget-session/endpoint.js';
 import { registerGetHistory } from './get-history/endpoint.js';
+import { registerGetImpeccable } from './get-impeccable/endpoint.js';
 import { registerGetSession } from './get-session/endpoint.js';
 import { registerInterruptTurn } from './interrupt-turn/endpoint.js';
 import { registerListRecentThreads } from './list-recent-threads/endpoint.js';
@@ -56,6 +57,7 @@ export function registerSessionRoutes(
     });
   }
   if (sessions) {
+    if (sessions.impeccableAvailable) registerGetImpeccable(app, sessions.impeccableAvailable);
     const conflict = (request: import('fastify').FastifyRequest) => {
       if (!request.routeOptions.url?.startsWith('/api/sessions/:id')) return null;
       if (['GET', 'HEAD'].includes(request.method)) return null;

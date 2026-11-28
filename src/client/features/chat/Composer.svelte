@@ -8,6 +8,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import Icon from '../../components/Icon.svelte';
   import { onMount } from 'svelte';
   import { MAX_UPLOAD_BYTES } from '../../../shared/contracts/file-upload.js';
+  import { impeccableGroups } from '../../../shared/contracts/impeccable.js';
   import {
     argumentPickerFor,
     commandQuery,
@@ -26,6 +27,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     retryMessage?: string | null;
     retryable?: boolean;
     models?: string[];
+    impeccable?: boolean;
     /** Owning provider; used only for provider-aware copy. */
     provider?: LlmProvider;
     onchange(value: string): void;
@@ -49,6 +51,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     retryMessage = null,
     retryable = false,
     models = [],
+    impeccable = false,
     provider = 'codex',
     onchange,
     onrevealprompt = () => {},
@@ -138,14 +141,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let selectedCommandIndex = $state(0);
   let dismissedCommandQuery = $state<string | null>(null);
   let actionMenuOpen = $state(false);
-  let commandMatches = $derived(matchingCommands(message));
+  let commandMatches = $derived(matchingCommands(message, impeccable));
   let currentCommandQuery = $derived(commandQuery(message));
   let commandMenuOpen = $derived(
     currentCommandQuery !== null &&
       currentCommandQuery !== dismissedCommandQuery &&
+      !(impeccable && currentCommandQuery === 'impeccable') &&
       commandMatches.length > 0,
   );
-  let argumentPicker = $derived(argumentPickerFor(message));
+  let argumentPicker = $derived(argumentPickerFor(message, impeccable));
+  const impeccableActions = impeccableGroups.flatMap((group) => [...group.actions]);
+  let impeccableMenuOpen = $derived(
+    argumentPicker === 'impeccable' && dismissedCommandQuery !== 'impeccable',
+  );
   let modelMenuOpen = $derived(argumentPicker === 'models');
   let sortedModels = $derived(sortModelsNewestFirst(models));
   let reasoningMenuOpen = $derived(argumentPicker === 'reasoning');
@@ -175,6 +183,25 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function keydown(event: KeyboardEvent): void {
+    if (impeccableMenuOpen) {
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        event.preventDefault();
+        const direction = event.key === 'ArrowUp' ? -1 : 1;
+        selectedCommandIndex =
+          (selectedCommandIndex + direction + impeccableActions.length) % impeccableActions.length;
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        dismissedCommandQuery = 'impeccable';
+        return;
+      }
+      if (event.key === 'Tab' && !event.shiftKey) {
+        event.preventDefault();
+        updateMessage(`/impeccable ${impeccableActions[selectedCommandIndex].name} `, true);
+        return;
+      }
+    }
     if (event.key === 'Enter' && event.ctrlKey && !event.isComposing) {
       if (activeTurnId && !starting && hasPrompt) {
         event.preventDefault();
@@ -307,6 +334,23 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {/each}
     </ul>
   {/if}
+  {#if impeccableMenuOpen}
+    <div class="command-menu impeccable-menu" role="group" aria-label="Impeccable commands">
+      {#each impeccableGroups as group (group.label)}
+        <h3>{group.label}</h3>
+        {#each group.actions as action (action.name)}
+          <button
+            type="button"
+            class:command-selected={impeccableActions[selectedCommandIndex]?.name === action.name}
+            onclick={() => updateMessage(`/impeccable ${action.name} `, true)}
+          >
+            <code>{action.name}{'argument' in action ? ` [${action.argument}]` : ''}</code>
+            <small>{action.description}</small>
+          </button>
+        {/each}
+      {/each}
+    </div>
+  {/if}
   <div class="prompt-row">
     <textarea
       class:new-empty={newEmpty}
@@ -423,6 +467,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     border: 1px solid var(--theme-border);
     border-radius: 0.375rem;
   }
+  .impeccable-menu {
+    max-block-size: min(45vh, 24rem);
+    overflow-y: auto;
+  }
+  .impeccable-menu h3 {
+    margin: 0.65rem 0.6rem 0.25rem;
+    font-size: 0.85rem;
+  }
   .command-menu button {
     display: flex;
     inline-size: 100%;
@@ -436,6 +488,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     border-radius: 0.25rem;
   }
   .command-menu .command-selected button,
+  .impeccable-menu button.command-selected,
   .command-menu button:hover {
     background: var(--theme-control-hover);
   }

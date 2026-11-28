@@ -12,15 +12,25 @@ import type { PreviewService } from '../application/service.js';
 
 export function registerOpenPreview(
   app: FastifyInstance,
-  deps: { service: Pick<PreviewService, 'open'>; origin: string },
+  deps: {
+    service: Pick<PreviewService, 'open'>;
+    origin: string;
+    impeccableAvailable?(sessionId: string): boolean | Promise<boolean>;
+  },
 ): void {
-  app.post<{ Params: { sessionId: string } }>(
+  app.post<{ Params: { sessionId: string }; Body?: { impeccable?: boolean } }>(
     '/api/sessions/:sessionId/preview',
     async (request, reply) => {
       reply.header('Cache-Control', 'no-store');
       const login = parseAuthorizationSessionId(request.cookies.gestalt_mobile_session);
+      const impeccable = request.body?.impeccable === true;
+      if (impeccable && !(await deps.impeccableAvailable?.(request.params.sessionId)))
+        return reply
+          .code(403)
+          .type('application/problem+json')
+          .send(problem('IMPECCABLE_UNAVAILABLE', 403, 'Impeccable is unavailable in this chat.'));
       const result = login
-        ? deps.service.open(request.params.sessionId, login)
+        ? deps.service.open(request.params.sessionId, login, impeccable ? 'impeccable' : 'view')
         : ({ kind: 'unauthorized' } as const);
       if (result.kind === 'opened') {
         const url = new URL(previewHandoffPath, deps.origin);

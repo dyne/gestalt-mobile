@@ -6,14 +6,18 @@
 
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer, request, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket, { WebSocketServer } from 'ws';
 import { previewHandoffPath } from '../../../shared/contracts/preview.js';
 import { buildApp } from '../../app.js';
 import { PreviewService } from '../../features/previews/application/service.js';
 import { createPreviewGateway } from './gateway.js';
+import { findImpeccableHelper, impeccablePath } from './impeccable.js';
 
 const relayOrigin = 'https://relay.example';
 const previewOrigin = 'https://preview.example';
@@ -38,12 +42,14 @@ describe('passkey-protected preview', () => {
   let upstream: Server;
   let sockets: WebSocketServer;
   let upstreamRequests: number;
+  let impeccableWorkspace: string | undefined;
 
   beforeEach(async () => {
     now = Date.parse('2026-10-02T00:00:00.000Z');
     validLogin = true;
     active = new Set(['session-1', 'session-2']);
     upstreamRequests = 0;
+    impeccableWorkspace = undefined;
     const sessionDevice = (id: string) =>
       validLogin && id === 'live' ? ('device' as never) : null;
     const service = new PreviewService({
@@ -65,7 +71,7 @@ describe('passkey-protected preview', () => {
           rpName: 'Gestalt Mobile',
         },
       },
-      preview: { service, origin: previewOrigin },
+      preview: { service, origin: previewOrigin, impeccableAvailable: (id) => id === 'session-1' },
       logger: console,
       health: {
         read: async () => ({
@@ -86,6 +92,11 @@ describe('passkey-protected preview', () => {
         '__Host-gestalt-preview=removed; Secure; Path=/',
       ]);
       res.setHeader('content-security-policy', "script-src 'self'");
+      if (req.url === '/app') {
+        res.writeHead(200, { 'content-type': 'text/html', 'content-length': 26 });
+        res.end('<html><head></head></html>');
+        return;
+      }
       res.end(
         JSON.stringify({
           path: req.url,
@@ -102,7 +113,13 @@ describe('passkey-protected preview', () => {
       peer.on('message', (data) => peer.send(data.toString()));
     });
     gateway = createPreviewGateway(
-      { origin: previewOrigin, port: 0, targetPort: await listen(upstream) },
+      {
+        origin: previewOrigin,
+        port: 0,
+        targetPort: await listen(upstream),
+        impeccableHelper: async () =>
+          impeccableWorkspace ? findImpeccableHelper(impeccableWorkspace) : undefined,
+      },
       service,
     );
     gatewayPort = await gateway.start();
@@ -150,8 +167,13 @@ describe('passkey-protected preview', () => {
     return gatewayRequest(previewHandoffPath, { method: 'POST', headers: { origin }, body: code });
   }
 
-  async function open() {
-    const response = await relay.inject({ method: 'POST', url: route, headers });
+  async function open(impeccable = false) {
+    const response = await relay.inject({
+      method: 'POST',
+      url: route,
+      headers,
+      ...(impeccable ? { payload: { impeccable: true } } : {}),
+    });
     expect(response.statusCode).toBe(200);
     expect(response.headers['cache-control']).toBe('no-store');
     const url = new URL(response.json().url);
@@ -161,14 +183,148 @@ describe('passkey-protected preview', () => {
     return url.hash.slice(1);
   }
 
-  async function viewerCookie() {
-    const exchangeResponse = await exchange(await open());
+  async function viewerCookie(impeccable = false) {
+    const exchangeResponse = await exchange(await open(impeccable));
     expect(exchangeResponse.status).toBe(204);
     const cookie = exchangeResponse.headers['set-cookie']?.[0] ?? '';
     expect(cookie).toMatch(/^__Host-gestalt-preview=/);
     expect(cookie).toContain('Secure; HttpOnly; SameSite=Strict');
     return cookie.split(';', 1)[0];
   }
+
+  it('keeps Impeccable browser requests behind an explicit edit grant and revokes the event stream', async () => {
+    const ordinary = await viewerCookie();
+    const editor = await viewerCookie(true);
+    const browser = { cookie: editor, accept: 'text/html', origin: previewOrigin };
+    expect((await gatewayRequest(`${impeccablePath}/bootstrap.js`)).status).toBe(401);
+    expect(
+      (await gatewayRequest(`${impeccablePath}/live.js`, { headers: { cookie: ordinary } })).status,
+    ).toBe(403);
+    expect((await gatewayRequest('/app', { headers: { ...browser, cookie: ordinary } })).body).toBe(
+      '<html><head></head></html>',
+    );
+    expect((await gatewayRequest('/app', { headers: browser })).body).toContain(
+      `${impeccablePath}/bootstrap.js`,
+    );
+    expect((await gatewayRequest(`${impeccablePath}/ready`, { headers: browser })).status).toBe(
+      200,
+    );
+    expect(
+      (
+        await relay.inject({
+          method: 'POST',
+          url: '/api/sessions/session-2/preview',
+          headers,
+          payload: { impeccable: true },
+        })
+      ).statusCode,
+    ).toBe(403);
+
+    const token = randomBytes(32).toString('base64url');
+    let forwarded: unknown;
+    const helper = createServer(async (req, res) => {
+      const url = new URL(req.url!, 'http://localhost');
+      if (url.searchParams.get('token') !== token) return res.writeHead(401).end();
+      if (url.pathname === '/status')
+        return res.end(
+          JSON.stringify({ port: (helper.address() as AddressInfo).port, agentPolling: true }),
+        );
+      if (url.pathname === '/live.js') {
+        return res.end(
+          `var TOKEN = "${token}"; fetch('http://localhost:' + PORT + '/events?token=' + TOKEN);`,
+        );
+      }
+      if (url.pathname === '/events' && req.method === 'POST') {
+        let body = '';
+        for await (const chunk of req) body += String(chunk);
+        forwarded = JSON.parse(body);
+        return res.writeHead(204).end();
+      }
+      if (url.pathname === '/manual-edit-commit' && req.method === 'POST') {
+        return res.writeHead(url.searchParams.get('pageUrl') === '/app' ? 204 : 400).end();
+      }
+      if (url.pathname === '/events') {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write('data: {"connected":true}\n\n');
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    const workspace = await mkdtemp(join(tmpdir(), 'mobile-impeccable-'));
+    try {
+      const state = join(workspace, '.impeccable', 'live');
+      await mkdir(state, { recursive: true });
+      await writeFile(
+        join(state, 'server.json'),
+        JSON.stringify({
+          port: await listen(helper),
+          pid: process.pid,
+          token,
+        }),
+      );
+      impeccableWorkspace = workspace;
+      expect((await gatewayRequest(`${impeccablePath}/ready`, { headers: browser })).status).toBe(
+        204,
+      );
+      const script = await gatewayRequest(`${impeccablePath}/live.js`, { headers: browser });
+      expect(script.body).toContain(`${impeccablePath}/events`);
+      expect(script.body).not.toContain(token);
+      expect((await gatewayRequest(`${impeccablePath}/poll`, { headers: browser })).status).toBe(
+        404,
+      );
+      expect(
+        (
+          await gatewayRequest(`${impeccablePath}/source?path=.impeccable/live/server.json`, {
+            headers: browser,
+          })
+        ).status,
+      ).toBe(404);
+      expect(
+        (
+          await gatewayRequest(`${impeccablePath}/events?token=browser-token`, {
+            method: 'POST',
+            headers: browser,
+            body: '{"type":"generate","token":"browser-token"}',
+          })
+        ).status,
+      ).toBe(204);
+      expect(forwarded).toMatchObject({ type: 'generate', token });
+      expect(
+        (
+          await gatewayRequest(`${impeccablePath}/manual-edit-commit?pageUrl=%2Fapp`, {
+            method: 'POST',
+            headers: browser,
+          })
+        ).status,
+      ).toBe(204);
+
+      const stream = await new Promise<import('node:http').IncomingMessage>((resolve, reject) => {
+        const req = request(
+          {
+            hostname: '127.0.0.1',
+            port: gatewayPort,
+            path: `${impeccablePath}/events`,
+            headers: { host: 'preview.example', ...browser },
+          },
+          resolve,
+        );
+        req.once('error', reject);
+        req.end();
+      });
+      const closed = new Promise<void>((resolve) => stream.once('close', resolve));
+      expect(String((await once(stream, 'data'))[0])).toContain('"connected":true');
+      stream.on('error', () => {});
+      expect((await relay.inject({ method: 'DELETE', url: route, headers })).statusCode).toBe(204);
+      await closed;
+      expect((await gatewayRequest(`${impeccablePath}/status`, { headers: browser })).status).toBe(
+        401,
+      );
+    } finally {
+      helper.closeAllConnections();
+      await new Promise<void>((resolve) => helper.close(() => resolve()));
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
 
   it('requires a live Mobile login and its exact origin to issue an authorization', async () => {
     expect(

@@ -9,7 +9,11 @@ import type { PreviewService } from './application/service.js';
 import { registerOpenPreview } from './open-preview/endpoint.js';
 import { registerStopPreview } from './stop-preview/endpoint.js';
 
-export type PreviewRoutes = { service: Pick<PreviewService, 'open' | 'stop'>; origin: string };
+export type PreviewRoutes = {
+  service: Pick<PreviewService, 'open' | 'stop'>;
+  origin: string;
+  impeccableAvailable?(sessionId: string): boolean | Promise<boolean>;
+};
 
 export function registerPreviewRoutes(app: FastifyInstance, deps: PreviewRoutes): void {
   registerOpenPreview(app, deps);

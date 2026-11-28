@@ -34,6 +34,7 @@ export type Bootstrap = {
     protocolCompatible: boolean;
     providers?: ProviderAvailability;
     preview?: true;
+    impeccable?: true;
   };
 };
 

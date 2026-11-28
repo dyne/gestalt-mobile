@@ -112,6 +112,7 @@ export type AppDependencies = {
     onTurnStarted?(session: RelaySessionSnapshot): void;
     models?: Pick<ModelCatalog, 'list'>;
     sessionModels?: Pick<ModelCatalog, 'list'>;
+    impeccableAvailable?(id: string): Promise<boolean>;
     close?(id: string): void | Promise<void>;
     forget?(
       id: string,

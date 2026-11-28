@@ -57,6 +57,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import type { SessionRetrievalReadiness } from '../shared/contracts/retrieval-readiness.js';
   import { applyReadinessActivity } from './features/retrieval/readiness-activity.js';
   import { loadBootstrap, type WorkspaceOption } from './features/catalog/bootstrap-client.js';
+  import {
+    hasImpeccableSkill,
+    impeccablePrompt,
+    parseImpeccableCommand,
+  } from '../shared/contracts/impeccable.js';
   import type { ComponentVersion } from '../shared/contracts/component-version.js';
   import type { LlmProvider, ProviderAvailability } from '../shared/contracts/llm-provider.js';
   import { createChatCache } from './features/chat/chat-cache.js';
@@ -344,6 +349,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   );
   let selectedSession = $derived(sessions.find((session) => session.id === sessionId) ?? null);
   let previewEnabled = $state(false);
+  let legacyImpeccableLookup = $state(false);
+  let legacyImpeccable = $state<{ id: string; available: boolean } | null>(null);
+  let impeccableEnabled = $derived(
+    selectedSession?.effectiveSkillSelection
+      ? hasImpeccableSkill(selectedSession.effectiveSkillSelection.skills)
+      : legacyImpeccable?.id === selectedSession?.id && legacyImpeccable?.available === true,
+  );
+  let openingImpeccable = false;
   const readinessEligible = $derived(
     Boolean(
       selectedSession &&
@@ -464,22 +477,37 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     return '';
   });
   const relay = createRelayClient((input, init) => authorizedFetch(input, init));
-
-  async function openPreview(): Promise<void> {
+  $effect(() => {
     const id = selectedSession?.id;
-    if (!id) return;
+    const hasSelection = selectedSession?.effectiveSkillSelection !== undefined;
+    if (!legacyImpeccableLookup || !id || hasSelection) return;
+    const abort = new AbortController();
+    void relay
+      .impeccableAvailable(id, abort.signal)
+      .then(({ available }) => {
+        if (!abort.signal.aborted) legacyImpeccable = { id, available };
+      })
+      .catch(() => {});
+    return () => abort.abort();
+  });
+
+  async function openPreview(impeccable = false): Promise<boolean> {
+    const id = selectedSession?.id;
+    if (!id) return false;
     const preview = window.open('about:blank', '_blank');
     if (!preview) {
       reportRelayError(null, 'PREVIEW_POPUP_BLOCKED');
-      return;
+      return false;
     }
     preview.opener = null;
     try {
-      const { url } = await relay.openPreview(id);
+      const { url } = await relay.openPreview(id, impeccable);
       preview.location.replace(url);
+      return true;
     } catch (error) {
       preview.close();
       reportRelayError(error, 'PREVIEW_OPEN_FAILED');
+      return false;
     }
   }
 
@@ -901,6 +929,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       };
       providerCapabilities = bootstrap.capabilities?.providers ?? null;
       previewEnabled = bootstrap.capabilities?.preview === true;
+      legacyImpeccableLookup = bootstrap.capabilities?.impeccable === true;
       try {
         if (bootstrap.sessionDefaultsError) throw new Error('SESSION_DEFAULTS_READ_FAILED');
         const saved = bootstrap.sessionDefaults;
@@ -1448,12 +1477,34 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       !chatController.canSubmit(kind)
     )
       return;
+    const command = impeccableEnabled ? parseImpeccableCommand(message) : null;
+    if (command && !command.action) {
+      if (message.trim().toLowerCase() !== '/impeccable')
+        reportRelayError(null, 'IMPECCABLE_ACTION_UNKNOWN');
+      return;
+    }
+    const id = sessionId;
+    const revision = draftRevision;
+    const remoteLive = command?.action?.name === 'live' && previewEnabled;
+    if (remoteLive) {
+      if (openingImpeccable) return;
+      openingImpeccable = true;
+      try {
+        if (!(await openPreview(true))) return;
+      } finally {
+        openingImpeccable = false;
+      }
+      if (id !== sessionId || revision !== draftRevision || !chatController.canSubmit(kind)) return;
+    }
     const duplicate = [...pendingDraftSubmissions.values()].some(
       (entry) => entry.sessionId === sessionId && entry.revision === draftRevision,
     );
     if (duplicate) return;
     const operationId = createIdempotencyKey();
-    const submitted = { sessionId, revision: draftRevision, text: message, operationId, kind };
+    const text = command?.action
+      ? impeccablePrompt(command.action, command.target, remoteLive)
+      : message;
+    const submitted = { sessionId, revision: draftRevision, text, operationId, kind };
     pendingDraftSubmissions.set(operationId, submitted);
     void sessionCache.addPendingDraftOperation(sessionId, submitted);
     if (kind === 'send') void chatController.send(submitted.text, operationId);
@@ -2512,6 +2563,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                   ]}
                   provider={sessions.find((session) => session.id === sessionId)?.provider ??
                     'codex'}
+                  impeccable={impeccableEnabled}
                   onchange={updateDraft}
                   onrevealprompt={revealChatPrompt}
                   onmodelselect={(model) => void selectSessionModel(model)}

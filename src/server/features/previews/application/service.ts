@@ -10,7 +10,8 @@ const codeLifetime = 30_000;
 export const previewSessionLifetime = 60 * 60;
 const grantLimit = 128;
 
-type Grant = { login: AuthorizationSessionId; expiresAt: number };
+export type PreviewMode = 'view' | 'impeccable';
+type Grant = { login: AuthorizationSessionId; expiresAt: number; mode: PreviewMode };
 type Preview = {
   sessionId: string;
   codes: Map<string, Grant>;
@@ -29,14 +30,14 @@ export class PreviewService {
     },
   ) {}
 
-  open(sessionId: string, login: AuthorizationSessionId) {
+  open(sessionId: string, login: AuthorizationSessionId, mode: PreviewMode = 'view') {
     const current = this.activePreview();
     if (!this.deps.sessionActive(sessionId)) return { kind: 'inactive' } as const;
     if (!this.deps.loginValid(login)) return { kind: 'unauthorized' } as const;
     if (current && current.sessionId !== sessionId) return { kind: 'busy' } as const;
 
     const preview: Preview = current ?? { sessionId, codes: new Map(), viewers: new Map() };
-    const code = this.issue(preview.codes, login, codeLifetime);
+    const code = this.issue(preview.codes, login, mode, codeLifetime);
     if (!code) return { kind: 'limit' } as const;
     this.preview = preview;
     return { kind: 'opened', code } as const;
@@ -48,16 +49,19 @@ export class PreviewService {
     if (!preview || !grant) return;
     preview.codes.delete(code);
     if (!this.valid(grant)) return;
-    return this.issue(preview.viewers, grant.login, previewSessionLifetime * 1000);
+    return this.issue(preview.viewers, grant.login, grant.mode, previewSessionLifetime * 1000);
   }
 
   authorized(viewer: string): boolean {
-    const viewers = this.activePreview()?.viewers;
-    const grant = viewers?.get(viewer);
-    if (!grant) return false;
-    if (this.valid(grant)) return true;
-    viewers?.delete(viewer);
-    return false;
+    return this.access(viewer) !== undefined;
+  }
+
+  access(viewer: string): { sessionId: string; mode: PreviewMode } | undefined {
+    const preview = this.activePreview();
+    const grant = preview?.viewers.get(viewer);
+    if (!preview || !grant) return;
+    if (this.valid(grant)) return { sessionId: preview.sessionId, mode: grant.mode };
+    preview.viewers.delete(viewer);
   }
 
   stop(sessionId: string): boolean {
@@ -79,6 +83,7 @@ export class PreviewService {
   private issue(
     grants: Map<string, Grant>,
     login: AuthorizationSessionId,
+    mode: PreviewMode,
     lifetime: number,
   ): string | undefined {
     if (grants.size >= grantLimit) {
@@ -88,7 +93,7 @@ export class PreviewService {
       if (grants.size >= grantLimit) return;
     }
     const token = this.deps.token();
-    grants.set(token, { login, expiresAt: this.deps.now() + lifetime });
+    grants.set(token, { login, expiresAt: this.deps.now() + lifetime, mode });
     return token;
   }
 }

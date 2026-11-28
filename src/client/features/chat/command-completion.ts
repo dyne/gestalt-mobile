@@ -7,7 +7,7 @@
 export type ChatCommand = {
   name: string;
   description: string;
-  argumentPicker?: 'models' | 'reasoning';
+  argumentPicker?: 'models' | 'reasoning' | 'impeccable';
 };
 
 export const CHAT_COMMANDS: readonly ChatCommand[] = [
@@ -24,14 +24,29 @@ export function commandQuery(message: string): string | null {
   return match ? match[1].toLowerCase() : null;
 }
 
-export function matchingCommands(message: string): ChatCommand[] {
-  const query = commandQuery(message);
-  return query === null ? [] : CHAT_COMMANDS.filter((command) => command.name.startsWith(query));
+const impeccableCommand: ChatCommand = {
+  name: 'impeccable',
+  description: 'Choose an Impeccable design action',
+  argumentPicker: 'impeccable',
+};
+
+function commands(impeccable: boolean): readonly ChatCommand[] {
+  return impeccable ? [...CHAT_COMMANDS, impeccableCommand] : CHAT_COMMANDS;
 }
 
-export function argumentPickerFor(message: string): ChatCommand['argumentPicker'] | undefined {
+export function matchingCommands(message: string, impeccable = false): ChatCommand[] {
+  const query = commandQuery(message);
+  return query === null
+    ? []
+    : commands(impeccable).filter((command) => command.name.startsWith(query));
+}
+
+export function argumentPickerFor(
+  message: string,
+  impeccable = false,
+): ChatCommand['argumentPicker'] | undefined {
   const commandName = message.match(/^\/([^\s]+)\s*$/)?.[1]?.toLowerCase();
-  return CHAT_COMMANDS.find((command) => command.name === commandName)?.argumentPicker;
+  return commands(impeccable).find((command) => command.name === commandName)?.argumentPicker;
 }
 
 export function sortModelsNewestFirst(models: readonly string[]): string[] {
