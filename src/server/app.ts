@@ -90,6 +90,12 @@ export type AppDependencies = {
     now(): string;
     save(session: RelaySessionSnapshot): void;
     publish?(session: RelaySessionSnapshot): Promise<void>;
+    replace?: Parameters<
+      typeof import('./features/sessions/start-session/use-case.js').startSession
+    >[1]['replace'];
+    deliverHandoff?: Parameters<
+      typeof import('./features/sessions/start-session/use-case.js').startSession
+    >[1]['deliverHandoff'];
     find(id: string): RelaySessionSnapshot | null;
     list?(): RelaySessionSnapshot[];
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;

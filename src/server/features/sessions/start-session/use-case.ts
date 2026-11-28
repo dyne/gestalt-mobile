@@ -24,6 +24,7 @@ export async function startSession(
     profile: string;
     skillProfile?: string;
     mandatorySkillsOnly?: true;
+    replaceSessionId?: string;
   } & StartSessionSettings,
   deps: {
     createId(): string;
@@ -41,12 +42,14 @@ export async function startSession(
     defaultSkillProfile?: SkillProfile;
     /** Internal independent sessions may inherit an existing immutable selection. */
     inheritedSkillSelection?: EffectiveSkillSelection;
+    replace?(sourceId: string, successor: RelaySessionSnapshot): Promise<SessionHandoff>;
+    deliverHandoff?(session: RelaySessionSnapshot, handoff: SessionHandoff): Promise<boolean>;
     activate?(
       session: RelaySessionSnapshot,
       settings: StartSessionSettings,
     ): Promise<RelaySessionSnapshot>;
   },
-): Promise<RelaySessionSnapshot> {
+): Promise<RelaySessionSnapshot & { pendingHandoffFile?: string }> {
   // Codex launcher profiles select the app-server skill directory. Kimi owns
   // its isolated profile lifecycle, so it must not require a Codex launcher
   // profile before its own catalog/runtime can be selected.
@@ -100,10 +103,19 @@ export async function startSession(
     effectiveSkillSelection,
     now: deps.now(),
   }).snapshot;
-  if (deps.publish) await deps.publish(session);
+  let handoff: SessionHandoff | undefined;
+  if (input.replaceSessionId) {
+    if (!deps.replace || !deps.activate || !deps.deliverHandoff)
+      throw new Error('SESSION_REPLACEMENT_UNAVAILABLE');
+    handoff = await deps.replace(input.replaceSessionId, session);
+  } else if (deps.publish) await deps.publish(session);
   else deps.save(session);
-  if (!deps.activate) return session;
-  const active = await deps.activate(session, { provider: session.provider });
-  deps.save(active);
-  return active;
+  const active = deps.activate
+    ? await deps.activate(session, { provider: session.provider })
+    : session;
+  if (deps.activate) deps.save(active);
+  if (!handoff || (await deps.deliverHandoff!(active, handoff))) return active;
+  return { ...active, pendingHandoffFile: handoff.file };
 }
+
+export type SessionHandoff = { summary: string; file: string };

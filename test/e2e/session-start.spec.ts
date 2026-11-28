@@ -12,6 +12,79 @@ import { writeFile } from 'node:fs/promises';
 
 test.beforeEach(async ({ page }) => mockAuthenticatedStatus(page));
 
+test('confirms the running session and keeps the selected skills profile for its replacement', async ({
+  page,
+}) => {
+  const current = {
+    id: 'running',
+    workspaceId: 'workspace-1',
+    workspacePath: '/project',
+    model: 'gpt-6-sol',
+    effectiveSkillSelection: { selectedProfileName: 'previous', skills: [] },
+    state: 'ready',
+    desiredState: 'active',
+    threadId: 'previous-thread',
+  };
+  const next = { ...current, id: 'fresh', threadId: 'new-thread' };
+  const requests: Array<{ replaceSessionId?: string; skillProfile?: string }> = [];
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      json: {
+        workspaces: workspaceTree(),
+        profiles: [],
+        sessions: [current],
+        models: { codex: ['gpt-6-sol'], kimi: [] },
+      },
+    }),
+  );
+  await page.route('**/api/skill-profiles', (route) =>
+    route.fulfill({
+      json: {
+        profiles: [{ version: 1, name: 'focused', path: '/profiles/focused.yml', skills: [] }],
+      },
+    }),
+  );
+  await page.route('**/api/sessions/running', (route) => route.fulfill({ json: current }));
+  await page.route('**/api/sessions/fresh', (route) => route.fulfill({ json: next }));
+  await page.route('**/api/sessions/fresh/history', (route) =>
+    route.fulfill({
+      json: chatSnapshot({ items: [{ id: 'handoff', kind: 'agent', text: 'Handoff received.' }] }),
+    }),
+  );
+  await page.route('**/api/sessions/recent-threads', (route) => route.fulfill({ json: [] }));
+  await page.route('**/api/sessions', (route) => {
+    if (route.request().method() !== 'POST') return route.fulfill({ json: [current] });
+    const request = route.request().postDataJSON() as (typeof requests)[number];
+    requests.push(request);
+    if (request.replaceSessionId) return route.fulfill({ status: 202, json: next });
+    return route.fulfill({
+      status: 409,
+      json: { code: 'SESSION_WORKSPACE_BUSY', sessionId: 'running' },
+    });
+  });
+  await page.goto('/');
+  await page.getByLabel('Skills profile').selectOption('focused');
+  await page.getByRole('button', { name: 'Create session' }).click();
+  const confirmation = page.getByRole('dialog', { name: 'Replace the running session?' });
+  await expect(confirmation).toBeVisible();
+  await expect(confirmation.getByText('gpt-6-sol', { exact: true })).toBeVisible();
+  await expect(confirmation.getByText('previous', { exact: true })).toBeVisible();
+  await confirmation.getByRole('button', { name: 'Cancel' }).click();
+  await expect(confirmation).toBeHidden();
+  expect(requests).toHaveLength(1);
+  expect(requests[0].replaceSessionId).toBeUndefined();
+  await page.getByRole('button', { name: 'Create session' }).click();
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole('button', { name: 'Close and create session' }).click();
+  await expect
+    .poll(() => requests.at(-1))
+    .toMatchObject({
+      replaceSessionId: 'running',
+      skillProfile: 'focused',
+    });
+  await expect(page.getByText('Handoff received.', { exact: true })).toBeVisible();
+});
+
 test('saves session defaults and restores them after reload with Advanced settings collapsed', async ({
   page,
 }) => {

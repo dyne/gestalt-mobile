@@ -75,12 +75,14 @@ export type RelaySession = {
   threadId?: string | null;
   resumeCommand?: string | null;
   activeTurnId?: string | null;
+  pendingHandoffFile?: string;
   pendingInteractions?: Array<{ requestId: string; kind: string; payload: unknown }>;
   createdAt?: string;
   updatedAt?: string;
   effectiveSkillSelection?: {
     capabilities?: ProfileCapabilities;
     selectedProfileName?: string;
+    mandatorySkillsOnly?: true;
     skills: Array<{ name: string; path: string; enabled: boolean }>;
     warnings?: string[];
   };
@@ -142,6 +144,7 @@ export type StartSessionSettings =
     approvalPolicy?: 'untrusted' | 'on-request' | 'never';
     skillProfile?: string;
     mandatorySkillsOnly?: true;
+    replaceSessionId?: string;
   };
 
 export type RelayHistoryItem = Record<string, unknown> & {

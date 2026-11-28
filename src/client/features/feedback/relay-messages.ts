@@ -50,6 +50,12 @@ const relayMessages = {
   SESSION_ROLLOUT_MISSING: 'This stored thread is no longer available.',
   SESSION_RUNTIME_UNAVAILABLE: 'The Codex runtime is unavailable. Retry shortly.',
   SESSION_START_FAILED: 'The session could not be started. Try again.',
+  SESSION_REPLACEMENT_CHANGED: 'The running session changed. Review the workspace and try again.',
+  SESSION_REPLACEMENT_BUSY:
+    'The running session is busy or needs attention. Let the work finish or resolve requests, then try again.',
+  SESSION_REPLACEMENT_UNAVAILABLE: 'The provider runtime is unavailable for session replacement.',
+  SESSION_HANDOFF_FAILED:
+    'The handoff could not be prepared. The previous session and its history are still available.',
   CODEX_MODEL_UNAVAILABLE:
     'The selected Codex model is unavailable. Choose an available model in New session settings and retry.',
   KIMI_MODEL_UNAVAILABLE:
