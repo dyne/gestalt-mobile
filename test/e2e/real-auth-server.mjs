@@ -5,7 +5,9 @@
  */
 
 import { randomBytes, randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { mkdir } from 'node:fs/promises';
+import { createServer } from 'node:http';
 
 import { buildApp } from '../../dist/server/server/app.js';
 import { createRelyingPartyConfig } from '../../dist/server/server/config.js';
@@ -13,8 +15,10 @@ import {
   authorizationSessionId,
   authorizedDeviceId,
 } from '../../dist/server/server/features/auth/domain/identifiers.js';
+import { PreviewService } from '../../dist/server/server/features/previews/application/service.js';
 import { SimpleWebAuthnAdapter } from '../../dist/server/server/platform/auth/simple-webauthn-adapter.js';
 import { SqliteAuthorizationStore } from '../../dist/server/server/platform/auth/sqlite-authorization-store.js';
+import { createPreviewGateway } from '../../dist/server/server/platform/previews/gateway.js';
 import { FilesystemSkillProfileStore } from '../../dist/server/server/platform/skills/filesystem-skill-profile-store.js';
 
 const homeDirectory = process.env.GESTALT_REAL_AUTH_HOME;
@@ -30,6 +34,32 @@ const repository = new SqliteAuthorizationStore(homeDirectory, relyingParty);
 repository.initializeOwner(randomBytes(32));
 const skillProfiles = new FilesystemSkillProfileStore(homeDirectory);
 const events = new Set(['websocket-session']);
+const previewOrigin = 'http://127.0.0.1:4174';
+const upstream = createServer((request, response) => {
+  if (request.method === 'POST' && request.url === '/sign-in') {
+    response.writeHead(200, { 'content-type': 'text/plain' }).end('Signed in to the preview');
+    return;
+  }
+  response
+    .writeHead(200, { 'content-type': 'text/html' })
+    .end(
+      '<!doctype html><title>Preview sign-in</title>' +
+        '<form method="post" action="/sign-in"><button>Sign in to the preview</button></form>',
+    );
+});
+const upstreamReady = once(upstream, 'listening');
+upstream.listen(0, '127.0.0.1');
+await upstreamReady;
+const preview = new PreviewService({
+  sessionActive: (id) => events.has(id),
+  loginValid: (id) => repository.sessionDevice(id, new Date().toISOString()) !== null,
+  now: Date.now,
+  token: () => randomBytes(32).toString('base64url'),
+});
+const previewGateway = createPreviewGateway(
+  { origin: previewOrigin, port: 4174, targetPort: upstream.address().port },
+  preview,
+);
 const app = await buildApp({
   health: {
     read: async () => ({
@@ -62,6 +92,7 @@ const app = await buildApp({
     since: () => [],
     subscribe: () => () => {},
   },
+  preview: { service: preview, origin: previewOrigin },
   // The authenticated client normally reads this production-backed profile route.
   skills: {
     workspaces: {
@@ -86,10 +117,15 @@ const app = await buildApp({
     profilePath: (name) => skillProfiles.globalProfilePath(name),
   },
 });
+await previewGateway.start();
 await app.listen({ host: '127.0.0.1', port: 4173 });
 process.stderr.write('REAL_AUTH_READY\n');
 const close = async () => {
-  await app.close();
+  await Promise.all([
+    app.close(),
+    previewGateway.close(),
+    new Promise((resolve) => upstream.close(resolve)),
+  ]);
   process.exit(0);
 };
 process.once('SIGINT', () => void close());

@@ -68,7 +68,8 @@ function responseHeaders(upstream: IncomingHttpHeaders): IncomingHttpHeaders {
   if (cookies?.length) headers['set-cookie'] = cookies;
   else delete headers['set-cookie'];
   headers['cache-control'] = 'no-store';
-  headers['referrer-policy'] = 'no-referrer';
+  // Native same-origin form POSTs need their Origin to pass the gateway check.
+  headers['referrer-policy'] = 'same-origin';
   headers['x-frame-options'] = 'DENY';
   const policy = headers['content-security-policy'];
   headers['content-security-policy'] = [
