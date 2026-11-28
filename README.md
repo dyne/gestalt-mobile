@@ -362,19 +362,21 @@ checks with `npm run format:check`, `npm run license:check`, `npm run check`,
 
 ## Command-line options
 
-| Option                     | Default              | Purpose                                                            |
-| -------------------------- | -------------------- | ------------------------------------------------------------------ |
-| `--cwd <path>`             | Current directory    | Root containing selectable workspaces                              |
-| `--host <address>`         | `127.0.0.1`          | HTTP listen address                                                |
-| `--port <number>`          | `3000`               | HTTP listen port, from 1 through 65535                             |
-| `--public-origin <origin>` | Loopback Vite origin | Exact browser origin for passkeys; required for non-loopback hosts |
-| `--disable-passkey-auth`   | Off                  | Disable passkey access control and serve every client directly     |
-| `--data-dir <path>`        | XDG state directory  | Directory containing `relay.sqlite`                                |
-| `--icon <path>`            | Gestalt icons        | SVG or PNG used when installing the PWA                            |
-| `--skills <profile>`       |                      | Apply a saved global profile to every session                      |
-| `--skills list`            |                      | List global profiles without starting the server                   |
-| `--help`                   |                      | Print usage without starting the application                       |
-| `--version`                |                      | Print the installed package version                                |
+| Option                           | Default              | Purpose                                                            |
+| -------------------------------- | -------------------- | ------------------------------------------------------------------ |
+| `--cwd <path>`                   | Current directory    | Root containing selectable workspaces                              |
+| `--host <address>`               | `127.0.0.1`          | HTTP listen address                                                |
+| `--port <number>`                | `3000`               | HTTP listen port, from 1 through 65535                             |
+| `--public-origin <origin>`       | Loopback Vite origin | Exact browser origin for passkeys, required for non-loopback hosts |
+| `--preview-origin <origin>`      | Disabled             | Separate HTTPS hostname for passkey-protected web previews         |
+| `--preview-target-port <number>` | `5173`               | Port of the loopback app server used by web previews               |
+| `--disable-passkey-auth`         | Off                  | Disable passkey access control and serve every client directly     |
+| `--data-dir <path>`              | XDG state directory  | Directory containing `relay.sqlite`                                |
+| `--icon <path>`                  | Gestalt icons        | SVG or PNG used when installing the PWA                            |
+| `--skills <profile>`             |                      | Apply a saved global profile to every session                      |
+| `--skills list`                  |                      | List global profiles without starting the server                   |
+| `--help`                         |                      | Print usage without starting the application                       |
+| `--version`                      |                      | Print the installed package version                                |
 
 `--cwd` may be relative to the directory where the command is invoked. The
 resolved directory is the selectable root of a recursive workspace tree. Dot
@@ -402,47 +404,12 @@ two local relay processes behind `https://relay.example.org`), but an RP-ID/
 hostname change is refused once credentials exist because it would strand those
 credentials. Do not expose `--host 0.0.0.0` before that boundary is in place.
 
-### Preview a local web server
+### Web previews and Impeccable Live
 
-Start the app's dev server on `127.0.0.1:5173`. Add a separate HTTPS hostname
-to the same reverse proxy and point it at Mobile's preview gateway:
-
-```caddyfile
-preview.example.org {
-    reverse_proxy 127.0.0.1:8080
-}
-```
-
-Add `--preview-origin https://preview.example.org` to the existing Mobile
-invocation. Keep `--public-origin` set to the enrolled Mobile hostname. Preview
-mode requires passkey authentication and HTTPS for both hostnames. Use
-`--preview-target-port <port>` for a dev server on another loopback port.
-
-In an active chat, choose **Open preview** to publish the configured server and
-open it in a browser tab. Mobile authorizes the tab from the current passkey
-login and issues it a preview cookie valid for one hour or until that login is
-revoked. The gateway forwards the app and its WebSockets. Choose **Stop preview**
-to revoke access, including existing connections. Closing or forgetting the
-chat also revokes access. Restarting Mobile clears any active publication.
-
-The gateway serves one configured app and one active chat at a time. Run the
-app's server separately and dedicate the preview hostname to that app. For
-Vite, use `npm run dev -- --host 127.0.0.1 --port 5173 --strictPort` and add the
-exact preview hostname to `server.allowedHosts` or set
-`__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` to that hostname.
-
-### Use Impeccable Live in a preview
-
-Enable Impeccable in the chat's skill profile. Type `/impeccable` in the chat
-composer to browse its design actions, or send a command such as
-`/impeccable audit`. The agent uses the current target when you omit it.
-
-With the app's dev server running, send `/impeccable live` to open an editable
-preview. The agent starts and polls Impeccable's loopback helper in the chat
-workspace. The browser uses the existing preview hostname for the picker and
-Live events. The ordinary **Open preview** action grants viewing access.
-**Stop preview** closes Live event streams and revokes the preview.
-Use Impeccable's **Exit** control to finish the agent's Live polling loop.
+Use **Open preview** in an active chat to open a local development server from
+your phone or desktop browser over HTTPS. If Impeccable is enabled for the chat,
+`/impeccable` lists its design actions and `/impeccable live` opens the visual
+editor on the preview hostname. [Set up web previews and Impeccable Live](docs/web-previews.md).
 
 ### Move to a different hostname
 
