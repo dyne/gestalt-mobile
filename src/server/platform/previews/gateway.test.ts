@@ -71,7 +71,11 @@ describe('passkey-protected preview', () => {
           rpName: 'Gestalt Mobile',
         },
       },
-      preview: { service, origin: previewOrigin, impeccableAvailable: (id) => id === 'session-1' },
+      preview: {
+        service,
+        origin: async () => previewOrigin,
+        impeccableAvailable: (id) => id === 'session-1',
+      },
       logger: console,
       health: {
         read: async () => ({

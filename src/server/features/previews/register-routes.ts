@@ -11,7 +11,7 @@ import { registerStopPreview } from './stop-preview/endpoint.js';
 
 export type PreviewRoutes = {
   service: Pick<PreviewService, 'open' | 'stop'>;
-  origin: string;
+  origin(): Promise<string | undefined>;
   impeccableAvailable?(sessionId: string): boolean | Promise<boolean>;
 };
 

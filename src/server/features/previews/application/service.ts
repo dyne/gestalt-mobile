@@ -67,8 +67,12 @@ export class PreviewService {
   stop(sessionId: string): boolean {
     const current = this.activePreview();
     if (current && current.sessionId !== sessionId) return false;
-    this.preview = undefined;
+    this.clear();
     return true;
+  }
+
+  clear(): void {
+    this.preview = undefined;
   }
 
   private activePreview(): Preview | undefined {

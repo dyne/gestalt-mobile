@@ -18,15 +18,16 @@ export type BootstrapDependencies = {
   headerIconUrl?: string;
   protocolCompatible: boolean;
   providers: ProviderAvailability;
-  preview?: boolean;
+  preview?(): Promise<boolean>;
   impeccable?: boolean;
 };
 export async function getBootstrap(deps: BootstrapDependencies): Promise<BootstrapResponse> {
-  const [workspaces, profiles, codexModels, kimiModels] = await Promise.all([
+  const [workspaces, profiles, codexModels, kimiModels, preview] = await Promise.all([
     deps.workspaces.list(),
     deps.profiles.list(),
     deps.models?.list('codex').catch(() => []) ?? [],
     deps.models?.list('kimi').catch(() => []) ?? [],
+    deps.preview?.(),
   ]);
   let sessionDefaults: BootstrapResponse['sessionDefaults'] = null;
   let sessionDefaultsError = false;
@@ -51,7 +52,7 @@ export async function getBootstrap(deps: BootstrapDependencies): Promise<Bootstr
       git: true,
       protocolCompatible: deps.protocolCompatible,
       providers: deps.providers,
-      ...(deps.preview ? { preview: true } : {}),
+      ...(preview ? { preview: true } : {}),
       ...(deps.impeccable ? { impeccable: true } : {}),
     },
   };

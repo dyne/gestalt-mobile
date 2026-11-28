@@ -30,7 +30,24 @@ setup or let Caddy obtain the certificate. The dev server and gateway can run
 under a regular user account. Editing and reloading a system-managed Caddy
 service may require administrator access.
 
-Add `--preview-origin` to your existing Mobile startup command. For example:
+To enable previews while Mobile is running, create
+`~/.codex-gestalt/gestalt-mobile/preview.json` on the Mobile host:
+
+```json
+{
+  "relayOrigin": "https://relay.example.org",
+  "origin": "https://preview.example.org",
+  "targetPort": 5173
+}
+```
+
+Use the exact public HTTPS origins. The account that runs Mobile must own this
+file, and only that account may write to it. Keep it outside agent-controlled
+workspaces. Reload the Mobile page and open the same chat. Mobile reads the file
+when the page loads and when you open a preview. Passkey authentication must
+be enabled.
+
+You can also set defaults in the Mobile startup command. For example:
 
 ```bash
 gestalt mobile --host 127.0.0.1 --port 4000 \
@@ -39,15 +56,18 @@ gestalt mobile --host 127.0.0.1 --port 4000 \
 ```
 
 Both flags take the exact external HTTPS origin, including any non-default port.
-Leave passkey authentication enabled. The gateway is opt-in and listens on
-`127.0.0.1:8080` when configured.
+Settings in the host file for this relay origin override the startup defaults.
+Removing the file restores the startup defaults on the next page load.
 
 ## Start the app and open a preview
 
 Run the app's dev server separately on the Mobile host. The gateway targets
-`127.0.0.1:5173` by default. To use a different port, add
-`--preview-target-port <port>` to Mobile's startup command. Choose an
-unprivileged port distinct from the Mobile and gateway ports.
+`127.0.0.1:5173` by default. For another port, change `targetPort` in the host
+file. You can also use `--preview-target-port <port>` as a startup default.
+Choose an unprivileged port distinct from the Mobile and gateway ports.
+Caddy always points at the gateway on `127.0.0.1:8080`. When Mobile applies a
+new origin or target port, it closes the old preview and revokes its browser
+access. Open the preview again from the same chat.
 
 For Vite, allow the exact preview hostname and pin the port so it stays in sync
 with Mobile.
@@ -105,8 +125,8 @@ editor.
 
 | Symptom                                                | What to check                                                                                                                                                                   |
 | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Caddy returns `502` on the preview hostname            | Confirm Mobile was started with `--preview-origin` and is listening on `127.0.0.1:8080`.                                                                                        |
-| The preview reports that the app server is unavailable | Start the dev server on loopback and check that its port matches `--preview-target-port`.                                                                                       |
+| Caddy returns `502` on the preview hostname            | Reload Mobile and check that the preview is configured and Mobile can listen on `127.0.0.1:8080`.                                                                               |
+| The preview reports that the app server is unavailable | Start the dev server on loopback and check that its port matches the configured target port.                                                                                    |
 | The app rejects the preview host or live reload fails  | Allow the exact preview hostname in the dev server and confirm the proxy forwards WebSocket upgrades.                                                                           |
 | Mobile reports that a preview is already in use        | Stop the preview from the chat that opened it, then try again.                                                                                                                  |
 | The Live picker is missing                             | Open the app with `/impeccable live`. Confirm the agent started the helper in the chat workspace and that the app's development CSP allows same-origin scripts and connections. |

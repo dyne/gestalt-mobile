@@ -114,6 +114,22 @@ function parsePreview(
     if (targetValue) throw new CliUsageError('--preview-target-port requires --preview-origin');
     return;
   }
+  return createPreviewConfig(
+    originValue,
+    Number(targetValue ?? '5173'),
+    publicOrigin,
+    relayPort,
+    passkeyAuthEnabled,
+  );
+}
+
+export function createPreviewConfig(
+  originValue: string,
+  targetPort: number,
+  publicOrigin: string,
+  relayPort: number,
+  passkeyAuthEnabled: boolean,
+): PreviewConfig {
   if (!passkeyAuthEnabled) throw new CliUsageError('Previews require passkey authentication');
   const origin = new URL(normalizePublicOrigin(originValue, '--preview-origin'));
   const relay = new URL(publicOrigin);
@@ -125,7 +141,6 @@ function parsePreview(
     );
   const port = 8080;
   if (relayPort === port) throw new CliUsageError('The preview gateway requires port 8080');
-  const targetPort = Number(targetValue ?? '5173');
   if (
     !Number.isInteger(targetPort) ||
     targetPort < 1024 ||
